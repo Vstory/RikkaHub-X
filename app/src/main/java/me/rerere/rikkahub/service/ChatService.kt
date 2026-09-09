@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩通知 + 会话级模型覆盖优先读取
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue 族: 停止/异常落库 + initializeConversation 防覆盖流式态)
 package me.rerere.rikkahub.service
 
 import android.app.Application
@@ -333,10 +333,18 @@ class ChatService(
     // ---- 初始化对话 ----
 
     suspend fun initializeConversation(conversationId: Uuid) {
-        getOrCreateSession(conversationId) // 确保 session 存在
+        val session = getOrCreateSession(conversationId)
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
-            updateConversation(conversationId, conversation)
+            // [X-fix] 会话有进行中活动(生成/排队/提交/处理中)时,
+            // 内存流式态是权威,不得被 DB 旧版覆盖,否则半截回复切回即消失
+            val hasInMemoryActivity = session.isGenerating ||
+                session.messageQueue.state.value.messages.isNotEmpty() ||
+                session.submittingMessage != null ||
+                session.processingStatus.value != null
+            if (!hasInMemoryActivity) {
+                updateConversation(conversationId, conversation)
+            }
             settingsStore.updateAssistant(conversation.assistantId)
         } else {
             // 新建对话, 并添加预设消息
@@ -797,6 +805,10 @@ class ChatService(
 
             it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
+            // [X-fix] 非取消异常中断:保留已生成部分,避免切页/重启后丢失
+            appScope.launch {
+                saveConversation(conversationId, getConversationFlow(conversationId).value)
+            }
             Logging.log(TAG, "handleMessageComplete: $it")
             Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
@@ -1460,5 +1472,8 @@ class ChatService(
         if (jobs.isEmpty()) return
         jobs.forEach { it.join() }
         finishInterruptedPendingTools(conversationId)
+        // [X-fix] 停止后立即把内存中已生成的部分落库:
+        // 否则切走再回时 initializeConversation 用 DB 旧版覆盖,半截回复永久消失
+        saveConversation(conversationId, session.state.value)
     }
 }

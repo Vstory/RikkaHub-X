@@ -35,7 +35,7 @@
 | `data/ai/mcp/McpConfig.kt` | MCP 服务器名解耦:`displayName`(本地显示名,可中文)+ `name`(内部标识,ASCII);协议/工具链路仍用 `name`=上游逻辑 |
 | `ui/components/ai/McpPicker.kt` | MCP 服务器显示改 `uiName`(displayName 优先,可中文) |
 | `ui/pages/setting/SettingMcpPage.kt` | MCP 设置双名称输入(显示名+内部标识,ASCII 违规=上游同警告);导入非 ASCII key 自动生成内部名;展示用 uiName |
-| `service/ChatService.kt` | 压缩通知 + 会话级模型覆盖优先读取 |
+| `service/ChatService.kt` | 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue 族: 停止/异常落库,initializeConversation 防覆盖流式态) |
 | `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI |
 | `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI |
 | `ui/pages/chat/ChatVM.kt` | 会话级模型切换逻辑与 UI 即时刷新 |
