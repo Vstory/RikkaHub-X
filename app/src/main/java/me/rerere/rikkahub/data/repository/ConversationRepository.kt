@@ -366,6 +366,7 @@ class ConversationRepository(
             lorebookIds = JsonInstant.encodeToString(conversation.lorebookIds),
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
+            modelId = conversation.modelId?.toString() ?: "",
         )
     }
 
@@ -387,6 +388,7 @@ class ConversationRepository(
             lorebookIds = JsonInstant.decodeFromString(conversationEntity.lorebookIds),
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            modelId = conversationEntity.modelId.ifEmpty { null }?.let { Uuid.parse(it) },
         )
     }
 
@@ -414,6 +416,16 @@ class ConversationRepository(
         conversationDAO.updateFolderId(
             id = conversationId.toString(),
             folderId = folderId?.toString() ?: ""
+        )
+    }
+
+    /**
+     * 单列更新会话的模型覆盖，modelId 为 null 表示回退到助手默认模型。
+     */
+    suspend fun updateConversationModelId(conversationId: Uuid, modelId: Uuid?) {
+        conversationDAO.updateModelId(
+            id = conversationId.toString(),
+            modelId = modelId?.toString() ?: ""
         )
     }
 

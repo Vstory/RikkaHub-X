@@ -31,6 +31,8 @@ data class Conversation(
     val workspaceCwd: String? = null,
     // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
+    // 会话级模型覆盖（null 时回退到 assistant.chatModelId）
+    val modelId: Uuid? = null,
     @Transient
     val newConversation: Boolean = false
 ) {
