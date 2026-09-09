@@ -172,7 +172,11 @@ object WorkspaceArchiver {
                 while (true) {
                     val entry: TarArchiveEntry = tar.nextEntry ?: break
                     if (entry.name == WORKSPACE_ARCHIVE_MANIFEST) {
-                        val bytes = tar.readNBytes(entry.size.toInt().coerceAtMost(MAX_MANIFEST_BYTES))
+                        // [X-fix] size 防线:非正或超预算的伪造头 → 拒绝,避免 size.toInt() 溢出(≥2GiB 变负)后 readNBytes 抛异常
+                        if (entry.size <= 0 || entry.size > MAX_MANIFEST_BYTES) {
+                            error("Workspace archive manifest is corrupt or too large (size=${entry.size})")
+                        }
+                        val bytes = tar.readNBytes(entry.size.toInt())
                         return decodeManifest(bytes)
                     }
                     // 非 manifest 条目:继续 nextEntry 会自动跳到下一条目头
@@ -203,10 +207,19 @@ object WorkspaceArchiver {
                         entry.isSymbolicLink -> {
                             target.parentFile?.mkdirs()
                             target.delete()
-                            runCatching {
-                                Files.createSymbolicLink(target.toPath(), Paths.get(entry.linkName))
-                            }.onFailure {
-                                // 个别平台建符号链接失败(权限等):退化为空文件,避免整体失败
+                            val linkName = entry.linkName
+                            // [X-fix] 符号链接目标安全校验:绝对路径或含 ".." 段的链接
+                            // 会把外部路径引入工作区;不安全一律降级空文件(同建链失败分支)
+                            val segments = linkName.split('/')
+                            val safeLink = !linkName.startsWith("/") && ".." !in segments
+                            if (safeLink) {
+                                runCatching {
+                                    Files.createSymbolicLink(target.toPath(), Paths.get(linkName))
+                                }.onFailure {
+                                    // 个别平台建符号链接失败(权限等):退化为空文件,避免整体失败
+                                    target.writeBytes(ByteArray(0))
+                                }
+                            } else {
                                 target.writeBytes(ByteArray(0))
                             }
                         }
@@ -295,7 +308,9 @@ object WorkspaceArchiver {
                 while (true) {
                     val entry: TarArchiveEntry = tar.nextEntry ?: break
                     if (!entry.isDirectory && entry.name == targetName) {
-                        return tar.readNBytes(entry.size.toInt().coerceAtMost(MAX_MANIFEST_BYTES))
+                        // [X-fix] size 防线:非正或超预算 → 视为不可读(null),避免 toInt() 溢出后 readNBytes 抛异常
+                        if (entry.size <= 0 || entry.size > MAX_MANIFEST_BYTES) return null
+                        return tar.readNBytes(entry.size.toInt())
                     }
                 }
             }
