@@ -563,25 +563,27 @@ private fun ChatFilesPickerSheet(
     val keyboardController = LocalSoftwareKeyboardController.current
     var showInjectionSheet by remember { mutableStateOf(false) }
     var showCompressDialog by remember { mutableStateOf(false) }
-    // 压缩前若未授权通知权限(Android 13+)先请求;授权与否都继续压缩(通知仅授权后可达,Toast 兜底)
-    var pendingCompress by remember { mutableStateOf<Triple<String, Int, Int>?>(null) }
+    // 打开压缩对话框前先确保通知权限(Android 13+ 压缩结果通知需要);授权与否都继续打开,
+    // 通知仅在授权后可达,Toast 兜底。权限请求放在开对话框前,onConfirm 可原样返回 Job
+    // 供 CompressContextDialog 管理压缩中 loading/取消,不破坏其状态机
+    var pendingOpenCompress by remember { mutableStateOf<(() -> Unit)?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ ->
-        val p = pendingCompress ?: return@rememberLauncherForActivityResult
-        pendingCompress = null
-        vm.handleCompressContext(p.first, p.second, p.third)
+        val action = pendingOpenCompress ?: return@rememberLauncherForActivityResult
+        pendingOpenCompress = null
+        action()
     }
 
-    fun runCompress(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) {
+    fun ensureNotificationPermission(thenOpen: () -> Unit) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            pendingCompress = Triple(additionalPrompt, targetTokens, keepRecentMessages)
+            pendingOpenCompress = thenOpen
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
+            thenOpen()
         }
     }
 
@@ -605,7 +607,7 @@ private fun ChatFilesPickerSheet(
             assistant = assistant,
             mcpManager = vm.mcpManager,
             onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
-                runCompress(additionalPrompt, targetTokens, keepRecentMessages)
+                vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
             },
             onUpdateAssistant = {
                 vm.updateSettings(
@@ -627,7 +629,13 @@ private fun ChatFilesPickerSheet(
             showInjectionSheet = showInjectionSheet,
             onShowInjectionSheetChange = { showInjectionSheet = it },
             showCompressDialog = showCompressDialog,
-            onShowCompressDialogChange = { showCompressDialog = it },
+            onShowCompressDialogChange = { show ->
+                if (show) {
+                    ensureNotificationPermission { showCompressDialog = true }
+                } else {
+                    showCompressDialog = false
+                }
+            },
             onDismiss = { dismissAll() },
             onTakePic = attachmentPickerActions.onTakePicture,
             onPickImage = attachmentPickerActions.onPickImage,
