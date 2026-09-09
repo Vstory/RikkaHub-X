@@ -2,6 +2,7 @@ package me.rerere.rikkahub.service
 
 import android.app.Application
 import android.util.Log
+import android.widget.Toast
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -997,8 +998,9 @@ class ChatService(
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> {
         val settings = settingsStore.settingsFlow.first()
+        val result = runCatching {
         val model = settings.findModelById(settings.compressModelId)
             ?: settings.getCurrentChatModel()
             ?: throw IllegalStateException("No model available for compression")
@@ -1072,7 +1074,25 @@ class ChatService(
             chatSuggestions = emptyList(),
         )
 
-        saveConversation(conversationId, newConversation)
+            saveConversation(conversationId, newConversation)
+        }
+        if (settings.displaySetting.enableCompressFeedback) {
+            showCompressFeedback(result.isSuccess)
+        }
+        return result
+    }
+
+    /**
+     * 压缩会话结果反馈(Toast,RikkaTune compress_feedback 风格,默认开)。
+     * 压缩在聊天页后台执行,用户无明确感知 → 成功/失败弹短提示收尾。
+     */
+    private fun showCompressFeedback(success: Boolean) {
+        val message = if (success) {
+            context.getString(R.string.compress_feedback_success)
+        } else {
+            context.getString(R.string.compress_feedback_failed)
+        }
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 
     // ---- 对话状态更新 ----

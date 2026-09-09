@@ -626,6 +626,8 @@ data class DisplaySetting(
     // 语音输入(RikkaTune 风格,默认对齐:提示音关=静音 / 振动增强开)
     val enableVoiceInputSound: Boolean = false,
     val enableVoiceInputHapticBoost: Boolean = true,
+    // 压缩会话反馈(RikkaTune compress_feedback 风格,默认开)
+    val enableCompressFeedback: Boolean = true,
     val pasteLongTextAsFile: Boolean = false,
     val pasteLongTextThreshold: Int = 1000,
     val sendOnEnter: Boolean = false,

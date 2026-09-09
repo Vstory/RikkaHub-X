@@ -297,6 +297,26 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
             item {
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.setting_page_compress_feedback)) },
+                ) {
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_compress_feedback_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_compress_feedback_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableCompressFeedback,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableCompressFeedback = it))
+                                }
+                            )
+                        },
+                    )
+                }
+            }
+
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
                     title = { Text(stringResource(R.string.setting_page_tts_settings)) },
                 ) {
                     item(
