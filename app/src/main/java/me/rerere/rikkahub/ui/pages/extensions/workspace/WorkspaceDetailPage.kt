@@ -524,7 +524,9 @@ fun WorkspaceDetailPage(id: String) {
             confirmButton = {
                 TextButton(onClick = {
                     val file = importArchiveFile
-                    vm.dismissImportCandidate()
+                    // 注意:不能先 dismissImportCandidate() 再 runImport——
+                    // runImport 开头有 _importCandidate==null 守卫,会把它静默跳过(导入不执行也无提示)。
+                    // runImport 内部成功启动后自己会置空 _importCandidate 关闭预览对话框。
                     if (file != null) vm.runImport(file)
                 }) {
                     Text(stringResource(R.string.workspace_archive_import))
