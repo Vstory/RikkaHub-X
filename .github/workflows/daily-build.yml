@@ -102,16 +102,38 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压
+      # 计算短提交号，用于 APK 命名区分每次构建
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      # 把 APK 重命名追加短提交号 → 文件名带构建版本，同名不再互相覆盖，
+      # 历史构建产物一直保留在 release 里，可随时回头下载测试
+      - name: Rename APKs with commit hash
+        run: |
+          cd app/build/outputs/apk/release
+          for f in *.apk; do
+            base="${f%.apk}"
+            mv "$f" "${base}-${{ steps.sha.outputs.short }}.apk"
+          done
+          ls -l
+
+      # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压。
+      # tag 固定 nightly 只保留一条「最新构建」入口；文件名带短提交号所以 asset 不断追加、不覆盖
       - name: Publish nightly prerelease
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: nightly            # 固定 tag，每晚覆盖同一个「最新每日构建」
+          tag_name: nightly            # 固定 tag 保持下载入口稳定
           name: Nightly Build
           prerelease: true
           body: |
-            自动每日构建（commit `${{ github.sha }}`）
+            自动每日构建（commit `${{ github.sha }}`，短号 `${{ steps.sha.outputs.short }}`）
+
+            按文件名末尾的短提交号区分每次构建版本：
+            - 真机 arm64 手机 → `app-arm64-v8a-release-<短号>.apk`
+            - 通用包（所有架构，体积最大）→ `app-universal-release-<短号>.apk`
+            - 模拟器 / x86_64 → `app-x86_64-release-<短号>.apk`
 
             > ⚠️ 开发版本，可能不稳定，仅供测试。
           files: app/build/outputs/apk/release/*.apk
