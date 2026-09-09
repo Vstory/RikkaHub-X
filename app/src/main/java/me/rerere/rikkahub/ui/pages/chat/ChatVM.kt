@@ -167,7 +167,7 @@ class ChatVM(
     // 设置当前会话的聊天模型(会话级覆盖,不影响其他会话)
     fun setChatModel(conversationId: Uuid, model: Model) {
         viewModelScope.launch {
-            conversationRepository.updateConversationModelId(
+            conversationRepo.updateConversationModelId(
                 conversationId = conversationId,
                 modelId = model.id
             )
