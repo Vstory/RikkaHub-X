@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "updatedAt": "2026-09-10",
   "defaultContextWindow": 200000,
-  "_comment": "RikkaHubX 上下文窗口容量远端表。查找顺序:先 models(精确 id,忽略大小写)→ 再 rules(按数组顺序,首条 keywords 全部命中即采用)→ 兜底 defaultContextWindow。rules 靠前=越具体。keywords 匹配:keyword 忽略大小写后必须是 modelId(去掉分隔符 -/_/. 与空格后)的子串。数据核验日期 2026-09-10(联网核对官方文档/发布页)。",
+  "_comment": "RikkaHub X 上下文窗口容量远端表。查找顺序:先 models(精确 id,忽略大小写)→ 再 rules(按数组顺序,首条 keywords 全部命中即采用)→ 兜底 defaultContextWindow。rules 靠前=越具体。keywords 匹配:keyword 忽略大小写后必须是 modelId(去掉分隔符 -/_/. 与空格后)的子串。数据核验日期 2026-09-10(联网核对官方文档/发布页)。",
   "models": [
     { "id": "o1", "contextWindow": 200000, "note": "OpenAI o1 官方 200K" },
     { "id": "o3", "contextWindow": 400000, "note": "OpenAI o3 官方 400K" },
