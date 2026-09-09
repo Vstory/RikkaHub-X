@@ -164,21 +164,13 @@ class ChatVM(
         }
     }
 
-    // 设置聊天模型
-    fun setChatModel(assistant: Assistant, model: Model) {
+    // 设置当前会话的聊天模型(会话级覆盖,不影响其他会话)
+    fun setChatModel(conversationId: Uuid, model: Model) {
         viewModelScope.launch {
-            settingsStore.update { settings ->
-                settings.copy(
-                    assistants = settings.assistants.map {
-                        if (it.id == assistant.id) {
-                            it.copy(
-                                chatModelId = model.id
-                            )
-                        } else {
-                            it
-                        }
-                    })
-            }
+            conversationRepository.updateConversationModelId(
+                conversationId = conversationId,
+                modelId = model.id
+            )
         }
     }
 
