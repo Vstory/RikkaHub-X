@@ -7,6 +7,11 @@ on:
   # 也支持手动触发
   workflow_dispatch:
 
+# 同一时间只跑一个构建，避免并发往同一个 nightly release 上传/清理造成冲突
+concurrency:
+  group: nightly-build
+  cancel-in-progress: false
+
 jobs:
   # 检查过去 24 小时内是否有新提交，没有则跳过构建，避免重复打包
   check:
@@ -137,3 +142,33 @@ jobs:
 
             > ⚠️ 开发版本，可能不稳定，仅供测试。
           files: app/build/outputs/apk/release/*.apk
+
+      # 只保留最近 6 次构建的产物（6 组 × 3 ABI = 18 个带短号 asset），防止 release 无限膨胀。
+      # 先休眠等新 asset 落库；无后缀的旧格式文件不在命名规则内、永不清理（不影响累积，可手动删）
+      - name: Cleanup old nightly assets (keep latest 6 builds)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 30
+          # 按 uploaded_at 升序列出所有带 8 位短号后缀的 asset
+          mapfile -t assets < <(gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            repos/${{ github.repository }}/releases/tags/nightly \
+            --jq '.assets[] | select(.name | test("release-[0-9a-f]{8}\\.apk$")) | [.id, .uploaded_at, .name] | @tsv')
+          echo "匹配命名规则的 asset 总数: ${#assets[@]}"
+          # 总数超过 18 时，删掉最旧的 (总数-18) 个
+          to_delete=$(( ${#assets[@]} - 18 ))
+          if [ "$to_delete" -gt 0 ]; then
+            # 按上传时间排序（第2列），取最旧的前 to_delete 个删除
+            printf '%s\n' "${assets[@]}" \
+              | sort -k2 \
+              | head -n "$to_delete" \
+              | cut -f1 \
+              | xargs -r -n1 gh api -X DELETE \
+                  -H "Accept: application/vnd.github+json" \
+                  repos/${{ github.repository }}/releases/assets/{}
+            echo "已清理 $to_delete 个旧 asset，保留最近 18 个（6 次构建）"
+          else
+            echo "未超上限，无需清理"
+          fi
