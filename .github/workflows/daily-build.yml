@@ -184,7 +184,7 @@ jobs:
               | cut -f1 \
               | xargs -r -n1 gh api -X DELETE \
                   -H "Accept: application/vnd.github+json" \
-                  repos/${{ github.repository }}/releases/assets/{}
+                  repos/${{ github.repository }}/releases/assets/
             echo "已清理 $to_delete 个旧 asset，保留最近 18 个（6 次构建）"
           else
             echo "未超上限，无需清理"
