@@ -323,48 +323,6 @@ class WorkspaceRepository(
 
     // ==================== 工作区归档:导出 / 导入(声明式工具还原) ====================
 
-    /** rootfs 内可探测的"用户手动安装的工具"扫描结果 */
-    data class WorkspaceToolScan(
-        val aptPackages: List<String> = emptyList(),
-        val pipPackages: List<String> = emptyList(),
-        val npmPackages: List<String> = emptyList(),
-        /** /usr/local/bin、/usr/local/sbin 下的散装二进制(无法自动还原,仅记录) */
-        val localBins: List<String> = emptyList(),
-    ) {
-        val total: Int get() = aptPackages.size + pipPackages.size + npmPackages.size + localBins.size
-    }
-
-    data class WorkspaceExportReport(
-        /** 导出时 rootfs 是否健康可运行(决定工具清单能否采集) */
-        val healthyRootfs: Boolean,
-        val toolsCaptured: Boolean,
-        val toolScan: WorkspaceToolScan = WorkspaceToolScan(),
-        val includedUserArea: Boolean,
-    )
-
-    data class WorkspaceImportPreview(
-        val manifest: WorkspaceArchiveManifest,
-        val hasFiles: Boolean,
-        val hasUserArea: Boolean,
-        val hasTools: Boolean,
-        val toolCount: Int,
-        /** 本机已存在同 id 工作区记录(配合应用备份恢复,BROKEN 填活) */
-        val targetExists: Boolean,
-        /** 目标工作区 rootfs 已就绪(决定用户区立即合入还是暂存待装) */
-        val targetRootfsReady: Boolean,
-    )
-
-    data class WorkspaceImportResult(
-        val workspaceId: String,
-        val targetCreated: Boolean,
-        val restoredFiles: Boolean,
-        val restoredUserAreaNow: Boolean,
-        /** rootfs 未就绪:用户区暂存,待安装完成后由 finishPendingUserAreaImport 合入 */
-        val userAreaPending: Boolean,
-        val toolsRestored: Boolean,
-        val toolCount: Int,
-    )
-
     /**
      * 导出工作区归档(.tar.gz)。
      * 仅含 manifest + 工具清单 tools/ + rootfs 用户区(usr/local opt home root etc)+ files/,
@@ -757,3 +715,47 @@ private fun StringBuilder.appendSection(title: String, items: List<String>) {
     items.forEach { appendLine("  $it") }
     appendLine()
 }
+
+// ==================== 工作区归档 数据模型(顶层,供 UI/VM 使用) ====================
+
+/** rootfs 内可探测的"用户手动安装的工具"扫描结果 */
+data class WorkspaceToolScan(
+    val aptPackages: List<String> = emptyList(),
+    val pipPackages: List<String> = emptyList(),
+    val npmPackages: List<String> = emptyList(),
+    /** /usr/local/bin、/usr/local/sbin 下的散装二进制(无法自动还原,仅记录) */
+    val localBins: List<String> = emptyList(),
+) {
+    val total: Int get() = aptPackages.size + pipPackages.size + npmPackages.size + localBins.size
+}
+
+data class WorkspaceExportReport(
+    /** 导出时 rootfs 是否健康可运行(决定工具清单能否采集) */
+    val healthyRootfs: Boolean,
+    val toolsCaptured: Boolean,
+    val toolScan: WorkspaceToolScan = WorkspaceToolScan(),
+    val includedUserArea: Boolean,
+)
+
+data class WorkspaceImportPreview(
+    val manifest: WorkspaceArchiveManifest,
+    val hasFiles: Boolean,
+    val hasUserArea: Boolean,
+    val hasTools: Boolean,
+    val toolCount: Int,
+    /** 本机已存在同 id 工作区记录(配合应用备份恢复,BROKEN 填活) */
+    val targetExists: Boolean,
+    /** 目标工作区 rootfs 已就绪(决定用户区立即合入还是暂存待装) */
+    val targetRootfsReady: Boolean,
+)
+
+data class WorkspaceImportResult(
+    val workspaceId: String,
+    val targetCreated: Boolean,
+    val restoredFiles: Boolean,
+    val restoredUserAreaNow: Boolean,
+    /** rootfs 未就绪:用户区暂存,待安装完成后由 finishPendingUserAreaImport 合入 */
+    val userAreaPending: Boolean,
+    val toolsRestored: Boolean,
+    val toolCount: Int,
+)

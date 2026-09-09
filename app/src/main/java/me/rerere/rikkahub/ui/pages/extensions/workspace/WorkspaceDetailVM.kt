@@ -12,9 +12,13 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
+import me.rerere.rikkahub.data.repository.WorkspaceExportReport
+import me.rerere.rikkahub.data.repository.WorkspaceImportPreview
+import me.rerere.rikkahub.data.repository.WorkspaceImportResult
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstallStage
+import me.rerere.workspace.WorkspaceArchiveProgress
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceStorageArea
@@ -39,13 +43,40 @@ class WorkspaceDetailVM(
     private val _settingsError = MutableStateFlow<String?>(null)
     val settingsError = _settingsError.asStateFlow()
 
+    /** null = 空闲;非 null = 导出/导入进行中 */
+    private val _transfer = MutableStateFlow<WorkspaceTransferUi?>(null)
+    val transfer = _transfer.asStateFlow()
+
+    /** 导入预览结果(确认对话框用),由 UI 触发 dismiss */
+    private val _importCandidate = MutableStateFlow<WorkspaceImportPreview?>(null)
+    val importCandidate = _importCandidate.asStateFlow()
+
+    /** 一次性事件(导出完成/导入完成/错误等),UI 展示后 dismiss */
+    private val _transferEvent = MutableStateFlow<WorkspaceTransferEvent?>(null)
+    val transferEvent = _transferEvent.asStateFlow()
+
     fun dismissSettingsError() {
         _settingsError.value = null
+    }
+
+    /** UI 侧的即时错误提示(如读文件失败) */
+    fun showTransferError(message: String) {
+        _transferEvent.value = WorkspaceTransferEvent.Error(message)
+    }
+
+    fun dismissImportCandidate() {
+        _importCandidate.value = null
+    }
+
+    fun dismissTransferEvent() {
+        _transferEvent.value = null
     }
 
     init {
         loadWorkspace()
         refresh()
+        // 若存在暂存的用户区(之前导入时 rootfs 未装)且环境已就绪 → 自动合入
+        finishPendingImportIfNeeded()
     }
 
     fun selectArea(area: WorkspaceStorageArea) {
@@ -215,6 +246,8 @@ class WorkspaceDetailVM(
                 }
                 loadWorkspace()
                 refresh()
+                // rootfs 装好后,若存在暂存的用户区导入 → 合入并提示还原工具
+                finishPendingImportIfNeeded()
             } catch (e: CancellationException) {
                 throw e
             } catch (error: Throwable) {
@@ -222,6 +255,73 @@ class WorkspaceDetailVM(
             } finally {
                 _installProgress.value = null
             }
+        }
+    }
+
+    // ===== 工作区归档 导出 / 导入 =====
+
+    fun exportWorkspaceArchive(output: OutputStream) {
+        val workspace = state.value.workspace ?: return
+        viewModelScope.launch {
+            _transferEvent.value = null
+            _transfer.value = WorkspaceTransferUi(isExport = true)
+            try {
+                val report = repository.exportWorkspaceArchive(workspace.id, output) { progress ->
+                    _transfer.value = WorkspaceTransferUi(isExport = true, progress = progress)
+                }
+                _transferEvent.value = WorkspaceTransferEvent.ExportFinished(report)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (error: Throwable) {
+                _transferEvent.value = WorkspaceTransferEvent.Error(error.message ?: "导出失败")
+            } finally {
+                _transfer.value = null
+            }
+        }
+    }
+
+    fun previewImport(file: File) {
+        viewModelScope.launch {
+            runCatching { repository.previewWorkspaceArchive(file) }
+                .onSuccess { _importCandidate.value = it }
+                .onFailure { error ->
+                    _transferEvent.value =
+                        WorkspaceTransferEvent.Error(error.message ?: "解析归档失败")
+                }
+        }
+    }
+
+    fun runImport(file: File) {
+        if (_importCandidate.value == null) return
+        viewModelScope.launch {
+            _importCandidate.value = null
+            _transferEvent.value = null
+            _transfer.value = WorkspaceTransferUi(isExport = false)
+            try {
+                val result = repository.importWorkspaceArchive(file) { progress ->
+                    _transfer.value = WorkspaceTransferUi(isExport = false, progress = progress)
+                }
+                _transferEvent.value = WorkspaceTransferEvent.ImportFinished(result)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (error: Throwable) {
+                _transferEvent.value = WorkspaceTransferEvent.Error(error.message ?: "导入失败")
+            } finally {
+                _transfer.value = null
+                refresh()
+            }
+        }
+    }
+
+    /** 环境就绪后调用:若存在暂存的用户区导入则合入;无暂存时无操作 */
+    fun finishPendingImportIfNeeded() {
+        viewModelScope.launch {
+            runCatching { repository.finishPendingUserAreaImport(id) }
+                .getOrNull()
+                ?.let { result ->
+                    _transferEvent.value = WorkspaceTransferEvent.PendingMerged(result)
+                    loadWorkspace()
+                }
         }
     }
 
@@ -290,6 +390,20 @@ data class WorkspaceDetailState(
     val loading: Boolean = false,
     val error: String? = null,
 )
+
+/** 导出/导入进行中状态;null = 空闲 */
+data class WorkspaceTransferUi(
+    val isExport: Boolean = true,
+    val progress: WorkspaceArchiveProgress? = null,
+)
+
+/** 导出/导入的一次性事件(UI 展示后 dismiss) */
+sealed interface WorkspaceTransferEvent {
+    data class ExportFinished(val report: WorkspaceExportReport) : WorkspaceTransferEvent
+    data class ImportFinished(val result: WorkspaceImportResult) : WorkspaceTransferEvent
+    data class PendingMerged(val result: WorkspaceImportResult) : WorkspaceTransferEvent
+    data class Error(val message: String) : WorkspaceTransferEvent
+}
 
 data class WorkspaceTerminalState(
     val input: String = "",

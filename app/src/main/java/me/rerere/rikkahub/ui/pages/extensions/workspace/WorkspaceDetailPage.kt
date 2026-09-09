@@ -105,6 +105,9 @@ fun WorkspaceDetailPage(id: String) {
     val installProgress by vm.installProgress.collectAsStateWithLifecycle()
     val installError by vm.installError.collectAsStateWithLifecycle()
     val settingsError by vm.settingsError.collectAsStateWithLifecycle()
+    val transfer by vm.transfer.collectAsStateWithLifecycle()
+    val importCandidate by vm.importCandidate.collectAsStateWithLifecycle()
+    val transferEvent by vm.transferEvent.collectAsStateWithLifecycle()
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
@@ -134,6 +137,52 @@ fun WorkspaceDetailPage(id: String) {
         vm.exportFile(entry, outputStream)
     }
 
+    // ---- 工作区归档:导出 / 导入 ----
+    var showTransferMenu by remember { mutableStateOf(false) }
+    // 环境不健康时的导出前确认
+    var exportUnhealthyConfirm by remember { mutableStateOf(false) }
+    var importArchiveFile by remember { mutableStateOf<File?>(null) }
+    val workspaceExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/gzip"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val outputStream = context.contentResolver.openOutputStream(uri)
+            ?: return@rememberLauncherForActivityResult
+        vm.exportWorkspaceArchive(outputStream)
+    }
+    val workspaceImportPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val name = "workspace_import_${System.currentTimeMillis()}.tar.gz"
+        val target = File(context.cacheDir, name)
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onSuccess {
+            importArchiveFile = target
+            vm.previewImport(target)
+        }.onFailure {
+            vm.showTransferError(it.message ?: "读取归档失败")
+        }
+    }
+    fun launchExportArchive() {
+        val workspace = state.workspace ?: return
+        val safeName = workspace.name.trim().replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US)
+            .format(java.util.Date())
+        workspaceExportLauncher.launch("RikkaHubWorkspace_${safeName}_$stamp.tar.gz")
+    }
+    fun requestExportArchive() {
+        val status = state.workspace?.shellStatus
+        if (status != WorkspaceShellStatus.READY.name) {
+            exportUnhealthyConfirm = true
+        } else {
+            launchExportArchive()
+        }
+    }
+
     BackHandler(enabled = pagerState.currentPage == 1 && state.path.isNotBlank()) {
         vm.goUp()
     }
@@ -155,6 +204,35 @@ fun WorkspaceDetailPage(id: String) {
                             Icon(
                                 HugeIcons.FileImport,
                                 contentDescription = stringResource(R.string.workspace_detail_import_file),
+                            )
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { showTransferMenu = true }) {
+                            Icon(
+                                HugeIcons.MoreVertical,
+                                contentDescription = stringResource(R.string.workspace_archive_more),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showTransferMenu,
+                            onDismissRequest = { showTransferMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.workspace_archive_export_menu)) },
+                                onClick = {
+                                    showTransferMenu = false
+                                    requestExportArchive()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.workspace_archive_import_menu)) },
+                                onClick = {
+                                    showTransferMenu = false
+                                    workspaceImportPicker.launch(
+                                        arrayOf("application/gzip", "application/x-tar", "*/*")
+                                    )
+                                },
                             )
                         }
                     }
@@ -311,6 +389,264 @@ fun WorkspaceDetailPage(id: String) {
                 }
             },
         )
+    }
+
+    // ---- 工作区归档:导出/导入对话框 ----
+
+    if (exportUnhealthyConfirm) {
+        val rootfsReady = state.workspace?.shellStatus == WorkspaceShellStatus.READY.name
+        AlertDialog(
+            onDismissRequest = { exportUnhealthyConfirm = false },
+            title = { Text(stringResource(R.string.workspace_archive_export)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.workspace_archive_export_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (!rootfsReady) {
+                        Text(
+                            text = stringResource(R.string.workspace_archive_export_unhealthy),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    exportUnhealthyConfirm = false
+                    launchExportArchive()
+                }) {
+                    Text(stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exportUnhealthyConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    transfer?.let { ui ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = {
+                Text(
+                    stringResource(
+                        if (ui.isExport) R.string.workspace_archive_export
+                        else R.string.workspace_archive_import
+                    )
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val progress = ui.progress
+                    val label = when {
+                        progress == null && ui.isExport ->
+                            stringResource(R.string.workspace_archive_export_scanning)
+
+                        progress == null -> stringResource(R.string.workspace_archive_importing, "")
+                        else -> stringResource(
+                            if (ui.isExport) R.string.workspace_archive_exporting
+                            else R.string.workspace_archive_importing,
+                            progress.currentEntry.orEmpty(),
+                        )
+                    }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val total = progress?.totalBytes ?: 0L
+                    val done = progress?.doneBytes ?: 0L
+                    if (total > 0) {
+                        LinearProgressIndicator(
+                            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    importCandidate?.let { candidate ->
+        AlertDialog(
+            onDismissRequest = vm::dismissImportCandidate,
+            title = { Text(stringResource(R.string.workspace_archive_import_preview_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = stringResource(
+                            R.string.workspace_archive_import_preview_name,
+                            candidate.manifest.name,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.workspace_archive_import_preview_tools,
+                            candidate.toolCount,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (candidate.hasFiles) {
+                        Text(
+                            text = stringResource(R.string.workspace_archive_import_preview_files),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (candidate.hasUserArea) {
+                        Text(
+                            text = stringResource(R.string.workspace_archive_import_preview_userarea),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            if (candidate.targetExists) R.string.workspace_archive_import_overwrite
+                            else R.string.workspace_archive_import_new
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val file = importArchiveFile
+                    vm.dismissImportCandidate()
+                    if (file != null) vm.runImport(file)
+                }) {
+                    Text(stringResource(R.string.workspace_archive_import))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissImportCandidate) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    transferEvent?.let { event ->
+        when (event) {
+            is WorkspaceTransferEvent.Error -> AlertDialog(
+                onDismissRequest = vm::dismissTransferEvent,
+                title = { Text(stringResource(R.string.workspace_archive_error)) },
+                text = { Text(event.message) },
+                confirmButton = {
+                    TextButton(onClick = vm::dismissTransferEvent) {
+                        Text(stringResource(R.string.common_confirm))
+                    }
+                },
+            )
+
+            is WorkspaceTransferEvent.ExportFinished -> AlertDialog(
+                onDismissRequest = vm::dismissTransferEvent,
+                title = { Text(stringResource(R.string.workspace_archive_export)) },
+                text = {
+                    Text(
+                        if (event.report.toolsCaptured) {
+                            stringResource(
+                                R.string.workspace_archive_export_done_tools,
+                                event.report.toolScan.total,
+                            )
+                        } else {
+                            stringResource(R.string.workspace_archive_export_done_files_only)
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = vm::dismissTransferEvent) {
+                        Text(stringResource(R.string.common_confirm))
+                    }
+                },
+            )
+
+            is WorkspaceTransferEvent.ImportFinished -> {
+                val needsInstall = event.result.userAreaPending
+                AlertDialog(
+                    onDismissRequest = vm::dismissTransferEvent,
+                    title = { Text(stringResource(R.string.workspace_archive_import)) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (event.result.restoredFiles) {
+                                Text(stringResource(R.string.workspace_archive_import_done_files))
+                            }
+                            if (event.result.restoredUserAreaNow) {
+                                Text(stringResource(R.string.workspace_archive_import_done_userarea))
+                            }
+                            if (event.result.toolsRestored && event.result.toolCount > 0) {
+                                Text(
+                                    stringResource(
+                                        R.string.workspace_archive_import_done_tools,
+                                        event.result.toolCount,
+                                    )
+                                )
+                            }
+                            if (needsInstall) {
+                                Text(
+                                    text = stringResource(R.string.workspace_archive_import_rootfs_missing),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        if (needsInstall) {
+                            TextButton(onClick = {
+                                vm.dismissTransferEvent()
+                                showInstallDialog = true
+                            }) {
+                                Text(stringResource(R.string.workspace_archive_install_now))
+                            }
+                        } else {
+                            TextButton(onClick = vm::dismissTransferEvent) {
+                                Text(stringResource(R.string.common_confirm))
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        if (needsInstall) {
+                            TextButton(onClick = vm::dismissTransferEvent) {
+                                Text(stringResource(R.string.workspace_archive_later))
+                            }
+                        } else {
+                            TextButton(onClick = vm::dismissTransferEvent) {
+                                Text(stringResource(R.string.common_cancel))
+                            }
+                        }
+                    },
+                )
+            }
+
+            is WorkspaceTransferEvent.PendingMerged -> AlertDialog(
+                onDismissRequest = vm::dismissTransferEvent,
+                title = { Text(stringResource(R.string.workspace_archive_import)) },
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.workspace_archive_pending_merged,
+                            event.result.toolCount,
+                        )
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = vm::dismissTransferEvent) {
+                        Text(stringResource(R.string.common_confirm))
+                    }
+                },
+            )
+        }
     }
 
     previewImageUri?.let { uri ->
