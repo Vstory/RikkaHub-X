@@ -1,3 +1,5 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): OCR 仅识别本轮新增图片;
+// 历史图片一律只读缓存(未命中给占位),纯文字续聊不再强制进入图片识别流程(上游 issue #1736)
 package me.rerere.rikkahub.data.ai.transformers
 
 import android.content.Context
@@ -36,11 +38,13 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
             json = json
         )
         LruCache(
-            capacity = 64,
+            capacity = 256,
             store = store,
             deleteOnEvict = true,
             preloadFromStore = true,
-            expireAfterWriteMillis = 3.days.inWholeMilliseconds,
+            // [X-fix 上游 issue #1736] 缓存窗口 3天/64条 → 30天/256条:
+            // 历史图片 OCR 文本尽量跨会话复用,减少"未命中→占位"降级频率
+            expireAfterWriteMillis = 30.days.inWholeMilliseconds,
         )
     }
 
@@ -52,20 +56,43 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
             return messages
         }
 
-        val hasImages = messages.any { message ->
+        // [X-fix 上游 issue #1736] 不再对整段历史图片强制重新 OCR:
+        // 仅"本轮输入(最后一条 USER 消息)"携带的本地图片才是真正需要识别的新图;
+        // 历史消息里的图片一律只读缓存:命中→复用 OCR 文本,未命中→占位(不触发网络 OCR),
+        // 从而纯文字续聊不再进入"正在识别图片..."流程、不再破坏 provider 前缀缓存。
+        val newImageUrls = messages.lastOrNull { it.role == MessageRole.USER }
+            ?.parts
+            ?.filterIsInstance<UIMessagePart.Image>()
+            ?.filter { it.url.startsWith("file:") }
+            ?.map { it.url }
+            ?.toSet()
+            ?: emptySet()
+
+        val hasAnyImage = messages.any { message ->
             message.parts.any { it is UIMessagePart.Image && it.url.startsWith("file:") }
         }
-        if (!hasImages) return messages
+        if (!hasAnyImage) return messages
 
         return withContext(Dispatchers.IO) {
             try {
-                ctx.processingStatus.value = "正在识别图片..."
+                // 只有真正需要调 OCR 模型(本轮新图未命中缓存)时才展示处理状态;
+                // 放 IO 内避免首次 cache 预载/读盘阻塞调用线程
+                val needsRealOcr = newImageUrls.any { url -> cache.get(url) == null }
+                if (needsRealOcr) {
+                    ctx.processingStatus.value = "正在识别图片..."
+                }
                 messages.map { message ->
                     message.copy(
                         parts = message.parts.map { part ->
                             when {
                                 part is UIMessagePart.Image && part.url.startsWith("file:") -> {
-                                    UIMessagePart.Text(performOcr(part))
+                                    if (part.url in newImageUrls) {
+                                        // 本轮新图:正常识别(内部先查缓存)
+                                        UIMessagePart.Text(performOcr(part))
+                                    } else {
+                                        // 历史图片:只读缓存,未命中给占位,不重新识别
+                                        UIMessagePart.Text(cache.get(part.url) ?: "[Image]")
+                                    }
                                 }
 
                                 else -> part
