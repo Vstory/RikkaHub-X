@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): McpCommonOptions 增加 displayName(本地显示名,可中文)与 name(内部标识,ASCII)解耦;协议/工具链路仍用 name=上游逻辑
 package me.rerere.rikkahub.data.ai.mcp
 
 import kotlinx.serialization.SerialName
@@ -8,11 +9,17 @@ import kotlin.uuid.Uuid
 @Serializable
 data class McpCommonOptions(
     val enable: Boolean = true,
+    /** 内部标识(上游逻辑):仅限 ASCII 字母数字,用于 MCP 工具名前缀 mcp__<name>__<tool>、握手 Implementation.name、OAuth client_name、连接复用 key。 */
     val name: String = "",
+    /** [X-custom] 本地显示名:可中文/任意字符,仅用于 UI 展示;为空时界面回退显示 [name]。协议/工具链路一律仍用 [name],不参与任何上游逻辑。 */
+    val displayName: String = "",
     val headers: List<Pair<String, String>> = emptyList(),
     val tools: List<McpTool> = emptyList(),
     val oauth: McpOAuthState? = null,
-)
+) {
+    /** [X-custom] UI 展示名:displayName 优先,空则回退内部标识 name(老配置/老导入零感知)。 */
+    val uiName: String get() = displayName.ifBlank { name }
+}
 
 /**
  * OAuth 2.1 授权状态，遵循 MCP 授权规范 (2025-11-25)。

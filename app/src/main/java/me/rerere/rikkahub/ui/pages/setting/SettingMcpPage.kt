@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): MCP 服务器名解耦——displayName 本地显示名(可中文) + name 内部标识(ASCII,上游协议/工具逻辑);导入非 ASCII key 自动生成内部名
 package me.rerere.rikkahub.ui.pages.setting
 
 import androidx.compose.animation.animateContentSize
@@ -75,6 +76,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.random.Random
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -90,6 +92,7 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.McpServer
+import me.rerere.hugeicons.stroke.Refresh03
 import me.rerere.hugeicons.stroke.MessageBlocked
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
@@ -265,7 +268,7 @@ private fun McpServerItem(
         val fullText = error.detail ?: error.message
         AlertDialog(
             onDismissRequest = { errorDetail = null },
-            title = { Text(item.commonOptions.name.ifBlank { "MCP" }) },
+            title = { Text(item.commonOptions.uiName.ifBlank { "MCP" }) },
             text = {
                 SelectionContainer {
                     Text(
@@ -362,7 +365,7 @@ private fun McpServerItem(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = item.commonOptions.name,
+                            text = item.commonOptions.uiName,
                             style = MaterialTheme.typography.titleLarge,
                         )
                         val dotColor =
@@ -575,13 +578,47 @@ private fun McpCommonOptionsConfigure(
 
         HorizontalDivider()
 
-        // 名称输入框
+        // 显示名(可中文/任意字符,仅本地 UI 展示)
         FormItem(
             label = {
-                Text(stringResource(R.string.setting_mcp_page_name))
+                Text(stringResource(R.string.setting_mcp_page_display_name))
             },
             description = {
-                Text(stringResource(R.string.setting_mcp_page_name_desc))
+                Text(stringResource(R.string.setting_mcp_page_display_name_desc))
+            }
+        ) {
+            OutlinedTextField(
+                value = config.commonOptions.displayName,
+                onValueChange = { display ->
+                    // 内部标识为空时按显示名自动 ASCII 化生成(方案B:可随后手改)
+                    val newName = config.commonOptions.name.ifBlank { autoInternalName(display) }
+                    update(
+                        when (config) {
+                            is McpServerConfig.SseTransportServer -> config.copy(
+                                commonOptions = config.commonOptions.copy(displayName = display, name = newName)
+                            )
+
+                            is McpServerConfig.StreamableHTTPServer -> config.copy(
+                                commonOptions = config.commonOptions.copy(displayName = display, name = newName)
+                            )
+                        }
+                    )
+                },
+                label = { Text(stringResource(R.string.setting_mcp_page_display_name)) },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text(stringResource(R.string.setting_mcp_page_display_name_placeholder)) }
+            )
+        }
+
+        HorizontalDivider()
+
+        // 内部标识(ASCII;协议/工具命名用,违反上游规则 → 与上游一致的警告)
+        FormItem(
+            label = {
+                Text(stringResource(R.string.setting_mcp_page_internal_name))
+            },
+            description = {
+                Text(stringResource(R.string.setting_mcp_page_internal_name_desc))
             }
         ) {
             val nameInvalid = !isValidMcpName(config.commonOptions.name)
@@ -600,13 +637,31 @@ private fun McpCommonOptionsConfigure(
                         }
                     )
                 },
-                label = { Text(stringResource(R.string.setting_mcp_page_name)) },
+                label = { Text(stringResource(R.string.setting_mcp_page_internal_name)) },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text(stringResource(R.string.setting_mcp_page_name_placeholder)) },
+                placeholder = { Text(stringResource(R.string.setting_mcp_page_internal_name_placeholder)) },
                 isError = nameInvalid,
                 supportingText = if (nameInvalid) {
                     { Text(stringResource(R.string.setting_mcp_page_name_invalid)) }
-                } else null
+                } else null,
+                trailingIcon = {
+                    IconButton(onClick = {
+                        val regenerated = autoInternalName(config.commonOptions.displayName)
+                        update(
+                            when (config) {
+                                is McpServerConfig.SseTransportServer -> config.copy(
+                                    commonOptions = config.commonOptions.copy(name = regenerated)
+                                )
+
+                                is McpServerConfig.StreamableHTTPServer -> config.copy(
+                                    commonOptions = config.commonOptions.copy(name = regenerated)
+                                )
+                            }
+                        )
+                    }) {
+                        Icon(HugeIcons.Refresh03, stringResource(R.string.setting_mcp_page_internal_name_regenerate))
+                    }
+                }
             )
         }
 
@@ -1014,6 +1069,12 @@ private fun isValidMcpName(name: String): Boolean {
     return name.isEmpty() || name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }
 }
 
+/** [X-custom] 由显示名自动生成 ASCII 内部标识:保留字母数字;纯非 ASCII(如纯中文)回退 mcp_server_<随机>,保证唯一性。 */
+private fun autoInternalName(displayName: String): String {
+    val ascii = displayName.filter { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }
+    return if (ascii.isEmpty()) "mcp_server_${Random.nextInt(1000, 9999)}" else ascii
+}
+
 private fun parseMcpServersFromJson(json: String): List<McpServerConfig> {
     val root = Json.parseToJsonElement(json).jsonObject
     val mcpServers = root["mcpServers"]?.jsonObject ?: return emptyList()
@@ -1024,7 +1085,12 @@ private fun parseMcpServersFromJson(json: String): List<McpServerConfig> {
         val headers = obj["headers"]?.jsonObject?.entries?.map { (k, v) ->
             k to (v.jsonPrimitive.contentOrNull ?: "")
         } ?: emptyList()
-        val commonOptions = McpCommonOptions(name = name, headers = headers)
+        // [X-custom] 导入兼容:key 为合法 ASCII → 原样作内部名(上游逻辑);含中文等非 ASCII → 中文/原名进显示名,内部名自动生成(保证协议/工具链路 ASCII)
+        val commonOptions = if (isValidMcpName(name)) {
+            McpCommonOptions(name = name, headers = headers)
+        } else {
+            McpCommonOptions(name = autoInternalName(name), displayName = name, headers = headers)
+        }
         when (type) {
             "sse" -> McpServerConfig.SseTransportServer(commonOptions = commonOptions, url = url)
             else -> McpServerConfig.StreamableHTTPServer(commonOptions = commonOptions, url = url)

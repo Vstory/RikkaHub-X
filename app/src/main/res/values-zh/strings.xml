@@ -767,6 +767,13 @@
   <string name="setting_mcp_page_name">名称</string>
   <string name="setting_mcp_page_name_desc">MCP 服务器的显示名称</string>
   <string name="setting_mcp_page_name_placeholder">例如：My MCP Server</string>
+  <string name="setting_mcp_page_display_name">显示名</string>
+  <string name="setting_mcp_page_display_name_desc">仅本地展示,可填中文或任意字符;留空则显示内部标识</string>
+  <string name="setting_mcp_page_display_name_placeholder">例如：我的 MCP Server</string>
+  <string name="setting_mcp_page_internal_name">内部标识</string>
+  <string name="setting_mcp_page_internal_name_desc">协议与工具命名用,仅限英文字母和数字(与上游规则一致,违规无法保存);留空时按显示名自动生成</string>
+  <string name="setting_mcp_page_internal_name_placeholder">自动生成或手填,如 my_mcp</string>
+  <string name="setting_mcp_page_internal_name_regenerate">按显示名重新生成内部标识</string>
   <string name="setting_mcp_page_needs_approval">需要审批</string>
   <string name="setting_mcp_page_no_mcp_servers_found">未找到 MCP 服务器</string>
   <string name="setting_mcp_page_save">保存</string>
