@@ -346,6 +346,7 @@ private fun ChatPageContent(
                     onResumeMessageQueue = vm::resumeMessageQueue,
                     loading = loadingJob != null,
                     settings = setting,
+                    conversation = conversation,
                     hazeState = hazeState,
                     completionProviders = completionProviders,
                     onCancelClick = {
@@ -416,7 +417,7 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onUpdateChatModel = {
-                        vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        vm.setChatModel(conversationId = conversation.id, model = it)
                     },
                     onUpdateAssistant = {
                         vm.updateSettings(

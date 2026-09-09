@@ -112,6 +112,7 @@ import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.ChatInputState
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import org.koin.compose.koinInject
 import kotlin.time.Duration.Companion.seconds
@@ -124,6 +125,7 @@ fun ChatInput(
     state: ChatInputState,
     loading: Boolean,
     settings: Settings,
+    conversation: Conversation,
     hazeState: HazeState,
     enableSearch: Boolean,
     onUpdateSearchMode: (SearchMode) -> Unit,
@@ -157,7 +159,7 @@ fun ChatInput(
 
     val containerShape = MaterialTheme.shapes.largeIncreased
     val modelListState = rememberModelListState(
-        modelId = assistant.chatModelId ?: settings.chatModelId,
+        modelId = conversation.modelId ?: assistant.chatModelId ?: settings.chatModelId,
         providers = settings.providers,
         type = ModelType.CHAT,
     )

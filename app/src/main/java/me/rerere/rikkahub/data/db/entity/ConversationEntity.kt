@@ -32,4 +32,7 @@ data class ConversationEntity(
     val workspaceCwd: String = "",
     @ColumnInfo("folder_id", defaultValue = "")
     val folderId: String = "",
+    // 会话级模型覆盖，空字符串表示使用助手默认
+    @ColumnInfo("model_id", defaultValue = "")
+    val modelId: String = "",
 )
