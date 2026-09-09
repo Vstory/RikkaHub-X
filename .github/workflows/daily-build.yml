@@ -94,24 +94,21 @@ jobs:
 
       - name: Prepare build files
         run: |
-          if [ -n "${{ secrets.KEY_BASE64 }}" ]; then
-            # 有正式签名 secrets：解码keystore、写签名配置、写Google Services
-            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
-            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
-            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
-          else
-            # 无 secrets（fork 自用构建）：用临时 keytool 签名 + 占位 google-services.json，
-            # 产物可安装但为开发签名，不依赖 Firebase
-            echo "无签名 secrets，使用临时开发签名构建（不接 Firebase）"
-            keytool -genkeypair -v -keystore app/app.key -storepass android \
-              -alias rikkahub -keypass android -keyalg RSA -keysize 2048 \
-              -validity 10000 -dname "CN=RikkaHub Dev,O=RikkaHub,C=CN" >/dev/null 2>&1
-            echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
-            echo "storePassword=android" >> local.properties
-            echo "keyAlias=rikkahub" >> local.properties
-            echo "keyPassword=android" >> local.properties
-            cp .github/google-services.placeholder.json app/google-services.json
-          fi
+          # 每次构建生成一次性随机临时 keystore 签名（不依赖、不使用正式签名 secrets）。
+          # 随机口令 + 随机 dname → 每次产物签名指纹不同，仅供测试分发，升级需重装。
+          SP="$(openssl rand -hex 16)"
+          KP="$(openssl rand -hex 16)"
+          DN="CN=RikkaHub Nightly $(date +%s) O=RikkaHubDev C=CN"
+          keytool -genkeypair -v -keystore app/app.key \
+            -storepass "$SP" -alias rikkahub -keypass "$KP" \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "$DN" >/dev/null 2>&1
+          echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
+          echo "storePassword=$SP" >> local.properties
+          echo "keyAlias=rikkahub" >> local.properties
+          echo "keyPassword=$KP" >> local.properties
+          # Firebase 走占位配置（不接真实服务）
+          cp .github/google-services.placeholder.json app/google-services.json
 
       - name: Gradle Build
         run: |
