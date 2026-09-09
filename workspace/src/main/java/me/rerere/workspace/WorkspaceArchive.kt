@@ -85,7 +85,12 @@ object WorkspaceArchiver {
     /** linux/etc/ssh/ 下的 SSH host 私钥(机器身份;.pub 公钥保留无妨) */
     private val SSH_HOST_KEY = Regex("ssh_host_[a-z0-9]+_key")
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // encodeDefaults = true:让 format/version 等带默认值的字段也显式写进 JSON,
+    // 归档自述格式与版本。旧档缺这些字段仍可 decode(缺失落默认值),向后兼容。
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
     fun encodeManifest(manifest: WorkspaceArchiveManifest): ByteArray =
         json.encodeToString(manifest).toByteArray(Charsets.UTF_8)
@@ -158,7 +163,8 @@ object WorkspaceArchiver {
 
     /**
      * 从 tar.gz 读取 manifest(扫描到 manifest.json 即返回)。
-     * 不校验版本/格式,由调用方决定如何处理旧版本。
+     * 不校验格式/版本:旧档可能缺 format/version 字段,decode 落到默认值,
+     * 是否支持由调用方(preview/import)决定。
      */
     fun readManifest(input: InputStream): WorkspaceArchiveManifest {
         GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->

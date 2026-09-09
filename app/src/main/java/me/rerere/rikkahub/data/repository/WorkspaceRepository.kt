@@ -18,6 +18,7 @@ import me.rerere.workspace.WorkspaceArchiveManifest
 import me.rerere.workspace.WorkspaceArchiveProgress
 import me.rerere.workspace.WorkspaceArchiver
 import me.rerere.workspace.WORKSPACE_ARCHIVE_FORMAT
+import me.rerere.workspace.WORKSPACE_ARCHIVE_VERSION
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
@@ -394,9 +395,7 @@ class WorkspaceRepository(
     suspend fun previewWorkspaceArchive(file: File): WorkspaceImportPreview =
         withContext(Dispatchers.IO) {
             val manifest = file.inputStream().use { WorkspaceArchiver.readManifest(it) }
-            require(manifest.format == WORKSPACE_ARCHIVE_FORMAT) {
-                "不是 RikkaHub 工作区归档(format=${manifest.format})"
-            }
+            manifest.requireSupported()
             val paths = file.inputStream().use { WorkspaceArchiver.listArchivePaths(it) }
             val hasFiles = "files" in paths
             val hasUserArea = WorkspaceArchiver.USER_AREA_RELATIVE.any { "linux/$it" in paths }
@@ -433,6 +432,7 @@ class WorkspaceRepository(
         onProgress: (WorkspaceArchiveProgress) -> Unit = {},
     ): WorkspaceImportResult {
         val manifest = file.inputStream().use { WorkspaceArchiver.readManifest(it) }
+        manifest.requireSupported()
         val target = ensureImportTarget(manifest)
         var restoredFiles = false
         var restoredUserAreaNow = false
@@ -710,6 +710,16 @@ class WorkspaceRepository(
             "command -v pip3 >/dev/null 2>&1 && pip3 list --format=freeze 2>/dev/null | sed 's/==.*//' | LC_ALL=C sort -u || true"
         private const val CMD_NPM_GLOBAL =
             "command -v npm >/dev/null 2>&1 && npm ls -g --parseable --depth=0 2>/dev/null | sed 's#.*/node_modules/##' | LC_ALL=C sort -u || true"
+    }
+}
+
+/** 导入/预览共用的归档格式 + 版本防线(version 高于当前支持 → 拒绝,防旧版 App 误读未来格式) */
+private fun WorkspaceArchiveManifest.requireSupported() {
+    require(format == WORKSPACE_ARCHIVE_FORMAT) {
+        "不是 RikkaHub 工作区归档(format=$format)"
+    }
+    require(version in 1..WORKSPACE_ARCHIVE_VERSION) {
+        "归档版本不支持(version=$version, 当前支持 ≤ $WORKSPACE_ARCHIVE_VERSION)"
     }
 }
 
