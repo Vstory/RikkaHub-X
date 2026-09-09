@@ -8,14 +8,14 @@ on:
   workflow_dispatch:
 
 # 供应链加固(2026-09-09):第三方 action 全部 pin 到 commit SHA,
-# 避免可变 tag(v4/v2)被上游改动/账号被盗后投毒。
-# 升级方法:查新 SHA 后替换下行注释里的版本说明即可。
-#   actions/checkout            v4  -> 11d5960a
-#   actions/setup-java          v4  -> cf277c60
-#   actions/setup-node          v4  -> 49933ea5
-#   actions/cache               v4  -> 0057852b
-#   pnpm/action-setup           v4  -> b906affc
-#   softprops/action-gh-release v2  -> 3bb12739
+# 避免可变 tag 被上游改动/账号被盗后投毒。
+# 2026-09-09 第二次加固:Node.js 20 弃用警告,action 大版本整体升级到 node24 runtime:
+#   actions/checkout            v4->v7   3d3c42e5
+#   actions/setup-java          v4->v6   de7274f0
+#   actions/setup-node          v4->v7   82076278
+#   actions/cache               v4->v6   55cc8345
+#   pnpm/action-setup           v4->v6   ea17c68d
+#   softprops/action-gh-release v2->v3   efb35369
 
 # 同一时间只跑一个构建，避免并发往同一个 nightly release 上传/清理造成冲突
 concurrency:
@@ -29,7 +29,7 @@ jobs:
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check for recent commits
         id: check
         run: |
@@ -54,25 +54,25 @@ jobs:
       contents: write   # 发布 Release 需要写权限
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           submodules: recursive # 拉取子模块
 
       - name: Set up JDK
-        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: 'temurin'
           java-version: '17'
 
       # web 模块的 preBuild 会执行 `pnpm run build` 构建前端，必须准备好 Node + pnpm
       - name: Set up pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6
         with:
           version: 11
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -84,7 +84,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Gradle cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.gradle/caches
@@ -136,7 +136,7 @@ jobs:
       # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压。
       # tag 固定 nightly 只保留一条「最新构建」入口；文件名带短提交号所以 asset 不断追加、不覆盖
       - name: Publish nightly prerelease
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         if: success()
         with:
           tag_name: nightly            # 固定 tag 保持下载入口稳定
