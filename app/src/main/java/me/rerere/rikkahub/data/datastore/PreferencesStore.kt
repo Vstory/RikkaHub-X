@@ -623,6 +623,9 @@ data class DisplaySetting(
     val ttsOnlyReadQuoted: Boolean = false,
     val ttsOnlyReadOutsideBrackets: Boolean = false,
     val autoPlayTTSAfterGeneration: Boolean = false,
+    // 语音输入(RikkaTune 风格,默认对齐:提示音关=静音 / 振动增强开)
+    val enableVoiceInputSound: Boolean = false,
+    val enableVoiceInputHapticBoost: Boolean = true,
     val pasteLongTextAsFile: Boolean = false,
     val pasteLongTextThreshold: Int = 1000,
     val sendOnEnter: Boolean = false,
