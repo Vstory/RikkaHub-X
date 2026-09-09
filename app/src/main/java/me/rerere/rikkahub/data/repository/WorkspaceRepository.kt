@@ -434,6 +434,8 @@ class WorkspaceRepository(
     ): WorkspaceImportResult {
         val manifest = file.inputStream().use { WorkspaceArchiver.readManifest(it) }
         manifest.requireSupported()
+        // [X-fix] 先取样目标是否已存在(ensureImportTarget 内部会 upsert,事后判断恒为 true)
+        val targetExisted = dao.getById(manifest.id) != null
         val target = ensureImportTarget(manifest)
         var restoredFiles = false
         var restoredUserAreaNow = false
@@ -486,7 +488,7 @@ class WorkspaceRepository(
         }
         return WorkspaceImportResult(
             workspaceId = target.id,
-            targetCreated = dao.getById(target.id)?.id == target.id && dao.getAll().count { it.id == target.id } == 1,
+            targetCreated = !targetExisted,
             restoredFiles = restoredFiles,
             restoredUserAreaNow = restoredUserAreaNow,
             userAreaPending = userAreaPending,
@@ -721,6 +723,11 @@ private fun WorkspaceArchiveManifest.requireSupported() {
     }
     require(version in 1..WORKSPACE_ARCHIVE_VERSION) {
         "归档版本不支持(version=$version, 当前支持 ≤ $WORKSPACE_ARCHIVE_VERSION)"
+    }
+    // [X-fix] 归档 id 会被直接用作工作区文件系统目录名(root = id),必须是合法 UUID:
+    // ROOT_NAME_REGEX([A-Za-z0-9._-]+) 放行 "." / "..",恶意/损坏归档可借 id 逃逸工作区基目录。
+    require(runCatching { Uuid.parse(id) }.isSuccess) {
+        "归档 id 非法(需为 UUID):$id"
     }
 }
 
