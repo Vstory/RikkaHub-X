@@ -115,6 +115,26 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                     )
                 }
             }
+
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.setting_page_context_usage_ring)) },
+                ) {
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_context_usage_ring_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_context_usage_ring_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableContextUsageRing,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableContextUsageRing = it))
+                                }
+                            )
+                        },
+                    )
+                }
+            }
         }
     }
 }

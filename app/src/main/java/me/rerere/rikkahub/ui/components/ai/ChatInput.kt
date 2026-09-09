@@ -353,8 +353,8 @@ fun ChatInput(
 
                         }
 
-                        // [X-custom] 上下文用量圆环(issue 1669):点击打开压缩对话框
-                        if (ctxModelId != null && ctxCapacity != null && ctxUsage != null) {
+                        // [X-custom] 上下文用量圆环(issue 1669):点击打开压缩对话框;受 X 定制开关 enableContextUsageRing 控制(默认关)
+                        if (settings.displaySetting.enableContextUsageRing && ctxModelId != null && ctxCapacity != null && ctxUsage != null) {
                             ContextUsageRing(
                                 usedTokens = ctxUsage,
                                 capacityTokens = ctxCapacity,

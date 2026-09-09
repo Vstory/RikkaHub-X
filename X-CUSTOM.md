@@ -28,7 +28,7 @@
 |---|---|
 | `RikkaHubApp.kt` | 压缩结果升级系统通知 + 压缩前请求通知权限 |
 | `data/ai/tools/local/JavascriptTool.kt` | eval_javascript 工具资源安全与错误处理加固 |
-| `data/datastore/PreferencesStore.kt` | 压缩会话反馈设置 + 语音输入提示音/振动增强开关 |
+| `data/datastore/PreferencesStore.kt` | 压缩会话反馈设置 + 语音输入提示音/振动增强开关 + 上下文用量圆环开关(enableContextUsageRing,默认关) |
 | `data/db/dao/ConversationDAO.kt` | 会话级模型覆盖字段 model_id |
 | `data/db/entity/ConversationEntity.kt` | 会话级模型覆盖字段 model_id |
 | `data/model/Conversation.kt` | 会话级模型覆盖字段 model_id |
@@ -49,7 +49,7 @@
 | `ui/pages/chat/ChatVM.kt` | 会话级模型切换逻辑与 UI 即时刷新 |
 | `RouteActivity.kt` | 偏好设置新增 X 定制子路由(Screen.SettingPreferencesXCustom) |
 | `ui/pages/setting/SettingPreferencesPage.kt` | 偏好设置板块新增「X Custom」入口行 |
-| `ui/pages/setting/SettingPreferencesXCustomPage.kt` | [新增] X 定制聚合页:收纳全部带开关的 X 定制项(语音输入提示音/振动增强/压缩会话反馈);2026-09-10 由 GeneralPage 迁入 |
+| `ui/pages/setting/SettingPreferencesXCustomPage.kt` | [新增] X 定制聚合页:收纳全部带开关的 X 定制项(语音输入提示音/振动增强/压缩会话反馈/上下文用量圆环);2026-09-10 由 GeneralPage 迁入 |
 | `ui/pages/backup/tabs/ImportExportTab.kt` | 备份导出 SAF 文件名前缀改 `RikkaHub-X_backup_`(与上游区分;导入不卡名兼容上游格式) |
 | `ui/pages/extensions/workspace/WorkspaceDetailPage.kt` | 工作区导出/导入归档 UI;导出文件名前缀 `RikkaHub-X_workspace_` |
 | `ui/pages/extensions/workspace/WorkspaceDetailVM.kt` | 工作区导出/导入归档 VM |

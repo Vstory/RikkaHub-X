@@ -900,6 +900,9 @@
   <string name="setting_page_compress_feedback">压缩会话反馈</string>
   <string name="setting_compress_feedback_title">压缩结果提示</string>
   <string name="setting_compress_feedback_desc">压缩会话成功或失败时弹出提示</string>
+  <string name="setting_page_context_usage_ring">上下文用量圆环</string>
+  <string name="setting_context_usage_ring_title">显示上下文用量圆环</string>
+  <string name="setting_context_usage_ring_desc">输入框旁显示当前上下文占用比例，接近上限变红，点击可压缩上下文</string>
   <string name="compress_feedback_success">会话历史压缩成功</string>
   <string name="compress_feedback_failed">会话历史压缩失败</string>
   <string name="setting_page_web_server">Web 服务器</string>

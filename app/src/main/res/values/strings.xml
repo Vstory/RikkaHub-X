@@ -934,6 +934,9 @@
   <string name="setting_page_compress_feedback">Compress Session Feedback</string>
   <string name="setting_compress_feedback_title">Compress Result Notice</string>
   <string name="setting_compress_feedback_desc">Show a toast when compressing a conversation succeeds or fails</string>
+  <string name="setting_page_context_usage_ring">Context Usage Ring</string>
+  <string name="setting_context_usage_ring_title">Show context usage ring</string>
+  <string name="setting_context_usage_ring_desc">Show the context usage ratio beside the input box; tap to compress when near the limit</string>
   <string name="compress_feedback_success">Conversation history compressed</string>
   <string name="compress_feedback_failed">Failed to compress conversation history</string>
   <string name="setting_page_web_server">Web Server</string>
