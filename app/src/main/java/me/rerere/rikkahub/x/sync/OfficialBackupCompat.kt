@@ -1,4 +1,4 @@
-package me.rerere.rikkahub.data.sync
+package me.rerere.rikkahub.x.sync
 
 import android.content.Context
 import android.util.Log

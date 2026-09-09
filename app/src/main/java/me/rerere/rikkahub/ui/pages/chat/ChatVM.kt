@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 会话级模型切换逻辑与 UI 即时刷新
 package me.rerere.rikkahub.ui.pages.chat
 
 import android.app.Application

@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 会话级模型覆盖字段 model_id
 package me.rerere.rikkahub.data.model
 
 import android.net.Uri

@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 官方备份库导入适配(x.sync.OfficialBackupCompat)
 package me.rerere.rikkahub.data.sync
 
 import android.content.Context
@@ -16,6 +17,7 @@ import me.rerere.rikkahub.data.db.AppDatabaseFactory
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.SQLiteConfiguration
 import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.rikkahub.x.sync.OfficialBackupCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files

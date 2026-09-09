@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩通知权限请求 + 会话模型切换 UI
 package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
