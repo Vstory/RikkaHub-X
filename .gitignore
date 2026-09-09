@@ -13,3 +13,7 @@ local.properties
 .kotlin
 # 本地开发沉淀(永不推送,含 tokens 等)
 dev-project/
+
+# Python
+__pycache__/
+*.pyc
