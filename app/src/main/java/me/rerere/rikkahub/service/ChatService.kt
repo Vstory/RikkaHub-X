@@ -661,8 +661,11 @@ class ChatService(
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
             ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
-            ?: throw IllegalStateException("No chat model selected")
+        val model = settings.findModelById(
+            initialConversation.modelId          // 会话级覆盖
+                ?: assistant.chatModelId         // 助手级
+                ?: settings.chatModelId          // 全局默认
+        ) ?: throw IllegalStateException("No chat model selected")
 
         val senderName = if (assistant.useAssistantAvatar) {
             assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
