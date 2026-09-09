@@ -1,3 +1,5 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 消息来源显示增强(上游 issue #1805)
+// — providerNameById 反查 + 模型切换分隔线(上一条/本条助手回复 modelId 不同时居中提示)
 package me.rerere.rikkahub.ui.pages.chat
 
 import me.rerere.hugeicons.HugeIcons
@@ -45,6 +47,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -87,6 +90,8 @@ import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
@@ -268,6 +273,30 @@ private fun ChatListNormal(
             .flatMap { it.models }
             .associateBy { it.id }
     }
+    // [X-custom 上游 issue #1805] 反查 model.id → 所属 Provider 名(用于消息落款/切换线)
+    val providerNameById = remember(settings.providers) {
+        settings.providers
+            .flatMap { provider -> provider.models.map { model -> model.id to provider.name } }
+            .toMap()
+    }
+    // [X-custom 上游 issue #1805] 预计算每条消息是否显示"模型切换"分隔线:
+    // 仅当上一条助手消息与本条助手消息 modelId 不同才显示(LazyColumn 只组合可见项,
+    // 不能用组合顺序维护跨项状态,故在此一次性遍历生成)。
+    val nodesWithSwitchLine = remember(conversation.messageNodes, modelById) {
+        buildList {
+            var lastAssistantModelId: Uuid? = null
+            conversation.messageNodes.forEach { node ->
+                val msg = node.currentMessage
+                val modelId = msg.modelId
+                val isAssistantReply = msg.role == MessageRole.ASSISTANT &&
+                    modelId != null && modelById[modelId] != null
+                val showSwitchLine = isAssistantReply &&
+                    lastAssistantModelId != null && modelId != lastAssistantModelId
+                add(node to showSwitchLine)
+                if (isAssistantReply) lastAssistantModelId = modelId
+            }
+        }
+    }
     val lastMessageIndex = conversation.messageNodes.lastIndex
 
     Box(
@@ -313,10 +342,22 @@ private fun ChatListNormal(
                     .padding(top = innerPadding.calculateTopPadding()),
             ) {
             itemsIndexed(
-                items = conversation.messageNodes,
-                key = { index, item -> item.id },
-            ) { index, node ->
+                items = nodesWithSwitchLine,
+                key = { _, (node, _) -> node.id },
+            ) { index, (node, showSwitchLine) ->
                 Column {
+                    // [X-custom 上游 issue #1805] 模型切换分隔线:上一条回复与本条回复由不同模型生成
+                    if (showSwitchLine && settings.displaySetting.showModelName) {
+                        val switchModelId = node.currentMessage.modelId
+                        val switchModel = switchModelId?.let(modelById::get)
+                        if (switchModel != null) {
+                            ModelSwitchNotice(
+                                providerName = switchModelId?.let(providerNameById::get),
+                                model = switchModel,
+                                modifier = Modifier.padding(bottom = 2.dp),
+                            )
+                        }
+                    }
                     ListSelectableItem(
                         key = node.id,
                         onSelectChange = {
@@ -333,6 +374,8 @@ private fun ChatListNormal(
                             node = node,
                             model = node.currentMessage.modelId?.let(modelById::get),
                             assistant = assistant,
+                            // [X-custom 上游 issue #1805] 该条回复所属 Provider 名(消息末尾落款用)
+                            providerName = node.currentMessage.modelId?.let(providerNameById::get),
                             loading = loading && index == lastMessageIndex,
                             onRegenerate = {
                                 onRegenerate(node.currentMessage)
@@ -845,5 +888,45 @@ private fun BoxScope.MessageJumper(
                 )
             }
         }
+    }
+}
+
+/**
+ * [X-custom 上游 issue #1805] 模型切换分隔线:
+ * 会话内上一条助手回复与本条回复由不同模型生成时,在本条消息上方居中提示,
+ * 使"会话级模型切换"在消息流中可见。
+ */
+@Composable
+private fun ModelSwitchNotice(
+    providerName: String?,
+    model: Model,
+    modifier: Modifier = Modifier,
+) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val label = buildList {
+        providerName?.takeIf { it.isNotBlank() }?.let { add(it) }
+        val name = model.displayName.ifBlank { model.modelId }
+        if (name.isNotBlank()) add(name)
+    }.joinToString(" · ")
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = color.copy(alpha = 0.25f),
+        )
+        Text(
+            text = stringResource(R.string.chat_message_model_switch_line, label),
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = color.copy(alpha = 0.25f),
+        )
     }
 }

@@ -234,6 +234,7 @@
   <string name="chat_message_tool_approve">Одобрить</string>
   <string name="chat_message_tool_ask_questions">Задать %d вопросов</string>
   <string name="chat_message_tool_call_generic">Вызван инструмент %1$s</string>
+  <string name="chat_message_model_switch_line">Следующий ответ создан с помощью %1$s</string>
   <string name="chat_message_tool_call_label">Вызван инструмент %1$s</string>
   <string name="chat_message_tool_call_result">Результат вызова</string>
   <string name="chat_message_tool_call_title">Вызов инструмента</string>

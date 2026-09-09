@@ -1,3 +1,5 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 消息来源显示增强(上游 issue #1805)
+// — 新增 providerName 参数,助手消息末尾灰字落款"路由名 · 模型名"
 package me.rerere.rikkahub.ui.components.message
 
 import android.content.Intent
@@ -103,6 +105,8 @@ fun ChatMessage(
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     model: Model? = null,
+    // [X-custom 上游 issue #1805] 该条回复所属 Provider(路由)名,用于消息末尾来源落款
+    providerName: String? = null,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
     onFork: () -> Unit,
@@ -211,6 +215,24 @@ fun ChatMessage(
             parts = message.parts,
             assistant = assistant,
         )
+
+        // [X-custom 上游 issue #1805] 消息末尾灰字来源落款: 路由名 · 模型名
+        // (跟随"显示模型名"开关;旧消息无 modelId/模型已删时不显示)
+        if (message.role == MessageRole.ASSISTANT && model != null && settings.showModelName) {
+            val sourceLabel = buildList {
+                providerName?.takeIf { it.isNotBlank() }?.let { add(it) }
+                val name = model.displayName.ifBlank { model.modelId }
+                if (name.isNotBlank()) add(name)
+            }.joinToString(" · ")
+            if (sourceLabel.isNotBlank()) {
+                Text(
+                    text = sourceLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+        }
 
         ProvideTextStyle(textStyle) {
             ChatMessageNerdLine(message = message)

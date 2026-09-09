@@ -234,6 +234,7 @@
   <string name="chat_message_tool_approve">核准</string>
   <string name="chat_message_tool_ask_questions">詢問 %d 個問題</string>
   <string name="chat_message_tool_call_generic">調用工具 %1$s</string>
+  <string name="chat_message_model_switch_line">以下回覆由 %1$s 產生</string>
   <string name="chat_message_tool_call_label">調用工具 %1$s</string>
   <string name="chat_message_tool_call_result">調用結果</string>
   <string name="chat_message_tool_call_title">工具調用</string>
