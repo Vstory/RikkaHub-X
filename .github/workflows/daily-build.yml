@@ -90,7 +90,7 @@ jobs:
             keytool -genkeypair -v -keystore app/app.key -storepass android \
               -alias rikkahub -keypass android -keyalg RSA -keysize 2048 \
               -validity 10000 -dname "CN=RikkaHub Dev,O=RikkaHub,C=CN" >/dev/null 2>&1
-            echo "storeFile=app/app.key" > local.properties
+            echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
             echo "storePassword=android" >> local.properties
             echo "keyAlias=rikkahub" >> local.properties
             echo "keyPassword=android" >> local.properties
