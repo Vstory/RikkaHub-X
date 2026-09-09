@@ -122,14 +122,18 @@ jobs:
         id: sha
         run: echo "short=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
 
-      # 把 APK 重命名追加短提交号 → 文件名带构建版本，同名不再互相覆盖，
-      # 历史构建产物一直保留在 release 里，可随时回头下载测试
-      - name: Rename APKs with commit hash
+      # 把 APK 重命名：文件名带「构建时间(北京时间)+短提交号」。
+      # 时间戳放在名字前部 → release 页按名称排序即等于按构建时间排序，
+      # 同一次构建的 arm64/universal/x86_64 三包相邻；短号用于对应到 commit。
+      # 例：app-20260910-0215-arm64-v8a-release-a1b2c3d4.apk
+      - name: Rename APKs with build time & commit hash
         run: |
           cd app/build/outputs/apk/release
+          ts="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)"
           for f in *.apk; do
-            base="${f%.apk}"
-            mv "$f" "${base}-${{ steps.sha.outputs.short }}.apk"
+            abi="${f#app-}"
+            abi="${abi%-release.apk}"
+            mv "$f" "app-${ts}-${abi}-release-${{ steps.sha.outputs.short }}.apk"
           done
           ls -l
 
@@ -145,16 +149,18 @@ jobs:
           body: |
             自动每日构建（commit `${{ github.sha }}`，短号 `${{ steps.sha.outputs.short }}`）
 
-            按文件名末尾的短提交号区分每次构建版本：
-            - 真机 arm64 手机 → `app-arm64-v8a-release-<短号>.apk`
-            - 通用包（所有架构，体积最大）→ `app-universal-release-<短号>.apk`
-            - 模拟器 / x86_64 → `app-x86_64-release-<短号>.apk`
+            文件名 = `app-<构建时间>-<架构>-release-<短号>.apk`，按名称排序即构建时间顺序：
+            - 真机 arm64 手机 → `app-<时间>-arm64-v8a-release-<短号>.apk`
+            - 通用包（所有架构，体积最大）→ `app-<时间>-universal-release-<短号>.apk`
+            - 模拟器 / x86_64 → `app-<时间>-x86_64-release-<短号>.apk`
 
             > ⚠️ 开发版本，可能不稳定，仅供测试。
           files: app/build/outputs/apk/release/*.apk
 
       # 只保留最近 6 次构建的产物（6 组 × 3 ABI = 18 个带短号 asset），防止 release 无限膨胀。
-      # 先休眠等新 asset 落库；无后缀的旧格式文件不在命名规则内、永不清理（不影响累积，可手动删）
+      # 先休眠等新 asset 落库。正则匹配所有「尾部带 8 位短号」的 asset，兼容旧 release-<短号> 与
+      # 新 app-<时间>-<架构>-release-<短号> 两种命名；无短号的最老格式不在规则内、永不清理。
+      # 迁移期：旧命名 asset 上传时间更早会被先清出，最终稳定为新命名 18 个。
       - name: Cleanup old nightly assets (keep latest 6 builds)
         if: success()
         env:
@@ -165,7 +171,7 @@ jobs:
           mapfile -t assets < <(gh api --paginate \
             -H "Accept: application/vnd.github+json" \
             repos/${{ github.repository }}/releases/tags/nightly \
-            --jq '.assets[] | select(.name | test("release-[0-9a-f]{8}\\.apk$")) | [.id, .uploaded_at, .name] | @tsv')
+            --jq '.assets[] | select(.name | test("-[0-9a-f]{8}\\.apk$")) | [.id, .uploaded_at, .name] | @tsv')
           echo "匹配命名规则的 asset 总数: ${#assets[@]}"
           # 总数超过 18 时，删掉最旧的 (总数-18) 个
           to_delete=$(( ${#assets[@]} - 18 ))
