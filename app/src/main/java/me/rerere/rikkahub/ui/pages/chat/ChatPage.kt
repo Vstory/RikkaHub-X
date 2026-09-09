@@ -43,6 +43,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -107,6 +109,11 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
             parametersOf(id.toString())
         }
     )
+    // [X-custom] issue 1715: 监听输入文本变化 → 上报 VM 防抖保存草稿(切换窗口/离开会话不丢失)
+    LaunchedEffect(vm) {
+        snapshotFlow { vm.inputState.textContent.text.toString() }
+            .collect { vm.onDraftInputChanged() }
+    }
     val filesManager: FilesManager = koinInject()
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
