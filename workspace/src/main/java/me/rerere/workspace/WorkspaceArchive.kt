@@ -71,8 +71,19 @@ object WorkspaceArchiver {
     /** rootfs 内视为"用户区"的子目录(相对 linux/),相对发行版本体;打包/恢复都按这份清单走 */
     val USER_AREA_RELATIVE = listOf("usr/local", "opt", "home", "root", "etc")
 
-    /** etc 下由 RootfsPatcher 按本机生成的、不应随归档迁移的文件 */
-    private val ETC_SKIP_FILES = setOf("resolv.conf")
+    /**
+     * linux/etc 下不应随归档迁移的「机器级 / 运行时态」文件:
+     *  - resolv.conf  网络由 RootfsPatcher 按新设备环境重建
+     *  - shadow/gshadow 账号密码哈希:新设备 rootfs 有自己的账号体系,迁移后重设密码即可;
+     *                带出即泄露旧系统口令哈希(可被离线爆破)
+     *  - machine-id  机器标识,新设备应生成自己的
+     * (etc/ssh/ 下的 SSH host 私钥另由 [shouldSkipInEtc] 单独排除;
+     *  /root/.ssh 等用户自身的密钥属用户数据,保留随归档迁移)
+     */
+    private val ETC_EXCLUDE_FILES = setOf("resolv.conf", "shadow", "gshadow", "machine-id")
+
+    /** linux/etc/ssh/ 下的 SSH host 私钥(机器身份;.pub 公钥保留无妨) */
+    private val SSH_HOST_KEY = Regex("ssh_host_[a-z0-9]+_key")
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -376,10 +387,16 @@ object WorkspaceArchiver {
     }
 
     private fun shouldSkipInEtc(name: String): Boolean {
-        // 仅 linux/etc 顶层跳过 resolv.conf(该文件由 RootfsPatcher 按新设备环境重建)
+        // 仅 linux/etc 内的文件按机器级清单跳过(发行版本体不含,只在打包用户区 etc 时生效)
         if (!name.startsWith("linux/etc/")) return false
         val tail = name.removePrefix("linux/etc/")
-        return tail.indexOf('/') < 0 && tail in ETC_SKIP_FILES
+        if (tail.isEmpty()) return false
+        // 顶层文件:命中 ETC_EXCLUDE_FILES 则跳过(目录不命中,保证能进到子目录)
+        if (tail.indexOf('/') < 0) return tail in ETC_EXCLUDE_FILES
+        // etc/ssh/ 下的 host 私钥:机器身份,换机应重新生成
+        val parent = tail.substringBeforeLast('/')
+        val file = tail.substringAfterLast('/')
+        return parent == "ssh" && SSH_HOST_KEY.matches(file)
     }
 
     private fun writeDirEntry(tar: TarArchiveOutputStream, name: String) {
