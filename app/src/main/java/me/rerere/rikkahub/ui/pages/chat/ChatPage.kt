@@ -451,6 +451,10 @@ private fun ChatPageContent(
                     onMoreClick = {
                         showFilesSheet = true
                     },
+                    // [X-custom] 上下文用量圆环:点击圆环直接走压缩(同 FilesPicker 入口)
+                    onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
+                        vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
+                    },
                 )
             },
             containerColor = Color.Transparent,

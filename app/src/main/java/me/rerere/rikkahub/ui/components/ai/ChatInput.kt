@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,6 +115,9 @@ import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.ChatInputState
+import me.rerere.rikkahub.x.context.ContextUsageCalculator
+import me.rerere.rikkahub.x.context.ContextWindowRepository
+import me.rerere.rikkahub.x.ui.ContextUsageRing
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import org.koin.compose.koinInject
@@ -121,6 +125,7 @@ import kotlin.time.Duration.Companion.seconds
 import me.rerere.rikkahub.ui.pages.chat.VoicePhase
 import me.rerere.rikkahub.ui.pages.chat.VoiceSessionState
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.Job
 
 @Composable
 fun ChatInput(
@@ -137,6 +142,7 @@ fun ChatInput(
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateSearchService: (Int) -> Unit,
     onMoreClick: () -> Unit,
+    onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job = { _, _, _ -> Job() },
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
     onLongSendClick: () -> Unit,
@@ -154,6 +160,16 @@ fun ChatInput(
     // 会话当前生效模型:会话级覆盖优先,回退助手/全局默认(与顶部 TopBar、模型选择器同源)
     val effectiveChatModel = conversation.modelId?.let { settings.findModelById(it) }
         ?: settings.getCurrentChatModel()
+    // [X-custom] 上下文用量圆环(issue 1669):容量=远端/内置容量表;用量=最近 usage.promptTokens + 输入框估算;点击弹压缩对话框
+    val xContext = LocalContext.current
+    LaunchedEffect(Unit) { ContextWindowRepository.ensureLoaded(xContext.applicationContext) }
+    var showCompressDialog by remember { mutableStateOf(false) }
+    val ctxModelId = effectiveChatModel?.modelId
+    val ctxInputText = state.textContent.text.toString()
+    val ctxCapacity = ContextWindowRepository.contextWindowFor(ctxModelId)
+    val ctxUsage = remember(conversation.messageNodes, ctxInputText) {
+        ContextUsageCalculator.currentUsageTokens(conversation.currentMessages, ctxInputText)
+    }
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeBlurStyle.Material3 {
         blurRadius(12.dp)
@@ -337,6 +353,16 @@ fun ChatInput(
 
                         }
 
+                        // [X-custom] 上下文用量圆环(issue 1669):点击打开压缩对话框
+                        if (ctxModelId != null && ctxCapacity != null && ctxUsage != null) {
+                            ContextUsageRing(
+                                usedTokens = ctxUsage,
+                                capacityTokens = ctxCapacity,
+                                modifier = Modifier,
+                                onClick = { showCompressDialog = true },
+                            )
+                        }
+
                         ActionIconButton(
                             onClick = onMoreClick
                         ) {
@@ -398,6 +424,14 @@ fun ChatInput(
         state = modelListState,
         onSelect = onUpdateChatModel,
     )
+
+    // [X-custom] 上下文用量圆环点击后的压缩对话框(复用上游 CompressContextDialog)
+    if (showCompressDialog) {
+        CompressContextDialog(
+            onDismiss = { showCompressDialog = false },
+            onConfirm = onCompressContext,
+        )
+    }
 }
 
 @Composable

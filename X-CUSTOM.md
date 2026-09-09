@@ -14,6 +14,11 @@
 | `workspace/.../x/WorkspaceArchive.kt` | 工作区归档核心(447行) | ✅ `me.rerere.workspace.x` |
 | `workspace/.../x/WorkspaceArchiverTest.kt` | 归档单测 | ✅ `me.rerere.workspace.x` |
 | `app/.../x/sync/OfficialBackupCompat.kt` | 官方备份库→X 结构适配(方案A导入器) | ✅ `me.rerere.rikkahub.x.sync` |
+| `app/.../x/context/ContextWindowTable.kt` | 上下文容量表解析/查找(exact→rules→default) | ✅ `me.rerere.rikkahub.x.context` |
+| `app/.../x/context/ContextWindowRepository.kt` | 容量表仓库:assets 内置兜底 + 远端静默刷新(raw/jsDelivr) | ✅ `me.rerere.rikkahub.x.context` |
+| `app/.../x/context/ContextUsageCalculator.kt` | 上下文已用量:最近 usage.promptTokens + 输入估算 | ✅ `me.rerere.rikkahub.x.context` |
+| `app/.../x/ui/ContextUsageRing.kt` | 上下文用量圆环组件(Codex 风格,分档变色) | ✅ `me.rerere.rikkahub.x.ui` |
+| `app/.../assets/context-windows/context-windows.json` | 内置容量表(与远端 model-contexts/ 同构,离线兜底) | 资源文件 |
 | `.github/google-services.placeholder.json` | CI 占位配置 | 非代码,仓库文件+cp |
 | `scripts/pangu_format_resources.py` | 盘古之白资源格式化脚本 | 工程脚本 |
 
@@ -39,8 +44,8 @@
 | `data/ai/transformers/OcrTransformer.kt` | OCR 仅识别本轮新增图片,历史图片只读缓存/占位,纯文字续聊不再强制识别(上游 issue #1736);缓存窗口 3天/64→30天/256 |
 | `ui/pages/chat/ChatList.kt` | 消息来源显示增强(上游 issue #1805):providerNameById 反查所属路由 + 模型切换分隔线(相邻助手回复 modelId 变化时居中提示) |
 | `ui/components/message/ChatMessage.kt` | 消息来源显示增强(上游 issue #1805):新增 providerName 参数,助手消息末尾灰字落款"路由名 · 模型名" |
-| `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI |
-| `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI |
+| `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI + 上下文用量圆环挂点(容量/用量计算 + onCompressContext 参数 + 点击弹压缩) |
+| `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI + 圆环压缩回调透传(vm.handleCompressContext) |
 | `ui/pages/chat/ChatVM.kt` | 会话级模型切换逻辑与 UI 即时刷新 |
 | `ui/pages/backup/tabs/ImportExportTab.kt` | 备份导出 SAF 文件名前缀改 `RikkaHub-X_backup_`(与上游区分;导入不卡名兼容上游格式) |
 | `ui/pages/extensions/workspace/WorkspaceDetailPage.kt` | 工作区导出/导入归档 UI;导出文件名前缀 `RikkaHub-X_workspace_` |
