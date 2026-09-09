@@ -247,6 +247,45 @@ object WorkspaceArchiver {
         })
     }
 
+    /**
+     * 列出归档内所有条目路径(含目录前缀),导入分析用(判断含 files/linux 用户区/tools 等)。
+     */
+    fun listArchivePaths(input: InputStream): Set<String> {
+        val paths = LinkedHashSet<String>()
+        GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->
+            TarArchiveInputStream(gzip).use { tar ->
+                while (true) {
+                    val entry: TarArchiveEntry = tar.nextEntry ?: break
+                    val segments = entry.name.split('/')
+                    if (entry.isDirectory) {
+                        if (segments.last().isEmpty()) segments.dropLast(1)
+                    }
+                    var acc = ""
+                    for ((i, seg) in segments.withIndex()) {
+                        acc = if (acc.isEmpty()) seg else "$acc/$seg"
+                        paths += acc
+                    }
+                }
+            }
+        }
+        return paths
+    }
+
+    /** 读取归档内单个文件内容(不存在返回 null);大文件请勿用于整个归档 */
+    fun readArchiveFile(input: InputStream, targetName: String): ByteArray? {
+        GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->
+            TarArchiveInputStream(gzip).use { tar ->
+                while (true) {
+                    val entry: TarArchiveEntry = tar.nextEntry ?: break
+                    if (!entry.isDirectory && entry.name == targetName) {
+                        return tar.readNBytes(entry.size.toInt().coerceAtMost(MAX_MANIFEST_BYTES))
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     // ---- 内部 ----
 
     private const val IO_BUFFER = 64 * 1024
