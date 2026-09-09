@@ -78,14 +78,74 @@ jobs:
 
       - name: Prepare build files
         run: |
-          # 解码base64编码的keystore文件
-          echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
-
-          # 写入签名配置到local.properties
-          echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
-
-          # 写入Google Services配置
-          echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          if [ -n "${{ secrets.KEY_BASE64 }}" ]; then
+            # 有正式签名 secrets：解码keystore、写签名配置、写Google Services
+            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          else
+            # 无 secrets（fork 自用构建）：用临时 keytool 签名 + 占位 google-services.json，
+            # 产物可安装但为开发签名，不依赖 Firebase
+            echo "无签名 secrets，使用临时开发签名构建（不接 Firebase）"
+            keytool -genkeypair -v -keystore app/app.key -storepass android \
+              -alias rikkahub -keypass android -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=RikkaHub Dev,O=RikkaHub,C=CN" >/dev/null 2>&1
+            cat > local.properties <<'EOF'
+storeFile=app/app.key
+storePassword=android
+keyAlias=rikkahub
+keyPassword=android
+EOF
+            cat > app/google-services.json <<'EOF'
+{
+  "project_info": {
+    "project_number": "000000000000",
+    "project_id": "rikkahub-dev-placeholder",
+    "storage_bucket": "rikkahub-dev-placeholder.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000",
+        "android_client_info": {
+          "package_name": "me.rerere.rikkahub"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDevPlaceholder0000000000000000"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000001",
+        "android_client_info": {
+          "package_name": "me.rerere.rikkahub.debug"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDevPlaceholder0000000000000000"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ]
+}
+EOF
+          fi
 
       - name: Gradle Build
         run: |
