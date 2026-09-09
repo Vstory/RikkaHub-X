@@ -336,6 +336,38 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                     )
                 }
             }
+
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.setting_page_voice_input_settings)) },
+                ) {
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_voice_input_haptic_boost_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_voice_input_haptic_boost_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableVoiceInputHapticBoost,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableVoiceInputHapticBoost = it))
+                                }
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_voice_input_sound_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_voice_input_sound_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableVoiceInputSound,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableVoiceInputSound = it))
+                                }
+                            )
+                        },
+                    )
+                }
+            }
         }
     }
 }

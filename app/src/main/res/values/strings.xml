@@ -915,6 +915,11 @@
   <string name="setting_page_tts_service">Speech Services</string>
   <string name="setting_page_tts_service_desc">Configure text-to-speech and speech recognition providers</string>
   <string name="setting_page_tts_settings">TTS Settings</string>
+  <string name="setting_page_voice_input_settings">Voice Input Settings</string>
+  <string name="setting_voice_input_haptic_boost_title">Voice Input Vibration Boost</string>
+  <string name="setting_voice_input_haptic_boost_desc">Use stronger vibration when voice input starts and stops</string>
+  <string name="setting_voice_input_sound_title">Voice Input Sound</string>
+  <string name="setting_voice_input_sound_desc">Play a sound when voice input starts and stops</string>
   <string name="setting_page_web_server">Web Server</string>
   <string name="setting_page_web_server_address_note">Address Notes</string>
   <string name="setting_page_web_server_address_note_desc">LAN Address: Uses device WiFi IP, accessible to other devices on the same network. Unavailable on mobile data.\nLocal Address: Uses localhost, accessible on this device only.\nmDNS Address: Uses .local hostname, accessible by name from other devices on the same network without knowing the IP.</string>

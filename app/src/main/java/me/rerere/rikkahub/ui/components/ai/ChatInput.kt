@@ -186,16 +186,25 @@ fun ChatInput(
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
     var asrBaseText by remember { mutableStateOf("") }
-    LaunchedEffect(asrState.status) {
+    // 语音输入反馈:提示音与振动由设置控制(默认对齐 RikkaTune:提示音静音 / 振动增强)
+    val voiceInputSoundEnabled = settings.displaySetting.enableVoiceInputSound
+    val voiceInputHapticBoost = settings.displaySetting.enableVoiceInputHapticBoost
+    LaunchedEffect(asrState.status, voiceInputSoundEnabled, voiceInputHapticBoost) {
         when (asrState.status) {
             ASRStatus.Listening -> {
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                soundEffectPlayer.play(R.raw.asr_start)
+                hapticFeedback.performHapticFeedback(
+                    if (voiceInputHapticBoost) HapticFeedbackType.LongPress
+                    else HapticFeedbackType.GestureThresholdActivate
+                )
+                if (voiceInputSoundEnabled) soundEffectPlayer.play(R.raw.asr_start)
             }
 
             ASRStatus.Stopping -> {
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                soundEffectPlayer.play(R.raw.asr_stop)
+                hapticFeedback.performHapticFeedback(
+                    if (voiceInputHapticBoost) HapticFeedbackType.LongPress
+                    else HapticFeedbackType.GestureEnd
+                )
+                if (voiceInputSoundEnabled) soundEffectPlayer.play(R.raw.asr_stop)
             }
 
             else -> {}
