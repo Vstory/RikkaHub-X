@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 云备份(WebDAV)上传文件名前缀 RikkaHub-X_backup_ 与上游区分,列表双前缀兼容历史 backup_ 备份
 package me.rerere.rikkahub.data.sync.webdav
 
 import android.content.Context
@@ -10,6 +11,8 @@ import me.rerere.rikkahub.data.datastore.WebDavConfig
 import me.rerere.rikkahub.utils.fileSizeToString
 import java.io.File
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 private const val TAG = "WebDavSync"
 
@@ -36,14 +39,18 @@ class WebDavSync(
         // Ensure the backup directory exists
         client.ensureCollectionExists().getOrThrow()
 
+        // [X-custom] 上传文件名统一 RikkaHub-X_backup_ 前缀与上游区分(列表双前缀兼容历史 backup_)
+        val backupName = "RikkaHub-X_backup_" +
+            LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".zip"
+
         // Upload the backup file
         client.put(
-            path = file.name,
+            path = backupName,
             file = file,
             contentType = "application/zip"
         ).getOrThrow()
 
-        Log.i(TAG, "backup: Uploaded ${file.name} (${file.length().fileSizeToString()})")
+        Log.i(TAG, "backup: Uploaded $backupName (${file.length().fileSizeToString()})")
 
         // Clean up temp file
         file.delete()
@@ -58,7 +65,10 @@ class WebDavSync(
         val resources = client.list().getOrThrow()
 
         resources
-            .filter { !it.isCollection && it.displayName.startsWith("backup_") && it.displayName.endsWith(".zip") }
+            .filter {
+                !it.isCollection && it.displayName.endsWith(".zip") &&
+                    (it.displayName.startsWith("backup_") || it.displayName.startsWith("RikkaHub-X_backup_"))
+            }
             .map { resource ->
                 WebDavBackupItem(
                     href = resource.href,

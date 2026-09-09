@@ -30,6 +30,8 @@
 | `data/repository/ConversationRepository.kt` | 会话级模型覆盖持久化/读取 |
 | `data/repository/WorkspaceRepository.kt` | 工作区导出/导入归档编排(调 me.rerere.workspace.x) |
 | `data/sync/BackupManager.kt` | 官方备份库导入适配(x.sync.OfficialBackupCompat) |
+| `data/sync/S3Sync.kt` | 云备份(S3)上传对象名 `RikkaHub-X_backup_<ts>.zip` 与上游区分;列表双前缀兼容历史 `backup_` |
+| `data/sync/webdav/WebDavSync.kt` | 云备份(WebDAV)上传文件名同左;列表双前缀兼容历史 `backup_` |
 | `service/ChatService.kt` | 压缩通知 + 会话级模型覆盖优先读取 |
 | `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI |
 | `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI |
