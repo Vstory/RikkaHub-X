@@ -173,7 +173,7 @@ fun WorkspaceDetailPage(id: String) {
         val safeName = workspace.name.trim().replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
         val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US)
             .format(java.util.Date())
-        workspaceExportLauncher.launch("RikkaHubWorkspace_${safeName}_$stamp.tar.gz")
+        workspaceExportLauncher.launch("RikkaHub-X_workspace_${safeName}_$stamp.tar.gz")
     }
     fun requestExportArchive() {
         val status = state.workspace?.shellStatus

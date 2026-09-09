@@ -34,7 +34,8 @@
 | `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI |
 | `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI |
 | `ui/pages/chat/ChatVM.kt` | 会话级模型切换逻辑与 UI 即时刷新 |
-| `ui/pages/extensions/workspace/WorkspaceDetailPage.kt` | 工作区导出/导入归档 UI |
+| `ui/pages/backup/tabs/ImportExportTab.kt` | 备份导出 SAF 文件名前缀改 `RikkaHub-X_backup_`(与上游区分;导入不卡名兼容上游格式) |
+| `ui/pages/extensions/workspace/WorkspaceDetailPage.kt` | 工作区导出/导入归档 UI;导出文件名前缀 `RikkaHub-X_workspace_` |
 | `ui/pages/extensions/workspace/WorkspaceDetailVM.kt` | 工作区导出/导入归档 VM |
 | `ui/pages/setting/SettingPreferencesGeneralPage.kt` | 压缩反馈设置项 + 语音输入设置板块 |
 

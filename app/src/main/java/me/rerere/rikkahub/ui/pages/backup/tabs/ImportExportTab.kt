@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 备份导出文件名前缀 RikkaHub-X_ 与上游区分(导入不卡文件名,兼容上游格式)
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons
@@ -229,7 +230,7 @@ fun ImportExportTab(
                         {
                             val timestamp = LocalDateTime.now()
                                 .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-                            createDocumentLauncher.launch("rikkahub_backup_$timestamp.zip")
+                            createDocumentLauncher.launch("RikkaHub-X_backup_$timestamp.zip")
                         }
                     } else null,
                     headlineContent = { Text(stringResource(R.string.backup_page_local_backup_export)) },
