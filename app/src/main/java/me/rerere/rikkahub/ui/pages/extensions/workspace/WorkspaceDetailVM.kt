@@ -18,7 +18,7 @@ import me.rerere.rikkahub.data.repository.WorkspaceImportResult
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstallStage
-import me.rerere.workspace.WorkspaceArchiveProgress
+import me.rerere.workspace.x.WorkspaceArchiveProgress
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceStorageArea
