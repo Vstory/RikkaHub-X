@@ -1,4 +1,3 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩反馈设置项 + 语音输入设置板块
 package me.rerere.rikkahub.ui.pages.setting
 
 import androidx.compose.foundation.layout.Arrangement
@@ -260,58 +259,6 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                             }
                         )
                     }
-                }
-            }
-
-            item {
-                CardGroup(
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    title = { Text(stringResource(R.string.setting_page_voice_input_settings)) },
-                ) {
-                    item(
-                        headlineContent = { Text(stringResource(R.string.setting_voice_input_haptic_boost_title)) },
-                        supportingContent = { Text(stringResource(R.string.setting_voice_input_haptic_boost_desc)) },
-                        trailingContent = {
-                            Switch(
-                                checked = displaySetting.enableVoiceInputHapticBoost,
-                                onCheckedChange = {
-                                    updateDisplaySetting(displaySetting.copy(enableVoiceInputHapticBoost = it))
-                                }
-                            )
-                        },
-                    )
-                    item(
-                        headlineContent = { Text(stringResource(R.string.setting_voice_input_sound_title)) },
-                        supportingContent = { Text(stringResource(R.string.setting_voice_input_sound_desc)) },
-                        trailingContent = {
-                            Switch(
-                                checked = displaySetting.enableVoiceInputSound,
-                                onCheckedChange = {
-                                    updateDisplaySetting(displaySetting.copy(enableVoiceInputSound = it))
-                                }
-                            )
-                        },
-                    )
-                }
-            }
-
-            item {
-                CardGroup(
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    title = { Text(stringResource(R.string.setting_page_compress_feedback)) },
-                ) {
-                    item(
-                        headlineContent = { Text(stringResource(R.string.setting_compress_feedback_title)) },
-                        supportingContent = { Text(stringResource(R.string.setting_compress_feedback_desc)) },
-                        trailingContent = {
-                            Switch(
-                                checked = displaySetting.enableCompressFeedback,
-                                onCheckedChange = {
-                                    updateDisplaySetting(displaySetting.copy(enableCompressFeedback = it))
-                                }
-                            )
-                        },
-                    )
                 }
             }
 

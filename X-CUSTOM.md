@@ -42,10 +42,12 @@
 | `ui/components/ai/ChatInput.kt` | 语音输入提示音/振动 + 会话模型切换 UI |
 | `ui/pages/chat/ChatPage.kt` | 压缩通知权限请求 + 会话模型切换 UI |
 | `ui/pages/chat/ChatVM.kt` | 会话级模型切换逻辑与 UI 即时刷新 |
+| `RouteActivity.kt` | 偏好设置新增 X 定制子路由(Screen.SettingPreferencesXCustom) |
+| `ui/pages/setting/SettingPreferencesPage.kt` | 偏好设置板块新增「X Custom」入口行 |
+| `ui/pages/setting/SettingPreferencesXCustomPage.kt` | [新增] X 定制聚合页:收纳全部带开关的 X 定制项(语音输入提示音/振动增强/压缩会话反馈);2026-09-10 由 GeneralPage 迁入 |
 | `ui/pages/backup/tabs/ImportExportTab.kt` | 备份导出 SAF 文件名前缀改 `RikkaHub-X_backup_`(与上游区分;导入不卡名兼容上游格式) |
 | `ui/pages/extensions/workspace/WorkspaceDetailPage.kt` | 工作区导出/导入归档 UI;导出文件名前缀 `RikkaHub-X_workspace_` |
 | `ui/pages/extensions/workspace/WorkspaceDetailVM.kt` | 工作区导出/导入归档 VM |
-| `ui/pages/setting/SettingPreferencesGeneralPage.kt` | 压缩反馈设置项 + 语音输入设置板块 |
 
 ## C. 构建/资源/基础设施类改动(无代码标签, merge 时人工留意)
 

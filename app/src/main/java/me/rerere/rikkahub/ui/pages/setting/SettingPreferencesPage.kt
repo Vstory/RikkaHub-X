@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Notification01
 import me.rerere.hugeicons.stroke.Internet
+import me.rerere.hugeicons.stroke.MagicWand01
 import me.rerere.hugeicons.stroke.PaintBoard
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Sun01
@@ -88,6 +89,12 @@ fun SettingPreferencesPage() {
                         leadingContent = { Icon(HugeIcons.Internet, null) },
                         headlineContent = { Text(stringResource(R.string.setting_page_preferences_network)) },
                         supportingContent = { Text(stringResource(R.string.setting_page_preferences_network_desc)) },
+                    )
+                    item(
+                        onClick = { navController.navigate(Screen.SettingPreferencesXCustom) },
+                        leadingContent = { Icon(HugeIcons.MagicWand01, null) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_preferences_x_custom)) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_preferences_x_custom_desc)) },
                     )
                 }
             }
