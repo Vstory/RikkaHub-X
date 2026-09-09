@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +47,7 @@ import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.utils.UiState
 import me.rerere.rikkahub.utils.UpdateChecker
+import me.rerere.rikkahub.x.chat.ChatDraftStore
 import java.util.Locale
 import kotlin.uuid.Uuid
 
@@ -68,6 +70,10 @@ class ChatVM(
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
+
+    // [X-custom] issue 1715: 会话输入草稿持久化(切换窗口/离开后回来不丢失)
+    private val chatDraftStore = ChatDraftStore(context)
+    private var draftDebounceJob: Job? = null
 
     val voiceSession = VoiceSessionController(viewModelScope, context::getString) {
         chatService.enqueueVoiceMessage(_conversationId, it)
@@ -98,13 +104,44 @@ class ChatVM(
 
         // 记住对话ID, 方便下次启动恢复
         context.writeStringPreference("lastConversationId", _conversationId.toString())
+
+        // [X-custom] issue 1715: 进入会话时恢复该会话上次未发送的草稿(仅当输入框为空且非编辑态)
+        val draft = chatDraftStore.load(_conversationId)
+        if (!draft.isNullOrBlank() && inputState.isEmpty() && !inputState.isEditing()) {
+            inputState.setMessageText(draft)
+        }
     }
 
     override fun onCleared() {
         voiceSession.stop()
+        // [X-custom] issue 1715: 离开会话兜底保存草稿(VM 销毁时最新输入落盘)
+        persistDraftNow()
         super.onCleared()
         // 移除对话引用
         chatService.removeConversationReference(_conversationId)
+    }
+
+    /**
+     * [X-custom] issue 1715: 输入文本变化上报(由 ChatPage snapshotFlow 每帧文本变化调用)。
+     * 防抖 600ms 落盘;编辑历史消息时不落草稿(避免恢复成普通新消息)。
+     */
+    fun onDraftInputChanged() {
+        draftDebounceJob?.cancel()
+        if (inputState.isEditing()) return
+        draftDebounceJob = viewModelScope.launch {
+            delay(600)
+            persistDraftNow()
+        }
+    }
+
+    private fun persistDraftNow() {
+        if (inputState.isEditing()) return
+        val text = inputState.textContent.text.toString().trim()
+        if (text.isBlank()) {
+            chatDraftStore.delete(_conversationId)
+        } else {
+            chatDraftStore.save(_conversationId, text)
+        }
     }
 
     // 用户设置
