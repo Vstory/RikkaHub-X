@@ -55,6 +55,7 @@
 | 来源 | 值 | 说明 |
 |---|---|---|
 | **锚点(可信)** | `claude sonnet/opus 5`、`deepseek v4 flash/pro/v4.1` = **1M** | 与代码 `ModelRegistry.kt` 中 `contextLength(1.m)` 六处一致 |
-| **家族默认(推断)** | gpt-4o 128k / gpt-5 系 400k / gemini 1M / claude 200k / deepseek 64k / qwen 256k / glm 128k / kimi 128k / doubao 256k / grok 256k / minimax 200k / mimo 256k / step 128k / intern 128k / hy 128k / longcat 200k / muse 128k | 按各官方生态公开值推测,新版本可能变动,**欢迎 PR 修正** |
+| **联网核验(2026-09-10)** | GPT-6/5.6/5.5/5.4 = 1.05M、GPT-5 系 = 400K、GPT-4.1 = 1M、GPT-4o/oss = 128K;Claude Opus 4.6+/Sonnet 4.6+/5 系 = 1M、其余 Claude = 200K;Gemini 2.x/3.x = 1M;DeepSeek V4 = 1M / v3.x-chat = 128K / r1-reasoner = 64K;Qwen3 系 = 256K(3.7-Max = 1M);GLM-5.2/5.3 = 1M、5/5.1 = 200K、4.x = 128K;Kimi = 256K;Doubao = 256K(2.1 约 512K、Seed-Evolving 1024K);Grok-4.6/4.5 = 500K、4.3 = 1M、4.1/4.20 = 2M、Grok-4 = 256K;MiniMax M3 = 1M、M2 系 = 204800;MiMo 2.5/3/2-Pro = 1M、V2 其余 ≈262K;Step = 256K;InternLM2 = 200K | 均附官方文档/发布页来源标注于 `context-windows.json` 各条 note,版本变动**欢迎 PR 修正** |
+| **待核(推断)** | hy、muse = 128K;longcat = 200K;step-3、intern-s1 同族推断 | note 已标注"推断待核",请以实测/官方为准修正 |
 
 > 该表只决定"100% 是多少";"已用多少(分子)"由各 provider 响应 `usage` 提供,与本文无关。
