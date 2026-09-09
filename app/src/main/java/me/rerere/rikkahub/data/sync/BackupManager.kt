@@ -113,6 +113,9 @@ class BackupManager(
                     require(!stagedWal.exists() || stagedDatabase.exists()) { "Backup WAL has no matching database" }
                     if (stagedDatabase.exists()) {
                         DatabaseBackup.normalize(context, stagedDatabase)
+                        // 官方 RikkaHub v25 备份库 → X 结构适配(X 与官方 v25 仅差 ConversationEntity.model_id 列;
+                        // 官方 ≤v24 旧备份无需处理,Room 迁移链自动升级)
+                        OfficialBackupCompat.adaptIfOfficial(context, stagedDatabase)
                         // Reject unsupported schemas before publishing; run supported old migrations on the copy.
                         val room = AppDatabaseFactory.create(context, stagedDatabase.absolutePath)
                         try {
