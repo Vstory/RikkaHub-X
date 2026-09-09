@@ -167,6 +167,11 @@ class ChatVM(
     // 设置当前会话的聊天模型(会话级覆盖,不影响其他会话)
     fun setChatModel(conversationId: Uuid, model: Model) {
         viewModelScope.launch {
+            // 先同步内存态(活跃 session),触发 UI 即时刷新当前会话的模型显示;
+            // 否则仅落库时,内存 session.state.modelId 仍是旧值,
+            // 需切走再切回(initializeConversation 重新读库)才显示,且后续整对象保存会把旧值覆盖回去。
+            // 模式对齐 moveConversationToFolder:先内存后落库。
+            chatService.updateConversationState(conversationId) { it.copy(modelId = model.id) }
             conversationRepo.updateConversationModelId(
                 conversationId = conversationId,
                 modelId = model.id
