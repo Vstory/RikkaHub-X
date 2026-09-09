@@ -17,6 +17,7 @@ import me.rerere.workspace.WorkspaceArchiveFile
 import me.rerere.workspace.WorkspaceArchiveManifest
 import me.rerere.workspace.WorkspaceArchiveProgress
 import me.rerere.workspace.WorkspaceArchiver
+import me.rerere.workspace.WORKSPACE_ARCHIVE_FORMAT
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
@@ -393,6 +394,9 @@ class WorkspaceRepository(
     suspend fun previewWorkspaceArchive(file: File): WorkspaceImportPreview =
         withContext(Dispatchers.IO) {
             val manifest = file.inputStream().use { WorkspaceArchiver.readManifest(it) }
+            require(manifest.format == WORKSPACE_ARCHIVE_FORMAT) {
+                "不是 RikkaHub 工作区归档(format=${manifest.format})"
+            }
             val paths = file.inputStream().use { WorkspaceArchiver.listArchivePaths(it) }
             val hasFiles = "files" in paths
             val hasUserArea = WorkspaceArchiver.USER_AREA_RELATIVE.any { "linux/$it" in paths }
