@@ -51,6 +51,7 @@ private const val TAG = "RikkaHubApp"
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
+const val COMPRESS_RESULT_NOTIFICATION_CHANNEL_ID = "compress_result"
 
 class RikkaHubApp : Application() {
     override fun onCreate() {
@@ -238,6 +239,12 @@ class RikkaHubApp : Application() {
             .setShowBadge(false)
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
+
+        val compressResultChannel = NotificationChannelCompat
+            .Builder(COMPRESS_RESULT_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
+            .setName(getString(R.string.notification_channel_compress_result))
+            .build()
+        notificationManager.createNotificationChannel(compressResultChannel)
     }
 
     override fun onTerminate() {

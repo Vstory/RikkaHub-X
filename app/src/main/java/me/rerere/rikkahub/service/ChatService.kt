@@ -45,6 +45,7 @@ import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
+import me.rerere.rikkahub.COMPRESS_RESULT_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationLoop
@@ -86,12 +87,16 @@ import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
+import me.rerere.rikkahub.utils.sendNotification
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+
+/** 压缩会话结果通知 ID(压缩反馈专用,与生成通知/前台服务通知区分) */
+private const val COMPRESS_RESULT_NOTIFICATION_ID = 42
 
 internal fun backgroundTextGenerationParams(
     model: Model,
@@ -1093,6 +1098,15 @@ class ChatService(
             context.getString(R.string.compress_feedback_failed)
         }
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        // 持久通知反馈:Toast 一闪而过不直观,结果留一条通知可回看。
+        // 无通知权限(Android 13+ 未授权)时系统自动丢弃,Toast 已兜底即时反馈。
+        context.sendNotification(
+            channelId = COMPRESS_RESULT_NOTIFICATION_CHANNEL_ID,
+            notificationId = COMPRESS_RESULT_NOTIFICATION_ID,
+        ) {
+            title = message
+            autoCancel = true
+        }
     }
 
     // ---- 对话状态更新 ----
