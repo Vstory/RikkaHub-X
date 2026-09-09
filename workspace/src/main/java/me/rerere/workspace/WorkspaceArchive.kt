@@ -1,0 +1,385 @@
+package me.rerere.workspace
+
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import org.apache.commons.compress.archivers.tar.TarConstants
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+
+/** 工作区归档的容器格式标识 */
+const val WORKSPACE_ARCHIVE_FORMAT = "rikkahub-workspace"
+const val WORKSPACE_ARCHIVE_VERSION = 2
+const val WORKSPACE_ARCHIVE_MANIFEST = "manifest.json"
+
+/**
+ * 工作区归档 manifest,打包在 tar.gz 首位。
+ *
+ * 设计:工作区 rootfs 本体是可重装的发行版(不打包);归档只含
+ *  - 工具清单 tools/(tools.txt + restore-tools.sh,自动探测手动安装的工具)
+ *  - rootfs 用户区 linux/{usr/local,opt,home,root,etc}(手工安装/配置,发行版升级不覆盖)
+ *  - 用户工作文件 files/
+ * 保留原 id/root/name,新设备恢复按原 id 覆盖补全(配合应用备份,能把 BROKEN 工作区"填活")。
+ */
+@Serializable
+data class WorkspaceArchiveManifest(
+    val format: String = WORKSPACE_ARCHIVE_FORMAT,
+    val version: Int = WORKSPACE_ARCHIVE_VERSION,
+    val id: String,
+    val root: String,
+    val name: String,
+    val shellCompatibilityMode: Boolean = false,
+    val exportedAtEpochMillis: Long,
+    /** 归档是否含 rootfs 用户区(usr/local opt home root etc) */
+    val includesUserArea: Boolean = false,
+    /** 归档是否含工具清单 tools/ */
+    val includesTools: Boolean = false,
+)
+
+data class WorkspaceArchiveProgress(
+    val doneBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val currentEntry: String = "",
+)
+
+/** 归档内虚拟文件(不落盘直接写入,如 tools/restore-tools.sh) */
+data class WorkspaceArchiveFile(
+    val bytes: ByteArray,
+    val mode: Int,
+)
+
+/**
+ * 工作区导出/导入归档器(tar.gz)。
+ *
+ * 用 tar 而不用 zip:rootfs 用户区含符号链接与权限位,java.util.zip 不写 unix extra fields,
+ * 打包后语义会静默丢失;tar 原生保留 typeflag(符号链接)与 mode,与 RootfsInstaller 格式同构。
+ */
+object WorkspaceArchiver {
+    /** rootfs 内视为"用户区"的子目录(相对 linux/),相对发行版本体;打包/恢复都按这份清单走 */
+    val USER_AREA_RELATIVE = listOf("usr/local", "opt", "home", "root", "etc")
+
+    /** etc 下由 RootfsPatcher 按本机生成的、不应随归档迁移的文件 */
+    private val ETC_SKIP_FILES = setOf("resolv.conf")
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    fun encodeManifest(manifest: WorkspaceArchiveManifest): ByteArray =
+        json.encodeToString(manifest).toByteArray(Charsets.UTF_8)
+
+    fun decodeManifest(bytes: ByteArray): WorkspaceArchiveManifest =
+        json.decodeFromString(bytes.decodeToString())
+
+    /** 判断某归档内目录名是否属于 rootfs 用户区顶层(如 usr/local、opt…) */
+    fun isUserAreaTop(name: String): Boolean = name in USER_AREA_RELATIVE
+
+    /**
+     * 打包工作区到 tar.gz 写入 [output]。
+     * sections:用户区各子目录(若存在)+ files/;[virtualFiles] 写在其后(归档路径如 tools/xxx)。
+     */
+    fun writeArchive(
+        workspaceDir: File,
+        manifest: WorkspaceArchiveManifest,
+        output: OutputStream,
+        virtualFiles: Map<String, WorkspaceArchiveFile> = emptyMap(),
+        onProgress: (WorkspaceArchiveProgress) -> Unit = {},
+    ) {
+        val linuxDir = File(workspaceDir, "linux")
+        val filesDir = File(workspaceDir, "files")
+        val sections = buildList {
+            if (manifest.includesUserArea) {
+                for (sub in USER_AREA_RELATIVE) {
+                    val dir = File(linuxDir, sub)
+                    if (dir.isDirectory) add(Section(dir, "linux/$sub"))
+                }
+            }
+            if (filesDir.isDirectory) add(Section(filesDir, "files"))
+        }
+        val totalBytes = MANIFEST_ESTIMATE_BYTES +
+            virtualFiles.values.sumOf { it.bytes.size.toLong() } +
+            sections.sumOf { measureSection(it) }
+        var done = 0L
+        fun report(name: String) {
+            onProgress(WorkspaceArchiveProgress(done, totalBytes, name))
+        }
+
+        GzipCompressorOutputStream(BufferedOutputStream(output, IO_BUFFER)).use { gzip ->
+            TarArchiveOutputStream(gzip, "UTF-8").use { tar ->
+                tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+                tar.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
+                tar.setAddPaxHeadersForNonAsciiNames(true)
+
+                // 1. manifest 放最前
+                val manifestBytes = encodeManifest(manifest)
+                writeBytesEntry(tar, WORKSPACE_ARCHIVE_MANIFEST, manifestBytes, 0x1A4)
+                done += manifestBytes.size
+                report(WORKSPACE_ARCHIVE_MANIFEST)
+
+                // 2. 虚拟文件(tools/)
+                for ((name, file) in virtualFiles) {
+                    writeBytesEntry(tar, name, file.bytes, file.mode)
+                    done += file.bytes.size
+                    report(name)
+                }
+
+                // 3. 用户区 + files 子树
+                for (section in sections) {
+                    writeSection(tar, section) { entryName, bytesWritten ->
+                        done += bytesWritten
+                        report(entryName)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 从 tar.gz 读取 manifest(扫描到 manifest.json 即返回)。
+     * 不校验版本/格式,由调用方决定如何处理旧版本。
+     */
+    fun readManifest(input: InputStream): WorkspaceArchiveManifest {
+        GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->
+            TarArchiveInputStream(gzip).use { tar ->
+                while (true) {
+                    val entry: TarArchiveEntry = tar.nextEntry ?: break
+                    if (entry.name == WORKSPACE_ARCHIVE_MANIFEST) {
+                        val bytes = tar.readNBytes(entry.size.toInt().coerceAtMost(MAX_MANIFEST_BYTES))
+                        return decodeManifest(bytes)
+                    }
+                    // 非 manifest 条目:继续 nextEntry 会自动跳到下一条目头
+                }
+            }
+        }
+        error("Not a RikkaHub workspace archive: missing $WORKSPACE_ARCHIVE_MANIFEST")
+    }
+
+    /**
+     * 把 tar.gz 解压到 [stagingDir](先清空再建),保留归档内完整前缀
+     * (linux/usr/local/…、files/…),之后由调用方 mergeTree 合入目标。
+     */
+    fun extractArchive(
+        input: InputStream,
+        stagingDir: File,
+        onProgress: (WorkspaceArchiveProgress) -> Unit = {},
+    ) {
+        stagingDir.deleteRecursively()
+        stagingDir.mkdirs()
+        var entries = 0L
+        GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->
+            TarArchiveInputStream(gzip).use { tar ->
+                while (true) {
+                    val entry: TarArchiveEntry = tar.nextEntry ?: break
+                    val target = resolveInside(stagingDir, entry.name)
+                    when {
+                        entry.isSymbolicLink -> {
+                            target.parentFile?.mkdirs()
+                            target.delete()
+                            runCatching {
+                                Files.createSymbolicLink(target.toPath(), Paths.get(entry.linkName))
+                            }.onFailure {
+                                // 个别平台建符号链接失败(权限等):退化为空文件,避免整体失败
+                                target.writeBytes(ByteArray(0))
+                            }
+                        }
+
+                        entry.isDirectory -> target.mkdirs()
+
+                        else -> {
+                            target.parentFile?.mkdirs()
+                            target.outputStream().use { out -> tar.copyTo(out, IO_BUFFER) }
+                        }
+                    }
+                    if (!entry.isSymbolicLink && entry.mode != 0) {
+                        applyUnixMode(target, entry.mode)
+                    }
+                    if (!entry.isDirectory && !entry.isSymbolicLink) {
+                        runCatching { target.setLastModified(entry.modTime.time) }
+                    }
+                    entries++
+                    onProgress(WorkspaceArchiveProgress(entries, 0, entry.name))
+                }
+            }
+        }
+    }
+
+    /**
+     * 递归合并 [source] 到 [target]:目录/文件/符号链接按需复制覆盖,保留可执行等权限。
+     * 目标中多出的文件保留(合并语义,不做镜像同步)。
+     */
+    fun mergeTree(source: File, target: File) {
+        if (!source.exists()) return
+        target.mkdirs()
+        Files.walkFileTree(source.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                val dst = target.toPath().resolve(source.toPath().relativize(dir))
+                dst.toFile().mkdirs()
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                val dst = target.toPath().resolve(source.toPath().relativize(file))
+                dst.parent?.toFile()?.mkdirs()
+                val src = file.toFile()
+                if (Files.isSymbolicLink(file)) {
+                    dst.toFile().delete()
+                    runCatching {
+                        Files.createSymbolicLink(dst, Files.readSymbolicLink(file))
+                    }
+                } else if (src.isFile) {
+                    src.copyTo(dst.toFile(), overwrite = true)
+                    runCatching { dst.toFile().setLastModified(src.lastModified()) }
+                    if (src.canExecute()) runCatching { dst.toFile().setExecutable(true, false) }
+                }
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
+    // ---- 内部 ----
+
+    private const val IO_BUFFER = 64 * 1024
+    private const val MANIFEST_ESTIMATE_BYTES = 4096L
+    private const val MAX_MANIFEST_BYTES = 512 * 1024
+
+    private data class Section(val dir: File, val archiveName: String)
+
+    private fun measureSection(section: Section): Long {
+        var total = 0L
+        Files.walkFileTree(section.dir.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (!Files.isSymbolicLink(file) && Files.isRegularFile(file)) {
+                    total += runCatching { Files.size(file) }.getOrDefault(0L)
+                }
+                return FileVisitResult.CONTINUE
+            }
+        })
+        return total
+    }
+
+    private fun writeBytesEntry(tar: TarArchiveOutputStream, name: String, bytes: ByteArray, mode: Int) {
+        val entry = TarArchiveEntry(name, TarConstants.LF_NORMAL)
+        entry.size = bytes.size.toLong()
+        entry.mode = mode
+        tar.putArchiveEntry(entry)
+        tar.write(bytes)
+        tar.closeArchiveEntry()
+    }
+
+    private fun writeSection(
+        tar: TarArchiveOutputStream,
+        section: Section,
+        onEntry: (entryName: String, bytesWritten: Long) -> Unit,
+    ) {
+        val root = section.dir.toPath()
+        writeDirEntry(tar, section.archiveName)
+        onEntry(section.archiveName, 0)
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (dir == root) return FileVisitResult.CONTINUE
+                val name = entryName(dir)
+                if (shouldSkipInEtc(name)) return FileVisitResult.SKIP_SUBTREE
+                writeDirEntry(tar, name)
+                onEntry(name, 0)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                val name = entryName(file)
+                if (shouldSkipInEtc(name)) return FileVisitResult.CONTINUE
+                if (Files.isSymbolicLink(file)) {
+                    val entry = TarArchiveEntry(name, TarConstants.LF_SYMLINK).apply {
+                        linkName = runCatching { Files.readSymbolicLink(file).toString() }.getOrDefault("")
+                        mode = 0x1FF // 0777
+                    }
+                    tar.putArchiveEntry(entry)
+                    tar.closeArchiveEntry()
+                    onEntry(name, 0)
+                    return FileVisitResult.CONTINUE
+                }
+                if (Files.isRegularFile(file)) {
+                    val size = runCatching { Files.size(file) }.getOrDefault(0L)
+                    val entry = TarArchiveEntry(name, TarConstants.LF_NORMAL).apply {
+                        this.size = size
+                        mode = unixMode(file.toFile())
+                    }
+                    tar.putArchiveEntry(entry)
+                    var written = 0L
+                    Files.newInputStream(file).use { input ->
+                        val buffer = ByteArray(IO_BUFFER)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            tar.write(buffer, 0, read)
+                            written += read
+                        }
+                    }
+                    tar.closeArchiveEntry()
+                    onEntry(name, written)
+                }
+                return FileVisitResult.CONTINUE
+            }
+
+            fun entryName(path: Path): String = section.archiveName + "/" +
+                root.relativize(path).joinToString("/") { it.fileName.toString() }
+        })
+    }
+
+    private fun shouldSkipInEtc(name: String): Boolean {
+        // 仅 linux/etc 顶层跳过 resolv.conf(该文件由 RootfsPatcher 按新设备环境重建)
+        if (!name.startsWith("linux/etc/")) return false
+        val tail = name.removePrefix("linux/etc/")
+        return tail.indexOf('/') < 0 && tail in ETC_SKIP_FILES
+    }
+
+    private fun writeDirEntry(tar: TarArchiveOutputStream, name: String) {
+        val entry = TarArchiveEntry(name, TarConstants.LF_DIR)
+        entry.mode = 0x1ED // 0755
+        tar.putArchiveEntry(entry)
+        tar.closeArchiveEntry()
+    }
+
+    /** 尽量读完整 unix mode(含 suid);Android 不支持 unix 视图时退化为可执行位 */
+    private fun unixMode(file: File): Int {
+        val mode = runCatching {
+            (Files.getAttribute(file.toPath(), "unix:mode") as? Number)?.toInt()
+        }.getOrNull()
+        if (mode != null && mode != 0) return mode
+        return if (file.canExecute()) 0x1ED else 0x1A4 // 0755 / 0644
+    }
+
+    /** 恢复权限:优先 unix 视图全量还原,失败时用 File API 粗略还原(含可执行位) */
+    private fun applyUnixMode(file: File, mode: Int) {
+        val applied = runCatching {
+            Files.setAttribute(file.toPath(), "unix:mode", mode)
+        }.isSuccess
+        if (applied) return
+        runCatching {
+            file.setReadable(mode and 0x124 != 0, false)
+            file.setWritable(mode and 0x92 != 0, false)
+            file.setExecutable(mode and 0x49 != 0, false)
+        }
+    }
+
+    /** 归档内路径解析 + 穿越防护:必须落在 base 内 */
+    private fun resolveInside(base: File, name: String): File {
+        val target = File(base, name).normalize()
+        val basePath = base.canonicalPath.trimEnd('/')
+        val targetPath = target.canonicalPath
+        check(targetPath == basePath || targetPath.startsWith("$basePath/")) {
+            "Unsafe archive entry path: $name"
+        }
+        return target
+    }
+}
