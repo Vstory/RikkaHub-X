@@ -16,6 +16,8 @@ name: X Custom Guard
 #
 # 说明:前身为 verify-context-window.yml(仅覆盖容量表),现扩为统一守护 ——
 # 一个 workflow = 一个通知渠道,省去重复的 Gradle 环境搭建。
+# 产出:测试报告(XML/HTML)作为 artifact 上传(guard-test-reports,保留 14 天),
+# 供回溯逐条耗时与跨批次比对;条数/失败详情另在日志与 Job Summary 中。
 # 另见:.github/workflows/daily-build.yml(APK 构建与 nightly 发布)。
 on:
   push:
@@ -88,6 +90,19 @@ jobs:
           ./gradlew :app:testDebugUnitTest --console=plain \
             --tests "me.rerere.rikkahub.x.*" \
             --tests "me.rerere.rikkahub.data.ai.mcp.McpNameDecouplingAuditTest"
+
+      # 报告文件随 Runner 一起销毁 → 传出来,便于回溯逐条耗时/与历史批次比对
+      # (条数与失败详情本就在日志与 Job Summary 里,这里补的是**原始报告可下载**)
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: guard-test-reports
+          path: |
+            **/build/test-results/testDebugUnitTest/**
+            **/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Summarize results
         if: always()
