@@ -8,6 +8,7 @@ package me.rerere.rikkahub.x.context
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /** 容量值的合法区间。越界条目会被**丢弃**(而非钳制):钳制会把明显的错值变成一个"看起来正常"的错值。 */
 const val MIN_CONTEXT_WINDOW: Int = 1_024
@@ -78,7 +79,12 @@ data class ContextWindowTable(
          *   这类错误是局部的,不该牵连整张表。
          */
         fun parse(text: String): ParseResult {
+            // 先确认「这是不是一个 JSON 对象」:CDN 的限流/体积超限提示页往往是纯文本或 HTML,
+            // 却**带 200 状态码**(实测 jsDelivr 对超 50MB 的仓库就返回一段错误文案 + 200)。
+            // 若不区分,这种「源坏了」会被误报成「表被拒」—— 前者该改试下一个源,后者才是真拒表。
+            val looksLikeTable = runCatching { json.parseToJsonElement(text) }.getOrNull() is JsonObject
             val table = runCatching { json.decodeFromString<ContextWindowTable>(text) }.getOrNull()
+                ?: return ParseResult.Rejected("JSON 解析失败", unusableSource = !looksLikeTable)
                 ?: return ParseResult.Rejected("JSON 解析失败")
 
             if (table.schemaVersion !in 1..SUPPORTED_SCHEMA_VERSION) {
@@ -115,8 +121,14 @@ sealed interface ParseResult {
     /** 校验通过。[table] 可能已裁掉非法条目,但整体可信。 */
     data class Ok(val table: ContextWindowTable) : ParseResult
 
-    /** 整表不可用 —— 调用方应**保留上一份好表**,而不是退回默认策略去解释它。 */
-    data class Rejected(val reason: String) : ParseResult
+    /**
+     * 整表不可用 —— 调用方应**保留上一份好表**,而不是退回默认策略去解释它。
+     *
+     * [unusableSource] 区分两种"不可用":true 表示这段文本压根不是本表(非 JSON 对象,
+     * 多为 CDN 错误页),属**该源不可用**,应改试别的源;false 表示确是本表但校验不过,
+     * 才是真正意义上的拒表。
+     */
+    data class Rejected(val reason: String, val unusableSource: Boolean = false) : ParseResult
 }
 
 private fun Int.isValidCapacity(): Boolean = this in MIN_CONTEXT_WINDOW..MAX_CONTEXT_WINDOW

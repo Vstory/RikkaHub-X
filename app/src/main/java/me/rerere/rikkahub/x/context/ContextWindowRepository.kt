@@ -5,7 +5,8 @@
 // 数据来源**只有远端**(App 侧不内置任何表,只带解释器):
 //   ① 落盘缓存:首启读本地缓存(同步,快),无缓存则容量未知 → 调用方隐藏圆环;
 //   ② 远端刷新:超过表内声明的 TTL 或本地无可用表时拉取,失败静默保留旧值。
-// 远端地址默认 main 分支的 model-contexts/context-windows.json,失败自动切 jsDelivr CDN 镜像。
+// 远端有**多个并列候选源**(均为 main 分支同一文件的 CDN 副本),全部拉取后按表内 updatedAt
+// 取最新的一版 —— 见 ContextWindowSourceSelection。
 //
 // 远端是**不可信输入**却直接驱动 UI 的分母,故:表必须过 ContextWindowTable.parse 校验
 // (schemaVersion / strategy / 条目值域),**整表被拒时保留上一份好表** —— 宁可数值停在上一版,
@@ -15,6 +16,9 @@ package me.rerere.rikkahub.x.context
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,8 +67,42 @@ object ContextWindowRepository {
     private const val CACHE_DIR = "x-context"
     private const val CACHE_FILE = "context-windows.json"
 
-    private const val REMOTE_URL = "https://raw.githubusercontent.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json"
-    private const val MIRROR_URL = "https://cdn.jsdelivr.net/gh/Vstory/RikkaHub-X@main/model-contexts/context-windows.json"
+    /**
+     * 数据源候选 —— **并列**而非主从。
+     *
+     * 各 CDN 缓存的是同一条分支,刷新时刻并不同步:实测(2026-09-10)推完 main 后,
+     * raw.githubusercontent.com 仍在供上一版(边缘缓存未过期,HTTP 仍是 200),
+     * 而 githack / statically 已是新内容。故必须**全部拉取再择优**,
+     * 串行"主源成功就不看备源"在此时拿到的恰恰是旧表。
+     *
+     * 注:`cdn.jsdelivr.net` 曾被用作镜像,但本仓库体积(约 65 MB)超过 jsDelivr 的 50 MB
+     * 上限,该域名**稳定返回一段错误文案却带 200 状态码** —— 因此改用其备用域名 fastly。
+     */
+    private val SOURCES = listOf(
+        Source(
+            "raw.githubusercontent.com",
+            "https://raw.githubusercontent.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
+        ),
+        Source(
+            "raw.githack.com",
+            "https://raw.githack.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
+        ),
+        Source(
+            "cdn.statically.io",
+            "https://cdn.statically.io/gh/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
+        ),
+        Source(
+            "fastly.jsdelivr.net",
+            "https://fastly.jsdelivr.net/gh/Vstory/RikkaHub-X@main/model-contexts/context-windows.json",
+        ),
+        // GitHub API 直读文件,不经任何 CDN 缓存 → 永不滞后。未认证有按 IP 的速率限制,
+        // 命中限制时只是这一个候选失败,不影响其余源,故值得并列为一个候选。
+        Source(
+            "api.github.com",
+            "https://api.github.com/repos/Vstory/RikkaHub-X/contents/model-contexts/context-windows.json?ref=main",
+            headers = mapOf("Accept" to "application/vnd.github.raw"),
+        ),
+    )
 
     /** 缓存不可用(缺失/损坏)时的兜底 TTL —— 此时无论如何都要尝试刷新。 */
     private const val FALLBACK_TTL_MINUTES = ContextWindowInterpretation.DEFAULT_REFRESH_MINUTES
@@ -162,7 +200,19 @@ object ContextWindowRepository {
     }
 
     /** 刷新结果。 */
-    private enum class RefreshOutcome { UPDATED, REJECTED, UNREACHABLE }
+    private enum class RefreshOutcome {
+        /** 取到了比本地更新的表并落盘。 */
+        UPDATED,
+
+        /** 各源可达,但没有比本地更新的版本(CDN 滞后),本地保持不变。 */
+        UP_TO_DATE,
+
+        /** 拿到了内容,但都不是可用的表。 */
+        REJECTED,
+
+        /** 所有源都连不上。 */
+        UNREACHABLE,
+    }
 
     /**
      * 手动触发一次立即更新(忽略 TTL)。
@@ -193,6 +243,12 @@ object ContextWindowRepository {
                     lastError = null,
                 )
 
+                // 本地表未变,但"最后检查时刻"已推进,故更新时间要跟着刷新
+                RefreshOutcome.UP_TO_DATE -> _status.value.copy(
+                    lastRefreshedAtMillis = lastRefreshMillis(context),
+                    lastError = null,
+                )
+
                 RefreshOutcome.REJECTED -> _status.value.copy(lastError = RefreshError.REJECTED)
                 RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = RefreshError.UNREACHABLE)
             }
@@ -201,22 +257,91 @@ object ContextWindowRepository {
         }
     }
 
-    private fun fetchAndApply(context: Context): RefreshOutcome {
-        val text = fetch(REMOTE_URL) ?: fetch(MIRROR_URL) ?: run {
-            Log.w(TAG, "远端不可达,保留现有表(可能为空)")
-            return RefreshOutcome.UNREACHABLE
-        }
-        return when (val result = ContextWindowTable.parse(text)) {
-            is ParseResult.Ok -> {
-                table = result.table
-                writeCache(context, text)
+    /**
+     * 拉取全部候选源 → 各自校验 → 取最新的一版落盘。
+     *
+     * 并行发起:各源互不依赖,串行只会把最慢的那个叠加成总耗时。
+     */
+    private suspend fun fetchAndApply(context: Context): RefreshOutcome {
+        val results = fetchAll()
+        Log.i(TAG, "拉取结果:" + results.joinToString(" | ") { it.describe() })
+
+        val candidates = results.filterIsInstance<SourceResult.Usable>().map { it.candidate }
+        return when (val decision = selectTableSource(candidates, local = table)) {
+            is SelectionOutcome.Use -> {
+                table = decision.candidate.table
+                writeCache(context, decision.candidate.raw)
                 RefreshOutcome.UPDATED
             }
-            // 关键分支:不被远端牵着走。整表拒用 → 继续用上一份好表
-            is ParseResult.Rejected -> {
-                Log.w(TAG, "远端表被拒(${result.reason}),保留现有表")
-                RefreshOutcome.REJECTED
+
+            // 各源都不比本地新(CDN 滞后):保持本地表不动,但把"最后检查时刻"推前
+            SelectionOutcome.KeepLocal -> {
+                Log.i(TAG, "各源均不比本地新,保持本地表:本地=${table?.updatedAt}")
+                touchCache(context)
+                RefreshOutcome.UP_TO_DATE
             }
+
+            // 区分"全不可达"与"有响应但都不可用":前者是网络问题,后者是数据/源问题,
+            // 给用户的提示与排查方向都不同。
+            SelectionOutcome.NoCandidate -> if (results.any { it is SourceResult.Unusable }) {
+                Log.w(TAG, "各源均未提供可用表,保留现有表")
+                RefreshOutcome.REJECTED
+            } else {
+                Log.w(TAG, "远端不可达,保留现有表(可能为空)")
+                RefreshOutcome.UNREACHABLE
+            }
+        }
+    }
+
+    /** 一个候选源的拉取结果。 */
+    private sealed interface SourceResult {
+        val name: String
+
+        /** 取到了可用的表。 */
+        data class Usable(val candidate: TableCandidate) : SourceResult {
+            override val name: String get() = candidate.source
+        }
+
+        /** 有响应,但内容不是可用的表(CDN 错误页 / 表校验不过)。 */
+        data class Unusable(override val name: String, val reason: String) : SourceResult
+
+        /** 连不上或非 2xx。 */
+        data class Failed(override val name: String, val reason: String) : SourceResult
+
+        fun describe(): String = when (this) {
+            is Usable -> "$name=${candidate.table.updatedAt}"
+            is Unusable -> "$name=✗$reason"
+            is Failed -> "$name=✗$reason"
+        }
+    }
+
+    /** 一个远端候选源。[headers] 用于需要特定 Accept 的源(如 GitHub API 的 raw 直出)。 */
+    private class Source(
+        val name: String,
+        val url: String,
+        val headers: Map<String, String> = emptyMap(),
+    )
+
+    /** 并行拉取全部候选源。单个源的异常不得影响其余源,故各自 runCatching 后成对返回。 */
+    private suspend fun fetchAll(): List<SourceResult> = coroutineScope {
+        SOURCES.map { source -> async(Dispatchers.IO) { fetchOne(source) } }.awaitAll()
+    }
+
+    private fun fetchOne(source: Source): SourceResult {
+        val raw = runCatching {
+            val request = Request.Builder().url(source.url).get()
+                .apply { source.headers.forEach { (key, value) -> header(key, value) } }
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) response.body.string() else null
+        }.getOrNull() ?: return SourceResult.Failed(source.name, "请求失败")
+
+        return when (val parsed = ContextWindowTable.parse(raw)) {
+            is ParseResult.Ok -> SourceResult.Usable(TableCandidate(source.name, raw, parsed.table))
+            is ParseResult.Rejected -> SourceResult.Unusable(
+                source.name,
+                if (parsed.unusableSource) "内容不是本表" else "表被拒(${parsed.reason})",
+            )
         }
     }
 
@@ -234,8 +359,14 @@ object ContextWindowRepository {
         }.onFailure { Log.w(TAG, "缓存写入失败", it) }
     }
 
-    private fun fetch(url: String): String? = runCatching {
-        val resp = client.newCall(Request.Builder().url(url).get().build()).execute()
-        if (resp.isSuccessful) resp.body.string() else null
-    }.getOrNull()
+    /**
+     * 只推进缓存文件的修改时间,内容不动。
+     *
+     * 各源都比本地旧时,这次"检查"本身仍算成功 —— 把最后检查时刻前推,既让设置页显示的
+     * 更新时间如实反映"刚问过源",也避免短时间内反复重试。
+     */
+    private fun touchCache(context: Context) {
+        runCatching { cacheFile(context).setLastModified(System.currentTimeMillis()) }
+            .onFailure { Log.w(TAG, "更新时间戳失败", it) }
+    }
 }

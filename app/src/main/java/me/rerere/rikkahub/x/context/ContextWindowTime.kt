@@ -8,6 +8,7 @@
 package me.rerere.rikkahub.x.context
 
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -25,6 +26,23 @@ private val DISPLAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyy
 fun formatTableUpdatedAt(raw: String, zone: ZoneId = ZoneId.systemDefault()): String? = runCatching {
     OffsetDateTime.parse(raw).atZoneSameInstant(zone).format(DISPLAY_FORMAT)
 }.getOrNull()
+
+/**
+ * 解析表内 `updatedAt` 为**时刻**,用于跨源比较哪一版更新。
+ *
+ * 兼容两种格式:
+ * - `2026-09-10T23:30:30+08:00`(现行,带秒与时区偏移);
+ * - `2026-09-10`(旧格式,只到日)—— 按**当日零点**计。
+ *
+ * 旧格式必须能解析:部分 CDN 缓存仍在供旧格式的表,若解析不了就会被判成"最旧",
+ * 从而误把旧表当新版覆盖下去 —— 能解析才比较得准。
+ *
+ * 无法解析返回 null(调用方视为最旧)。
+ */
+fun parseTableUpdatedAt(raw: String, zone: ZoneId = ZoneId.systemDefault()): Instant? {
+    runCatching { return OffsetDateTime.parse(raw).toInstant() }
+    return runCatching { LocalDate.parse(raw).atStartOfDay(zone).toInstant() }.getOrNull()
+}
 
 /** 把本机时间戳(毫秒)转成指定时区的 `yyyy-MM-dd HH:mm:ss`。 */
 fun formatRefreshedAt(epochMillis: Long, zone: ZoneId = ZoneId.systemDefault()): String =
