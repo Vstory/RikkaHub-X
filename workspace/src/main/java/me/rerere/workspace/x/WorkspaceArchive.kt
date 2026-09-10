@@ -189,19 +189,52 @@ object WorkspaceArchiver {
     /**
      * 把 tar.gz 解压到 [stagingDir](先清空再建),保留归档内完整前缀
      * (linux/usr/local/…、files/…),之后由调用方 mergeTree 合入目标。
+     *
+     * [maxTotalBytes] / [maxEntries] 是解压预算(tar bomb 防线,audit A5):
+     * 归档头里的 size 是**声明值**,高压缩比内容可以「几 KB 输入解出几十 GB」,
+     * 没有预算就只能等存储被写满才发现。超限即抛错,并清掉已写入的半份产物。
+     * 默认值远高于合法用途,**调用方宜按可用空间再收紧**;测试可注入小值验证。
      */
     fun extractArchive(
         input: InputStream,
         stagingDir: File,
         onProgress: (WorkspaceArchiveProgress) -> Unit = {},
+        maxTotalBytes: Long = MAX_EXTRACT_TOTAL_BYTES,
+        maxEntries: Long = MAX_EXTRACT_ENTRIES,
     ) {
         stagingDir.deleteRecursively()
         stagingDir.mkdirs()
+        try {
+            extractEntries(input, stagingDir, onProgress, maxTotalBytes, maxEntries)
+        } catch (e: Throwable) {
+            // 失败(含预算超限)不留半份解包结果 —— 否则「中止」只是停手,
+            // 已写入的部分照样占着存储,tar bomb 的目的就达到了
+            stagingDir.deleteRecursively()
+            throw e
+        }
+    }
+
+    private fun budgetExceeded(bytes: Long, limit: Long): Nothing =
+        error("Workspace archive expands beyond the size budget (bytes=$bytes, limit=$limit)")
+
+    /** 逐条目解包。目录准备与失败清理由 [extractArchive] 负责。 */
+    private fun extractEntries(
+        input: InputStream,
+        stagingDir: File,
+        onProgress: (WorkspaceArchiveProgress) -> Unit,
+        maxTotalBytes: Long,
+        maxEntries: Long,
+    ) {
         var entries = 0L
+        var totalBytes = 0L
         GzipCompressorInputStream(BufferedInputStream(input, IO_BUFFER)).use { gzip ->
             TarArchiveInputStream(gzip).use { tar ->
                 while (true) {
                     val entry: TarArchiveEntry = tar.nextEntry ?: break
+                    // 条目数预算:海量空条目同样能撑爆目录项(且比写数据更廉价)
+                    if (entries >= maxEntries) {
+                        error("Workspace archive has too many entries (limit=$maxEntries)")
+                    }
                     val target = resolveInside(stagingDir, entry.name)
                     when {
                         entry.isSymbolicLink -> {
@@ -243,6 +276,9 @@ object WorkspaceArchiver {
                                 Files.createLink(target.toPath(), linkTarget.toPath())
                             }.onFailure {
                                 if (linkTarget.isFile) {
+                                    // 退化为复制:同样占存储,一并计入预算
+                                    totalBytes += linkTarget.length()
+                                    if (totalBytes > maxTotalBytes) budgetExceeded(totalBytes, maxTotalBytes)
                                     linkTarget.copyTo(target, overwrite = true)
                                 } else {
                                     target.writeBytes(ByteArray(0))
@@ -254,7 +290,17 @@ object WorkspaceArchiver {
 
                         else -> {
                             target.parentFile?.mkdirs()
-                            target.outputStream().use { out -> tar.copyTo(out, IO_BUFFER) }
+                            // 逐块计数写入:超预算立即抛错(不把超限部分写盘)
+                            target.outputStream().use { out ->
+                                val buffer = ByteArray(IO_BUFFER)
+                                while (true) {
+                                    val read = tar.read(buffer)
+                                    if (read < 0) break
+                                    totalBytes += read
+                                    if (totalBytes > maxTotalBytes) budgetExceeded(totalBytes, maxTotalBytes)
+                                    out.write(buffer, 0, read)
+                                }
+                            }
                         }
                     }
                     if (!entry.isSymbolicLink && entry.mode != 0) {
@@ -350,6 +396,17 @@ object WorkspaceArchiver {
     private const val IO_BUFFER = 64 * 1024
     private const val MANIFEST_ESTIMATE_BYTES = 4096L
     private const val MAX_MANIFEST_BYTES = 512 * 1024
+
+    /**
+     * 解压总量上限默认值(audit A5 加固)。取 8 GiB —— 远高于合法用途
+     * (rootfs 用户区 + 文件区),仅作兜底;真实调用由调用方按可用空间收紧
+     * (见 WorkspaceRepository 的预算计算),否则手机上一个「合法地很大」的
+     * 工作区会被误拒。
+     */
+    const val MAX_EXTRACT_TOTAL_BYTES = 8L * 1024 * 1024 * 1024
+
+    /** 解压条目数上限默认值:防海量空条目耗目录项(单条目 tar 头仅 512 字节,伪造成本极低) */
+    const val MAX_EXTRACT_ENTRIES = 200_000L
 
     /** 归档内单个**用户文件**(tools/tools.txt 等)的读取上限,与 manifest 阈值分开(A4) */
     private const val MAX_ARCHIVE_FILE_BYTES = 8 * 1024 * 1024

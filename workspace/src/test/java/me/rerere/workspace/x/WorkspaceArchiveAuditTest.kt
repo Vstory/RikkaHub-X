@@ -13,8 +13,13 @@
 //   A4  tools.txt 超 512KB 时 readArchiveFile 返回 null(阈值用错对象)
 // 安全守护:
 //   SEC 经符号链接向外写入必须仍被拒绝(确保上述放宽未削弱防护)
-// 现状记录:
-//   A5 DOC:解压无累计体积上限(tar bomb 风险),加固缺口,非缺陷断言
+// 加固(A5,2026-09-10 落地):
+//   A5  解压加入总量预算 —— tar bomb(几 KB 输入解出几十 GB)被拒,且不留半份产物
+//   A5b 预算内的归档仍正常解出(防加固误伤合法导入)
+//   A5c 条目数预算 —— 海量空条目同样被拒
+//
+// 残留边界(未加固,风险较低):listArchivePaths / 归档预览只遍历条目不落盘,
+//   故未加条目上限;其资源占用受输入体积约束,不构成「写满存储」类风险。
 package me.rerere.workspace.x
 
 import java.io.ByteArrayInputStream
@@ -28,6 +33,7 @@ import org.apache.commons.compress.archivers.tar.TarConstants
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -218,38 +224,94 @@ class WorkspaceArchiveAuditTest {
     }
 
     /**
-     * A5 DOC:记录「解压无累计体积上限」的现状。
-     * 32MB 高压缩比内容可正常解出 → 确认无上限(tar bomb 风险),属加固缺口而非缺陷。
-     * 若将来加入上限,本用例应改为断言拒绝。
+     * A5 加固(2026-09-10):解压加入总量预算 —— 高压缩比归档不再能「几 KB 输入撑爆存储」。
+     * 预算可注入,故用小值验证;真实调用由 WorkspaceRepository 按可用空间收紧。
      */
     @Test
-    fun `A5 DOC extraction has no cumulative size cap`() {
+    fun `A5 archive expanding beyond the size budget is rejected`() {
         val size = 32L * 1024 * 1024
+        val budget = 1L * 1024 * 1024
+        val staging = tempDir("bomb")
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            WorkspaceArchiver.extractArchive(
+                ByteArrayInputStream(bombArchive("files/big.bin", size)),
+                staging,
+                maxTotalBytes = budget,
+            )
+        }
+        assertTrue("错误信息应指明体积超限: ${error.message}", error.message!!.contains("size budget"))
+        assertTrue(
+            "中止后应清掉半份产物(实际仍留 ${File(staging, "files/big.bin").length()} 字节)",
+            !File(staging, "files/big.bin").exists(),
+        )
+    }
+
+    /** A5b:预算内的归档照常解出(确保加固没伤到合法导入)。 */
+    @Test
+    fun `A5b archive within the size budget extracts normally`() {
+        val size = 32L * 1024 * 1024
+        val staging = tempDir("bomb-ok")
+        WorkspaceArchiver.extractArchive(
+            ByteArrayInputStream(bombArchive("files/big.bin", size)),
+            staging,
+            maxTotalBytes = 64L * 1024 * 1024,
+        )
+        assertEquals(size, File(staging, "files/big.bin").length())
+    }
+
+    /** A5c:条目数预算 —— 海量空条目(每个 tar 头仅 512 字节)同样能撑爆目录项。 */
+    @Test
+    fun `A5c excessive entry count is rejected`() {
+        val staging = tempDir("entries")
+        val error = assertThrows(IllegalStateException::class.java) {
+            WorkspaceArchiver.extractArchive(
+                ByteArrayInputStream(manyEntriesArchive(50)),
+                staging,
+                maxEntries = 10,
+            )
+        }
+        assertTrue("错误信息应指明条目数超限: ${error.message}", error.message!!.contains("too many entries"))
+    }
+
+    /** 构造含单个指定大小文件的 tar.gz(内容为零字节,压缩比极高,等同 bomb)。 */
+    private fun bombArchive(name: String, size: Long): ByteArray {
         val out = ByteArrayOutputStream()
         GzipCompressorOutputStream(out).use { gz ->
             TarArchiveOutputStream(gz).use { tar ->
-                val entry = TarArchiveEntry("files/big.bin", TarConstants.LF_NORMAL).apply {
+                val entry = TarArchiveEntry(name, TarConstants.LF_NORMAL).apply {
                     this.size = size
                     mode = 0x1A4
                 }
                 tar.putArchiveEntry(entry)
-                val zeros = ByteArray(64 * 1024)
+                val chunk = ByteArray(64 * 1024)
                 var written = 0L
                 while (written < size) {
-                    val n = minOf(zeros.size.toLong(), size - written).toInt()
-                    tar.write(zeros, 0, n)
+                    val n = minOf(chunk.size.toLong(), size - written).toInt()
+                    tar.write(chunk, 0, n)
                     written += n
                 }
                 tar.closeArchiveEntry()
             }
         }
+        return out.toByteArray()
+    }
 
-        val staging = tempDir("bomb")
-        WorkspaceArchiver.extractArchive(ByteArrayInputStream(out.toByteArray()), staging)
-        assertEquals(
-            "解出 $size 字节未被拒绝 → 当前无累计体积上限",
-            size,
-            File(staging, "files/big.bin").length(),
-        )
+    /** 构造含 [count] 个空文件的 tar.gz,用于条目数预算验证。 */
+    private fun manyEntriesArchive(count: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        GzipCompressorOutputStream(out).use { gz ->
+            TarArchiveOutputStream(gz).use { tar ->
+                repeat(count) { index ->
+                    val entry = TarArchiveEntry("files/e$index", TarConstants.LF_NORMAL).apply {
+                        size = 0L
+                        mode = 0x1A4
+                    }
+                    tar.putArchiveEntry(entry)
+                    tar.closeArchiveEntry()
+                }
+            }
+        }
+        return out.toByteArray()
     }
 }
