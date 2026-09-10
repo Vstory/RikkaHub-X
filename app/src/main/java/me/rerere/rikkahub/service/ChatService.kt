@@ -14,6 +14,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.completeWith
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,6 +44,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
+import me.rerere.ai.ui.getTools
 import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
@@ -90,6 +92,7 @@ import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
 // [X-custom] 压缩执行健壮性(merge 上游时保留):.x 独立包,合并上游零冲突
+import me.rerere.rikkahub.x.chat.GenerationAutosave
 import me.rerere.rikkahub.x.compress.CompressBudget
 import me.rerere.rikkahub.x.compress.MAX_MERGE_ROUNDS
 import me.rerere.rikkahub.x.compress.chunkMessagesForCompress
@@ -319,20 +322,51 @@ class ChatService(
         keepAliveInBackground: Boolean = true,
         block: suspend () -> Unit,
     ): Job {
-        if (!keepAliveInBackground) return appScope.launch(start = CoroutineStart.LAZY) { block() }
+        val job = if (!keepAliveInBackground) {
+            appScope.launch(start = CoroutineStart.LAZY) { block() }
+        } else {
+            appScope.launch(start = CoroutineStart.LAZY) {
+                val generationId = Uuid.random()
+                val foregroundStarted = ChatGenerationForegroundService.acquire(
+                    context = context,
+                    generationId = generationId,
+                    conversationId = conversationId,
+                )
+                try {
+                    block()
+                } finally {
+                    if (foregroundStarted) {
+                        ChatGenerationForegroundService.release(context, generationId)
+                    }
+                }
+            }
+        }
+        // [X-custom] 生成过程自动保存(上游 issue 1663/1820):原实现在整个生成循环期间不落库,
+        // 只有正常完成/异常/手动停止才写 —— 进程被系统杀掉时那些收尾路径都不会执行,已生成部分全丢。
+        // ticker 跟随本 job 生命周期:生成一结束自动退出,无需额外取消管理。
+        startGenerationAutosaveTicker(conversationId, job)
+        return job
+    }
 
-        return appScope.launch(start = CoroutineStart.LAZY) {
-            val generationId = Uuid.random()
-            val foregroundStarted = ChatGenerationForegroundService.acquire(
-                context = context,
-                generationId = generationId,
-                conversationId = conversationId,
-            )
-            try {
-                block()
-            } finally {
-                if (foregroundStarted) {
-                    ChatGenerationForegroundService.release(context, generationId)
+    /**
+     * [X-custom] 按配置的间隔把内存态落库。间隔经 [GenerationAutosave.clampGenerationAutosaveInterval]
+     * 钳制(配置不可信,防 0/负数退化成死循环写库)。落库走 appScope 异步,不阻塞生成链。
+     */
+    private fun startGenerationAutosaveTicker(conversationId: Uuid, job: Job) {
+        appScope.launch {
+            while (job.isActive) {
+                val intervalSeconds = GenerationAutosave.clampGenerationAutosaveInterval(
+                    settingsStore.settingsFlow.first().displaySetting.generationAutosaveIntervalSeconds
+                )
+                delay(intervalSeconds * 1000L)
+                if (!job.isActive) break
+                val settings = settingsStore.settingsFlow.first()
+                if (!settings.displaySetting.enableGenerationAutosave) continue
+                val session = sessions[conversationId] ?: break
+                // 直接写库,不走 saveConversation:后者末尾会触发 dispatchNextQueuedMessage
+                if (conversationRepo.existsConversationById(conversationId)) {
+                    runCatching { conversationRepo.updateConversation(session.state.value) }
+                        .onFailure { Log.w(TAG, "autosave failed: $conversationId", it) }
                 }
             }
         }
@@ -738,6 +772,10 @@ class ChatService(
                 return
             }
 
+            // [X-custom] 工具边界落库的基线计数:进入本次生成时已有多少工具执行完。
+            var lastExecutedToolCount = conversation.currentMessages
+                .lastOrNull()?.getTools()?.count { it.isExecuted } ?: 0
+
             // start generating
             val session = getOrCreateSession(conversationId)
             generationLoop.generateText(
@@ -794,6 +832,24 @@ class ChatService(
                         val updatedConversation = getConversationFlow(conversationId).value
                             .updateCurrentMessages(chunk.messages)
                         updateConversation(conversationId, updatedConversation)
+
+                        // [X-custom] 工具边界落库(上游 issue 1663/1820):一次工具调用可能跑很久
+                        // (长 shell),此时界面收不到流式 chunk、周期 ticker 又受间隔限制,
+                        // 故工具一跑完就立刻落库一次 —— 执行过的工具其 output 非空(isExecuted),
+                        // 据此判定「刚有一批工具执行完」,避开纯流式片段(那些工具仍 isExecuted=false)。
+                        val newExecutedToolCount = updatedConversation.currentMessages
+                            .lastOrNull()?.getTools()?.count { it.isExecuted }
+                            ?: 0
+                        val toolBoundary = newExecutedToolCount > lastExecutedToolCount
+                        lastExecutedToolCount = newExecutedToolCount
+
+                        if (toolBoundary) {
+                            val surfaceConversation = updatedConversation
+                            appScope.launch {
+                                runCatching { saveConversation(conversationId, surfaceConversation) }
+                                    .onFailure { Log.w(TAG, "tool-boundary save failed: $conversationId", it) }
+                            }
+                        }
 
                         // 通知等边缘副作用由 ChatNotificationManager 消费；
                         // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
