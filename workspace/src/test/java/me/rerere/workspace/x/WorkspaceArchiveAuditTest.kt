@@ -274,6 +274,28 @@ class WorkspaceArchiveAuditTest {
         assertTrue("错误信息应指明条目数超限: ${error.message}", error.message!!.contains("too many entries"))
     }
 
+    /** A5d:解压预算策略 —— 40% 可用空间,受默认上限约束,查不到空间时退回上限。 */
+    @Test
+    fun `A5d extract budget policy keeps room for the merge copy`() {
+        val gb = 1024L * 1024 * 1024
+        assertEquals(
+            "可用 20 GiB 时应取 40%(复制阶段还要一份),而非 80%",
+            8L * gb,
+            WorkspaceArchiver.extractBudgetFor(20L * gb),
+        )
+        assertEquals(4L * gb, WorkspaceArchiver.extractBudgetFor(10L * gb))
+        assertEquals(
+            "查不到可用空间时退回默认上限,不因此拒绝导入",
+            WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES,
+            WorkspaceArchiver.extractBudgetFor(0L),
+        )
+        assertEquals(
+            "极大可用空间仍受默认上限约束",
+            WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES,
+            WorkspaceArchiver.extractBudgetFor(10_000L * gb),
+        )
+    }
+
     /** 构造含单个指定大小文件的 tar.gz(内容为零字节,压缩比极高,等同 bomb)。 */
     private fun bombArchive(name: String, size: Long): ByteArray {
         val out = ByteArrayOutputStream()

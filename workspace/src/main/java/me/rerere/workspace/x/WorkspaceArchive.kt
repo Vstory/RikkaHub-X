@@ -398,6 +398,20 @@ object WorkspaceArchiver {
     private const val MAX_MANIFEST_BYTES = 512 * 1024
 
     /**
+     * 由可用空间推解压预算:取可用空间的 **40%**。
+     *
+     * 为什么不取 80%:解包产物随后要**复制**进工作区(mergeTree),复制期间两份
+     * 内容并存(峰值 ≈ 2× 解出体积);按 80% 放行,解包能成功但合并阶段必 ENOSPC。
+     * 剩余余量再留给 tar.gz 原件与工作区既有文件。
+     *
+     * [usableSpace] 取不到(<=0)时退回 [MAX_EXTRACT_TOTAL_BYTES],
+     * 即不因「查不到空间」而拒绝导入。
+     */
+    fun extractBudgetFor(usableSpace: Long): Long =
+        if (usableSpace <= 0L) MAX_EXTRACT_TOTAL_BYTES
+        else minOf(usableSpace / 10 * 4, MAX_EXTRACT_TOTAL_BYTES)
+
+    /**
      * 解压总量上限默认值(audit A5 加固)。取 8 GiB —— 远高于合法用途
      * (rootfs 用户区 + 文件区),仅作兜底;真实调用由调用方按可用空间收紧
      * (见 WorkspaceRepository 的预算计算),否则手机上一个「合法地很大」的
