@@ -18,17 +18,31 @@ run-name: "Compile Check · ${{ github.event_name }} · ${{ github.ref_name }}"
 # 预计 1.5~2 分钟,用作「push 即得编译反馈」的快通道。
 #
 # 与既有 workflow 的分工:
-#   · compile-check.yml —— 快:编译能不能过(每次 push,~2 分钟)
+#   · compile-check.yml —— 快:编译能不能过(特性分支 push,~4 分钟)
 #   · x-custom-guard.yml —— 中:X 定制回归单测(~4 分钟,仅相关路径触发)
 #   · daily-build.yml    —— 全:APK 构建 + 签名 + nightly 发布(~9 分钟,手动触发)
 # 质量门禁未被削弱:编译之外的门禁仍由后两者承担,本 workflow 只是把它们前面
 # 那段最慢的等待拆出来,让低级编译错误尽早暴露。
 #
+# 只在特性分支自动跑(2026-09-10 增补):
+# 本仓库约定「新功能在特性分支开发 → 验证通过 → `git merge --ff-only` 合入 main」。
+# 快进合并**不产生新 tree** —— main 的 tip 与分支上已验证过的提交**逐字节相同**,
+# 因此在 main 上再编一次是**可证明的重复**(实测同一提交在分支与 main 各触发一次,
+# 内容零差异)。故用 branches-ignore 排除 main/master,只保留特性分支的自动反馈。
+#
+# 覆盖缺口与兜底:
+#   · 合上游(master→main)会产生 merge commit,**tree 与任何已验证提交都不同** ——
+#     此时 main 的编译正确性由 daily-build(assembleRelease)兜底;若想先单独验编译,
+#     可手动 dispatch 本 workflow(ref 选 main)。
+#   · 纯 CI/文档改动不落在上面的 paths 内,本来就不会触发。
+#
 # 说明::web:buildWebUi 是 app 编译的前置(web:preBuild 依赖它),故仍需 Node + pnpm。
 # 实测 pnpm store 缓存命中时该步骤约 7 秒,不是瓶颈,故保留原样未做额外缓存。
-
 on:
   push:
+    branches-ignore:
+      - main
+      - master
     paths:
       - 'app/src/**'
       - 'web-ui/**'
@@ -42,6 +56,7 @@ on:
       - 'gradle.properties'
       - 'settings.gradle.kts'
       - '.github/workflows/compile-check.yml'
+  # 保留手动触发:合并上游后想在 main 上单独验编译,或临时复跑某次改动时用。
   workflow_dispatch:
 
 # 供应链加固(与 daily-build / x-custom-guard 一致):第三方 action 全部 pin 到 commit SHA,
