@@ -192,8 +192,12 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                                 //   数据日期 = 表内声明的数据源时刻;更新时间 = 本机最后一次成功拉取的时刻。
                                 // 「更新时间」跨重启保留(取自缓存文件时间戳),故隔很久进来看到的仍是
                                 // 上次真正更新的时间,而不是本次打开设置页的时间。
+                                // 解析不出时刻就显示占位符,**不原样回显** —— 这个字段的内容来自远端,
+                                // 直接渲染等于把不受控文本搬进界面。
+                                // (正常不会走到占位符:解析层已拒掉缺失/乱写/指向未来的 updatedAt。)
+                                val unknownDate = stringResource(R.string.setting_context_usage_ring_table_date_unknown)
                                 val dataDate = tableStatus.tableUpdatedAt?.let {
-                                    formatTableUpdatedAt(it) ?: it   // 解析失败就原样显示,好过不显示
+                                    formatTableUpdatedAt(it) ?: unknownDate
                                 }
                                 val refreshedAt = tableStatus.lastRefreshedAtMillis?.let(::formatRefreshedAt)
 

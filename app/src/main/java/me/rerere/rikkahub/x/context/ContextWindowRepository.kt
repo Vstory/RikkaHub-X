@@ -68,39 +68,33 @@ object ContextWindowRepository {
     private const val CACHE_FILE = "context-windows.json"
 
     /**
-     * 数据源候选 —— **并列**而非主从。
+     * 数据源候选 —— **只用 GitHub 官方**,并列而非主从。
      *
-     * 各 CDN 缓存的是同一条分支,刷新时刻并不同步:实测(2026-09-10)推完 main 后,
-     * raw.githubusercontent.com 仍在供上一版(边缘缓存未过期,HTTP 仍是 200),
-     * 而 githack / statically 已是新内容。故必须**全部拉取再择优**,
-     * 串行"主源成功就不看备源"在此时拿到的恰恰是旧表。
+     * 两者的差别只在"新不新":
+     * - `api.github.com` 不经 CDN 缓存,推完 main 立刻是新内容(实测),为**首选**;
+     *   未认证有按 IP 的速率限制(60 次/时),而刷新间隔以小时计,足够。
+     * - `raw.githubusercontent.com` 走 CDN(`cache-control: max-age=300`),实测可能滞后
+     *   数十分钟,作**备份**与交叉印证。
      *
-     * 注:`cdn.jsdelivr.net` 曾被用作镜像,但本仓库体积(约 65 MB)超过 jsDelivr 的 50 MB
-     * 上限,该域名**稳定返回一段错误文案却带 200 状态码** —— 因此改用其备用域名 fastly。
+     * 曾经并列过 raw.githack.com / cdn.statically.io / fastly.jsdelivr.net 三个第三方代理,
+     * 现已全部移除,原因是它们不属 GitHub 的信任边界却要经手数据:
+     * - 都会**改写响应体**(实测 jsDelivr 对超限仓库返回自写的错误文案却带 200;
+     *   githack 往页面注入提示横幅),而 App 侧没有签名校验,无法分辨内容是否被改过;
+     * - 每次刷新都会**并行请求全部源**,等于把你的 IP、UA、访问时间同时交给这些第三方;
+     * - 可用性也不可靠(实测 githack 返回 403;jsDelivr 主域对本仓库直接不可用)。
+     *
+     * 若将来确实需要第三方镜像做冗余,前提是**先做签名校验**(公钥内置 App、私钥只在
+     * CI 里),否则第三方源既是篡改入口也是"用时间戳把表钉死"的入口。
      */
     private val SOURCES = listOf(
-        Source(
-            "raw.githubusercontent.com",
-            "https://raw.githubusercontent.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
-        ),
-        Source(
-            "raw.githack.com",
-            "https://raw.githack.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
-        ),
-        Source(
-            "cdn.statically.io",
-            "https://cdn.statically.io/gh/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
-        ),
-        Source(
-            "fastly.jsdelivr.net",
-            "https://fastly.jsdelivr.net/gh/Vstory/RikkaHub-X@main/model-contexts/context-windows.json",
-        ),
-        // GitHub API 直读文件,不经任何 CDN 缓存 → 永不滞后。未认证有按 IP 的速率限制,
-        // 命中限制时只是这一个候选失败,不影响其余源,故值得并列为一个候选。
         Source(
             "api.github.com",
             "https://api.github.com/repos/Vstory/RikkaHub-X/contents/model-contexts/context-windows.json?ref=main",
             headers = mapOf("Accept" to "application/vnd.github.raw"),
+        ),
+        Source(
+            "raw.githubusercontent.com",
+            "https://raw.githubusercontent.com/Vstory/RikkaHub-X/main/model-contexts/context-windows.json",
         ),
     )
 

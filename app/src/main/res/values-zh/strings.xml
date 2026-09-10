@@ -911,6 +911,7 @@
   <string name="setting_generation_autosave_interval_unit">秒</string>
   <string name="setting_context_usage_ring_desc">输入框旁显示当前上下文占用比例，接近上限变红，点击查看用量明细</string>
   <!-- [X-custom] 容量表:立即更新(归在上下文用量圆环分组内) -->
+  <string name="setting_context_usage_ring_table_date_unknown">未知</string>
   <string name="setting_context_usage_ring_table_updated_at">数据日期:%1$s</string>
   <string name="setting_context_usage_ring_table_missing">尚无容量表 —— 需联网一次</string>
   <string name="setting_context_usage_ring_refresh_now_title">立即更新容量表</string>

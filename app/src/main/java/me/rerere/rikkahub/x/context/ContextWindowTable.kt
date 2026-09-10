@@ -74,7 +74,7 @@ data class ContextWindowTable(
          *
          * 分两级处理,原则是「宁可少用,不可用错」:
          * - **拒整表**([ParseResult.Rejected]):JSON 不合法、schemaVersion 过高、strategy 未实现、
-         *   lookupOrder 含未知阶段、表内容为空。调用方据此**保留上一份好表**。
+         *   lookupOrder 含未知阶段、`updatedAt` 缺失或不可信、表内容为空。调用方据此**保留上一份好表**。
          * - **丢条目**([ParseResult.Ok] 但已裁剪):单条 keywords 为空、数值越界、id 为空。
          *   这类错误是局部的,不该牵连整张表。
          */
@@ -89,6 +89,11 @@ data class ContextWindowTable(
 
             if (table.schemaVersion !in 1..SUPPORTED_SCHEMA_VERSION) {
                 return ParseResult.Rejected("schemaVersion=${table.schemaVersion} 不受支持")
+            }
+            // updatedAt 是排序与展示的唯一依据,必须可信:缺失/乱写/指向未来一律拒表。
+            // 少了这道闸,一个把年份写成 2062 的版本会永远赢过后续更新,而界面看不出异常。
+            if (!isUpdatedAtSane(table.updatedAt)) {
+                return ParseResult.Rejected("updatedAt 缺失或不可信:${table.updatedAt}")
             }
             val interpretation = table.interpretation
             if (interpretation.strategy !in ContextWindowInterpretation.KNOWN_STRATEGIES) {

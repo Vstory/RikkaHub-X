@@ -938,6 +938,7 @@
   <string name="setting_context_usage_ring_title">Show context usage ring</string>
   <string name="setting_context_usage_ring_desc">Show the context usage ratio beside the input box; tap to see the breakdown</string>
   <!-- [X-custom] 容量表:立即更新(归在上下文用量圆环分组内) -->
+  <string name="setting_context_usage_ring_table_date_unknown">unknown</string>
   <string name="setting_context_usage_ring_table_updated_at">Data date: %1$s</string>
   <string name="setting_context_usage_ring_table_missing">No table yet — connect to the network once</string>
   <string name="setting_context_usage_ring_refresh_now_title">Refresh table now</string>
