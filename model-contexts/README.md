@@ -30,7 +30,7 @@
     "lookupOrder": ["exact", "rules", "default"],     // 查找阶段顺序
     "stripDateStamp": true,                           // 匹配前剔除日期戳
     "ignoreCase": true,                               // 忽略大小写
-    "refreshIntervalMinutes": 1440                    // 客户端刷新 TTL(分钟)
+    "refreshIntervalMinutes": 360                     // 客户端刷新 TTL(分钟)= 6 小时
   },
 
   "defaultContextWindow": 200000, // 全部未命中的兜底值

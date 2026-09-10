@@ -6,7 +6,7 @@
     "lookupOrder": ["exact", "rules", "default"],
     "stripDateStamp": true,
     "ignoreCase": true,
-    "refreshIntervalMinutes": 1440
+    "refreshIntervalMinutes": 360
   },
   "defaultContextWindow": 200000,
   "_comment": "RikkaHub X 上下文窗口容量远端表。查找顺序:先 models(精确 id,忽略大小写)→ 再 rules(按数组顺序,首条 keywords 全部命中即采用)→ 兜底 defaultContextWindow。interpretation 为**自描述块**:本表声明「该怎么被读」,App 只实现 strategy 枚举对应的策略、按 lookupOrder 走阶段,故换策略/换顺序/改开关**无需发版**(App 不认识 strategy 时**整表拒用并保留上一份好表**,而非退回默认策略混用)。refreshIntervalMinutes 为客户端刷新 TTL(分钟)。rules 靠前=越具体。keywords 匹配:keyword 忽略大小写后必须是 modelId(去掉分隔符 -/_/. 与空格后)的子串。数据核验日期 2026-09-10(联网核对官方文档/发布页;含 Claude Fable/Mythos、Qwen3.8-Max/Flash、Kimi K3、Llama 4、LongCat-2.0、Muse Spark 1.3 的补录与两处更正)。",

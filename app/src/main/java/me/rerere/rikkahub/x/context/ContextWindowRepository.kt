@@ -17,11 +17,29 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
+
+/**
+ * 容量表的对外状态,供设置页展示与「立即更新」按钮使用。
+ *
+ * 只暴露「人需要知道的东西」:表的数据日期、是否正在拉取、上次失败原因。
+ */
+data class ContextWindowTableStatus(
+    /** 表内声明的数据日期(`updatedAt`);null 表示本地还没有可用表。 */
+    val tableUpdatedAt: String? = null,
+    /** 是否正在拉取(用于禁用按钮、显示进度文案)。 */
+    val isRefreshing: Boolean = false,
+    /** 上次刷新失败原因;成功后清空。 */
+    val lastError: String? = null,
+)
 
 object ContextWindowRepository {
     private const val TAG = "ContextWindowRepo"
@@ -51,6 +69,10 @@ object ContextWindowRepository {
 
     private var initialized = false
 
+    private val _status = MutableStateFlow(ContextWindowTableStatus())
+    /** 容量表状态(数据日期 / 是否拉取中 / 上次失败原因),供设置页展示与手动刷新按钮使用。 */
+    val status: StateFlow<ContextWindowTableStatus> = _status.asStateFlow()
+
     /**
      * 幂等初始化:同步读本地缓存(可能没有),再按 TTL 决定是否异步拉远端。
      *
@@ -66,6 +88,7 @@ object ContextWindowRepository {
             appContext = app
             // 同步读缓存:本地文件,开销可忽略,且能让首帧就有正确分母
             table = readCache(app)
+            _status.value = _status.value.copy(tableUpdatedAt = table?.updatedAt)
             refreshScope.launch { refreshIfNeeded() }
         }
     }
@@ -101,28 +124,66 @@ object ContextWindowRepository {
         refresh(context)
     }
 
-    /** 无可用表 → 必然过期;否则按表内声明的 TTL 判断。 */
+    /** 无可用表(从未成功落盘) → 必然过期;否则按表内声明的 TTL 判断。 */
     private fun isStale(context: Context): Boolean {
-        val t = table ?: return true
-        val ttlMinutes = t.interpretation.refreshIntervalMinutes.takeIf { it > 0 } ?: FALLBACK_TTL_MINUTES
         val lastModified = cacheFile(context).lastModified()
         if (lastModified <= 0L) return true
-        val ageMillis = System.currentTimeMillis() - lastModified
-        return ageMillis >= ttlMinutes * 60_000L
+        val ttlMinutes = table?.interpretation?.refreshIntervalMinutes
+            ?.takeIf { it > 0 } ?: FALLBACK_TTL_MINUTES
+        return System.currentTimeMillis() - lastModified >= ttlMinutes * 60_000L
     }
 
+    /** 刷新结果。 */
+    private enum class RefreshOutcome { UPDATED, REJECTED, UNREACHABLE }
+
+    /**
+     * 手动触发一次立即更新(忽略 TTL)。
+     *
+     * **异步执行**:内部是网络请求,绝不能卡在 UI 线程上 —— 结果通过 [status] 反馈
+     * (拉取中 / 成功后的数据日期 / 失败原因)。
+     *
+     * 与自动刷新的差别只在"是否检查 TTL";**校验与拒表策略完全一致** ——
+     * 手动刷新同样不能绕过校验,否则按一下按钮就能把坏表灌进来。
+     */
+    fun refreshNow() {
+        val context = appContext ?: return
+        if (_status.value.isRefreshing) return
+        refreshScope.launch { refresh(context) }
+    }
+
+    /** 实际拉取 + 校验 + 落盘,并把结果写入 [status]。并发调用由 isRefreshing 挡住。 */
     private suspend fun refresh(context: Context) {
+        if (_status.value.isRefreshing) return
+        _status.value = _status.value.copy(isRefreshing = true, lastError = null)
+        try {
+            // fetchAndApply 是阻塞的 OkHttp 调用,必须切到 IO
+            val outcome = withContext(Dispatchers.IO) { fetchAndApply(context) }
+            _status.value = when (outcome) {
+                RefreshOutcome.UPDATED -> ContextWindowTableStatus(tableUpdatedAt = table?.updatedAt)
+                RefreshOutcome.REJECTED -> _status.value.copy(lastError = "远端表被拒,已保留现有表")
+                RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = "网络不可达")
+            }
+        } finally {
+            _status.value = _status.value.copy(isRefreshing = false)
+        }
+    }
+
+    private fun fetchAndApply(context: Context): RefreshOutcome {
         val text = fetch(REMOTE_URL) ?: fetch(MIRROR_URL) ?: run {
             Log.w(TAG, "远端不可达,保留现有表(可能为空)")
-            return
+            return RefreshOutcome.UNREACHABLE
         }
-        when (val result = ContextWindowTable.parse(text)) {
+        return when (val result = ContextWindowTable.parse(text)) {
             is ParseResult.Ok -> {
                 table = result.table
                 writeCache(context, text)
+                RefreshOutcome.UPDATED
             }
             // 关键分支:不被远端牵着走。整表拒用 → 继续用上一份好表
-            is ParseResult.Rejected -> Log.w(TAG, "远端表被拒(${result.reason}),保留现有表")
+            is ParseResult.Rejected -> {
+                Log.w(TAG, "远端表被拒(${result.reason}),保留现有表")
+                RefreshOutcome.REJECTED
+            }
         }
     }
 

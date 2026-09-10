@@ -12,17 +12,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -38,6 +41,7 @@ import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.chat.GenerationAutosave
 import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
+import me.rerere.rikkahub.x.context.ContextWindowRepository
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -49,6 +53,12 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
         displaySetting = setting
         vm.updateSettings(settings.copy(displaySetting = setting))
     }
+
+    // 容量表状态(数据日期 / 拉取中 / 失败原因)。顺带确保仓库已初始化 —— 用户可能先来设置页
+    // 而没进过会话,那样圆环的分母就永远不会被拉取。
+    val appContext = LocalContext.current.applicationContext
+    LaunchedEffect(Unit) { ContextWindowRepository.ensureLoaded(appContext) }
+    val tableStatus by ContextWindowRepository.status.collectAsStateWithLifecycle()
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -166,6 +176,42 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                             },
                         )
                     }
+                    // 容量表状态与手动更新:表是圆环的分母来源,故归在本分组内。
+                    // 展示「数据日期」让人能判断自己拿到的表有多新;拉取失败时给出原因,
+                    // 而不是默默什么都不发生。
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_context_usage_ring_refresh_now_title)) },
+                        supportingContent = {
+                            Column {
+                                Text(stringResource(R.string.setting_context_usage_ring_refresh_now_desc))
+                                Text(
+                                    text = when {
+                                        tableStatus.isRefreshing ->
+                                            stringResource(R.string.setting_context_usage_ring_refreshing)
+
+                                        tableStatus.tableUpdatedAt != null ->
+                                            stringResource(
+                                                R.string.setting_context_usage_ring_table_updated_at,
+                                                tableStatus.tableUpdatedAt!!,
+                                            )
+
+                                        else -> stringResource(R.string.setting_context_usage_ring_table_missing)
+                                    },
+                                )
+                                tableStatus.lastError?.let { error ->
+                                    Text(text = error, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        },
+                        trailingContent = {
+                            TextButton(
+                                onClick = { ContextWindowRepository.refreshNow() },
+                                enabled = !tableStatus.isRefreshing,
+                            ) {
+                                Text(stringResource(R.string.setting_context_usage_ring_refresh_action))
+                            }
+                        },
+                    )
                 }
             }
             item {
