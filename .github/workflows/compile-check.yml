@@ -1,0 +1,92 @@
+name: Compile Check
+
+# 轻量编译检查(2026-09-10)。
+#
+# 为什么需要:验证一个改动「能否编译」原本只能靠 daily-build,而它要跑完整
+# release 打包 —— 实测 8.9 分钟里有 243 秒花在只跟发布相关的任务上
+# (lintVitalRelease 154.6s + minifyReleaseWithR8 61.4s + expandReleaseArtProfileWildcards 27.1s),
+# 真正编译 app 的 compileReleaseKotlin 只占 26.8s。改一行 Kotlin 却等 9 分钟,
+# 迭代节奏被发布流程拖住。
+#
+# 本 workflow 只做 compileDebugKotlin:不 lint、不 R8、不打包、不签名、不发布。
+# 预计 1.5~2 分钟,用作「push 即得编译反馈」的快通道。
+#
+# 与既有 workflow 的分工:
+#   · compile-check.yml —— 快:编译能不能过(每次 push,~2 分钟)
+#   · x-custom-guard.yml —— 中:X 定制回归单测(~4 分钟,仅相关路径触发)
+#   · daily-build.yml    —— 全:APK 构建 + 签名 + nightly 发布(~9 分钟,手动触发)
+# 质量门禁未被削弱:编译之外的门禁仍由后两者承担,本 workflow 只是把它们前面
+# 那段最慢的等待拆出来,让低级编译错误尽早暴露。
+#
+# 说明::web:buildWebUi 是 app 编译的前置(web:preBuild 依赖它),故仍需 Node + pnpm。
+# 实测 pnpm store 缓存命中时该步骤约 7 秒,不是瓶颈,故保留原样未做额外缓存。
+
+on:
+  push:
+    paths:
+      - 'app/src/**'
+      - 'web-ui/**'
+      - 'web/src/**'
+      - 'workspace/src/**'
+      - '*.gradle'
+      - '*.gradle.kts'
+      - '**/*.gradle'
+      - '**/*.gradle.kts'
+      - 'gradle/**'
+      - 'gradle.properties'
+      - 'settings.gradle.kts'
+      - '.github/workflows/compile-check.yml'
+  workflow_dispatch:
+
+# 供应链加固(与 daily-build / x-custom-guard 一致):第三方 action 全部 pin 到 commit SHA,
+# 避免可变 tag 被上游改动/账号被盗后投毒。
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # material3 依赖子模块 material-color-utilities,不拉会 Unresolved reference
+          submodules: recursive
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6
+        with:
+          version: 11
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: pnpm install --frozen-lockfile
+
+      # 缓存 key 与 daily-build / x-custom-guard 统一:三者依赖集高度重叠,
+      # 分开命名只会让各 workflow 各自维护一份冷缓存(原先 guard 就是这样)。
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Prepare build files
+        run: |
+          chmod +x gradlew
+          cp .github/google-services.placeholder.json app/google-services.json
+
+      - name: Compile app (debug)
+        run: |
+          ./gradlew :app:compileDebugKotlin --console=plain

@@ -30,6 +30,11 @@ on:
       - 'app/src/test/java/me/rerere/rikkahub/x/**'
       - 'app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt'
       - 'app/src/test/java/me/rerere/rikkahub/data/ai/mcp/McpNameDecouplingAuditTest.kt'
+      # 承载 X 定制接线、却位于上游路径下的文件:改动它们同样能改坏上面的守护用例,
+      # 而 x/** 的路径过滤覆盖不到,故逐个登记。
+      - 'app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/components/ai/ChatInput.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingPreferencesXCustomPage.kt'
   workflow_dispatch:
 
 permissions:
@@ -71,7 +76,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-xguard-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Prepare build files
         run: |
