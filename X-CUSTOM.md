@@ -27,6 +27,7 @@
 | `app/.../assets/context-windows/context-windows.json` | 内置容量表(与远端 model-contexts/ 同构,离线兜底) | 资源文件 |
 | `.github/google-services.placeholder.json` | CI 占位配置 | 非代码,仓库文件+cp |
 | `scripts/pangu_format_resources.py` | 盘古之白资源格式化脚本 | 工程脚本 |
+| `CHANGELOG.md` | 面向使用的变更日志(定制增量流水):上游无此文件;若上游日后新增同名文件 → merge 时保留 X 版并按上游格式续写 | 仓库文档 |
 
 ## B. 侵入上游文件(文件头已加 [X-custom] 标签, merge 保留)
 
@@ -71,6 +72,7 @@
 | `app/src/main/res/values*/strings.xml` ×7 | X 功能文案(归档 UI/语音/模型切换) |
 | `.github/workflows/*.yml` ×2 | CI 适配 |
 | `.gitignore` / `README.md` | 项目级 |
+| `CHANGELOG.md` | X 定制变更日志(新增文件);`README.md` 已精简为仅 fork 自述(删上游多语言翻译) |
 | `ExampleInstrumentedTest.kt` | 测试断言包名 .x |
 
 ## merge 上游操作手册
