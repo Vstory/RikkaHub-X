@@ -1,24 +1,40 @@
-name: Verify context window matching
+name: X Custom Guard
 
-# 容量表「结构化匹配」的回归守护(2026-09-10)。
+# X 定制回归守护(2026-09-10)。
 #
-# 为什么需要:ContextWindowTable 的匹配逻辑涉及版本组合并、有序不重叠匹配、前后缀、
-# v 前缀、隔文字版本与数字段边界,任一环节改动都可能静默算错 —— 症状是圆环百分比不对
-# 但不易察觉。故对相关文件做路径触发,平时不跑,改到才跑。
+# 为什么需要:以下几处 X 定制的逻辑细节多、边界绕,改坏了往往**不报错只是算错**
+# (如圆环百分比失真、归档静默丢内容),不易察觉。故对相关文件做路径触发 ——
+# 平时不跑,改到才跑,作为长期回归守护。
+#
+# 覆盖:
+#   · 工作区归档(WorkspaceArchive):符号链接往返、硬链接内容、路径列举、阈值;
+#     含 SEC 断言「经符号链接向外写入必须被拒绝」,防止放宽解析时削弱防护。
+#   · 上下文容量表(ContextWindowTable):有序匹配 + 数字版本组对齐,消除版本号错位。
+#   · 上下文用量(ContextUsageCalculator):无 usage 时返回 null 而非误导性近似值。
+#   · UTF-16 安全切割(Utf16Safe):不切出孤立代理字符。
+#   · MCP 名称解耦(McpConfig):显示名回退与连接 key 参与项。
+#
+# 说明:前身为 verify-context-window.yml(仅覆盖容量表),现扩为统一守护 ——
+# 一个 workflow = 一个通知渠道,省去重复的 Gradle 环境搭建。
+# 另见:.github/workflows/daily-build.yml(APK 构建与 nightly 发布)。
 on:
   push:
     paths:
-      - 'app/src/main/java/me/rerere/rikkahub/x/context/**'
-      - 'app/src/test/java/me/rerere/rikkahub/x/context/**'
+      - '.github/workflows/x-custom-guard.yml'
       - 'model-contexts/context-windows.json'
-      - '.github/workflows/verify-context-window.yml'
+      - 'workspace/src/main/java/me/rerere/workspace/**'
+      - 'workspace/src/test/java/me/rerere/workspace/**'
+      - 'app/src/main/java/me/rerere/rikkahub/x/**'
+      - 'app/src/test/java/me/rerere/rikkahub/x/**'
+      - 'app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt'
+      - 'app/src/test/java/me/rerere/rikkahub/data/ai/mcp/McpNameDecouplingAuditTest.kt'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,17 +69,25 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-ctxwin-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-xguard-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Prepare build files
         run: |
           chmod +x gradlew
           cp .github/google-services.placeholder.json app/google-services.json
 
-      - name: Context window matching tests
+      # 归档用例在独立 workspace 模块;先跑它,失败即停,避免后一步白跑
+      - name: Workspace guard tests
+        run: |
+          ./gradlew :workspace:testDebugUnitTest --console=plain \
+            --tests "me.rerere.workspace.x.*"
+
+      # x.* 覆盖容量表/用量/压缩三组 X 定制用例,另加 MCP 名称解耦
+      - name: App guard tests
         run: |
           ./gradlew :app:testDebugUnitTest --console=plain \
-            --tests "me.rerere.rikkahub.x.context.ContextWindowTableOrderedMatchTest"
+            --tests "me.rerere.rikkahub.x.*" \
+            --tests "me.rerere.rikkahub.data.ai.mcp.McpNameDecouplingAuditTest"
 
       - name: Summarize results
         if: always()
@@ -94,7 +118,7 @@ jobs:
                           msg = (node.get("message") or "").strip().replace("\n", " ")
                           failures.append((root.get("name") or "", case.get("name") or "", msg[:300]))
 
-          say("# 容量表匹配验证")
+          say("# X 定制回归守护")
           say()
           say("共 %d 个用例,失败 %d 个" % (total, len(failures)))
           for cls, name, msg in failures:

@@ -58,6 +58,7 @@ object ContextWindowRepository {
 
     private fun fetch(url: String): String? = runCatching {
         val resp = client.newCall(Request.Builder().url(url).get().build()).execute()
-        if (resp.isSuccessful) resp.body?.string() else null
+        // OkHttp 5 起 Response.body 为非空,无需安全调用(4.x 可空,此处为迁移残留)
+        if (resp.isSuccessful) resp.body.string() else null
     }.getOrNull()
 }
