@@ -937,6 +937,13 @@
   <string name="setting_page_context_usage_ring">Context Usage Ring</string>
   <string name="setting_context_usage_ring_title">Show context usage ring</string>
   <string name="setting_context_usage_ring_desc">Show the context usage ratio beside the input box; tap to see the breakdown</string>
+  <!-- [X-custom] 生成过程自动保存 -->
+  <string name="setting_page_generation_autosave">Long Task Protection</string>
+  <string name="setting_generation_autosave_title">Autosave During Generation</string>
+  <string name="setting_generation_autosave_desc">Save periodically while generating, so a long-running task interrupted by the system does not lose completed work</string>
+  <string name="setting_generation_autosave_interval_title">Autosave interval</string>
+  <string name="setting_generation_autosave_interval_desc">In seconds. Default 10. If long tasks feel laggy, raise it — a larger value saves less often but loses more progress when interrupted. Range %1$s</string>
+  <string name="setting_generation_autosave_interval_unit">seconds</string>
   <string name="context_usage_title">Context window</string>
   <string name="context_usage_remaining_suffix">remaining</string>
   <string name="context_usage_used_of_compact">%1$s used / %2$s</string>

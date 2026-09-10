@@ -902,6 +902,13 @@
   <string name="setting_compress_feedback_desc">压缩会话成功或失败时弹出提示</string>
   <string name="setting_page_context_usage_ring">上下文用量圆环</string>
   <string name="setting_context_usage_ring_title">显示上下文用量圆环</string>
+  <!-- [X-custom] 生成过程自动保存 -->
+  <string name="setting_page_generation_autosave">长任务保护</string>
+  <string name="setting_generation_autosave_title">生成过程自动保存</string>
+  <string name="setting_generation_autosave_desc">长任务执行期间定期保存，中途被系统中断也不会丢掉已完成的部分</string>
+  <string name="setting_generation_autosave_interval_title">自动保存间隔</string>
+  <string name="setting_generation_autosave_interval_desc">单位秒，默认 10。若长任务期间感觉卡顿可调大——越大写库越少，但中断时丢的进度也越多。范围 %1$s</string>
+  <string name="setting_generation_autosave_interval_unit">秒</string>
   <string name="setting_context_usage_ring_desc">输入框旁显示当前上下文占用比例，接近上限变红，点击查看用量明细</string>
   <string name="context_usage_title">上下文窗口</string>
   <string name="context_usage_remaining_suffix">剩余</string>
