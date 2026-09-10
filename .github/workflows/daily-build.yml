@@ -114,18 +114,20 @@ jobs:
             # 其余(nightly 默认 / 未提供密钥):每次构建生成一次性随机临时 keystore 签名。
             # 随机口令 + 随机 dname → 每次产物签名指纹不同,仅供测试分发,升级需重装。
             # (即使仓库配了密钥,只要没主动选 release,仍走随机签名——2026-09-10 用户确认)
+            # 注意:keytool 生成时【不要】单独 -keypass,JKS 中 key 密码默认=store 密码;
+            # 若 keypass≠storepass,AGP 用 storePassword 解 key 会报 "Given final block not properly padded"。
             echo "nightly 构建:每次随机临时签名(commit ${{ github.sha }})"
             SP="$(openssl rand -hex 16)"
-            KP="$(openssl rand -hex 16)"
             DN="CN=RikkaHub Nightly $(date +%s) O=RikkaHubDev C=CN"
             keytool -genkeypair -v -keystore app/app.key \
-              -storepass "$SP" -alias rikkahub -keypass "$KP" \
+              -storepass "$SP" \
+              -alias rikkahub \
               -keyalg RSA -keysize 2048 -validity 3650 \
               -dname "$DN" >/dev/null 2>&1
             echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
             echo "storePassword=$SP" >> local.properties
             echo "keyAlias=rikkahub" >> local.properties
-            echo "keyPassword=$KP" >> local.properties
+            echo "keyPassword=$SP" >> local.properties
             cp .github/google-services.placeholder.json app/google-services.json
           fi
 
