@@ -634,6 +634,11 @@ data class DisplaySetting(
     val enableContextUsageRing: Boolean = false,
     // 圆环点击后的弹窗样式(X 定制二选一,默认 classic 保持既有外观)
     val contextUsageDialogStyle: ContextUsageDialogStyle = ContextUsageDialogStyle.CLASSIC,
+    // 生成过程自动保存(默认开:数据保护类定制,与外观类默认关的取舍不同)
+    val enableGenerationAutosave: Boolean = true,
+    // 自动保存间隔(秒)。默认 10;长任务期间若感觉卡顿可调大(越大越省,丢的进度也越多)。
+    // 消费端会再钳到 GenerationAutosave.MIN/MAX_INTERVAL_SECONDS,防配置被改成 0 或负数导致死循环写库。
+    val generationAutosaveIntervalSeconds: Int = 10,
     val pasteLongTextAsFile: Boolean = false,
     val pasteLongTextThreshold: Int = 1000,
     val sendOnEnter: Boolean = false,
