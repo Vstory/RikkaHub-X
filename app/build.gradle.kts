@@ -97,6 +97,10 @@ android {
     }
     androidResources {
         generateLocaleConfig = true
+        // 仅打包英语与简体中文,其余语言(日/韩/俄/繁中)在打包阶段过滤掉。
+        // 不采用删除 values-XX 目录的做法:上游几乎每次提交都会改动这些文件,
+        // 删除会让每次同步上游都产生 modify/delete 冲突,过滤则零冲突。
+        localeFilters += listOf("en", "zh")
     }
     packaging {
         jniLibs {
