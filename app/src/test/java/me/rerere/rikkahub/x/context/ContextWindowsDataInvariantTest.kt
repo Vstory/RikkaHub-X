@@ -171,9 +171,27 @@ class ContextWindowsDataInvariantTest {
     // 如 `["beta","6"]` 会命中 `beta-5-6`,两者同值时并不算错)。
     // 故规则可达性交由上面的**前缀遮蔽**检查精确覆盖 —— 那是可静态判定的部分,不在此处放水。
 
-    /** 表的更新时间须是 YYYY-MM-DD,便于人眼判断是否需要重新核验。 */
+    /**
+     * `updatedAt` 须是**带秒的 ISO-8601 时间戳**(如 `2026-09-10T23:30:30+08:00`)。
+     *
+     * 设置页要把它显示成「数据日期:2026-09-10 23:30:30」,只到日的旧格式撑不起"时分秒";
+     * 时区偏移也必须带 —— 否则不同时区的人看到的时刻含义不同。
+     */
     @Test
-    fun `updatedAt looks like an ISO date`() {
-        assertTrue("updatedAt=${table.updatedAt}", Regex("""\d{4}-\d{2}-\d{2}""").matches(table.updatedAt))
+    fun `updatedAt is an ISO-8601 timestamp with seconds and offset`() {
+        val pattern = Regex("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)""")
+        assertTrue(
+            "updatedAt=${table.updatedAt} 不是带秒与时区偏移的 ISO-8601 时间戳",
+            pattern.matches(table.updatedAt),
+        )
+    }
+
+    /** 数据源时间必须能被格式化成显示格式(格式化失败说明格式与文档不符)。 */
+    @Test
+    fun `updatedAt is parseable by the display formatter`() {
+        assertTrue(
+            "updatedAt=${table.updatedAt} 无法解析",
+            formatTableUpdatedAt(table.updatedAt) != null,
+        )
     }
 }

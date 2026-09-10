@@ -938,11 +938,12 @@
   <string name="setting_context_usage_ring_title">Show context usage ring</string>
   <string name="setting_context_usage_ring_desc">Show the context usage ratio beside the input box; tap to see the breakdown</string>
   <!-- [X-custom] 容量表:立即更新(归在上下文用量圆环分组内) -->
-  <string name="setting_context_usage_ring_table_updated_at">Table data date: %1$s</string>
+  <string name="setting_context_usage_ring_table_updated_at">Data date: %1$s</string>
   <string name="setting_context_usage_ring_table_missing">No table yet — connect to the network once</string>
   <string name="setting_context_usage_ring_refresh_now_title">Refresh table now</string>
   <string name="setting_context_usage_ring_refresh_now_desc">Fetch the latest model context windows immediately, ignoring the automatic refresh interval</string>
   <string name="setting_context_usage_ring_refreshing">Refreshing…</string>
+  <string name="setting_context_usage_ring_refreshed_at">Updated: %1$s</string>
   <string name="setting_context_usage_ring_refresh_action">Refresh</string>
   <string name="setting_context_usage_ring_error_rejected">The remote table failed validation; kept the previous one</string>
   <string name="setting_context_usage_ring_error_unreachable">Network unreachable</string>

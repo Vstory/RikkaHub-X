@@ -43,6 +43,8 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.chat.GenerationAutosave
 import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import me.rerere.rikkahub.x.context.ContextWindowRepository
+import me.rerere.rikkahub.x.context.formatRefreshedAt
+import me.rerere.rikkahub.x.context.formatTableUpdatedAt
 import me.rerere.rikkahub.x.context.RefreshError
 import org.koin.androidx.compose.koinViewModel
 
@@ -186,20 +188,40 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                         supportingContent = {
                             Column {
                                 Text(stringResource(R.string.setting_context_usage_ring_refresh_now_desc))
+                                // 两个时间,都精确到秒:
+                                //   数据日期 = 表内声明的数据源时刻;更新时间 = 本机最后一次成功拉取的时刻。
+                                // 「更新时间」跨重启保留(取自缓存文件时间戳),故隔很久进来看到的仍是
+                                // 上次真正更新的时间,而不是本次打开设置页的时间。
+                                val dataDate = tableStatus.tableUpdatedAt?.let {
+                                    formatTableUpdatedAt(it) ?: it   // 解析失败就原样显示,好过不显示
+                                }
+                                val refreshedAt = tableStatus.lastRefreshedAtMillis?.let(::formatRefreshedAt)
+
                                 Text(
                                     text = when {
                                         tableStatus.isRefreshing ->
                                             stringResource(R.string.setting_context_usage_ring_refreshing)
 
-                                        tableStatus.tableUpdatedAt != null ->
-                                            stringResource(
-                                                R.string.setting_context_usage_ring_table_updated_at,
-                                                tableStatus.tableUpdatedAt!!,
-                                            )
+                                        dataDate == null && refreshedAt == null ->
+                                            stringResource(R.string.setting_context_usage_ring_table_missing)
 
-                                        else -> stringResource(R.string.setting_context_usage_ring_table_missing)
+                                        else -> ""
                                     },
                                 )
+                                dataDate?.let {
+                                    Text(
+                                        stringResource(
+                                            R.string.setting_context_usage_ring_table_updated_at, it,
+                                        )
+                                    )
+                                }
+                                refreshedAt?.let {
+                                    Text(
+                                        stringResource(
+                                            R.string.setting_context_usage_ring_refreshed_at, it,
+                                        )
+                                    )
+                                }
                                 tableStatus.lastError?.let { error ->
                                     Text(
                                         text = when (error) {

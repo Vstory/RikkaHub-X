@@ -33,8 +33,15 @@ import java.util.concurrent.TimeUnit
  * 只暴露「人需要知道的东西」:表的数据日期、是否正在拉取、上次失败原因。
  */
 data class ContextWindowTableStatus(
-    /** 表内声明的数据日期(`updatedAt`);null 表示本地还没有可用表。 */
+    /** 表内声明的**数据源时间**(`updatedAt`,ISO-8601);null 表示本地还没有可用表。 */
     val tableUpdatedAt: String? = null,
+    /**
+     * 本机**最后一次成功拉取并落盘**的时刻(毫秒)。
+     *
+     * 取值来自缓存文件的修改时间,故跨进程重启依然保留 —— 隔很久再进来看到的是上次真正更新的时刻,
+     * 而不是"打开设置页"的时刻。
+     */
+    val lastRefreshedAtMillis: Long? = null,
     /** 是否正在拉取(用于禁用按钮、显示进度文案)。 */
     val isRefreshing: Boolean = false,
     /** 上次刷新失败原因;成功后清空。只给**类型**,展示文案由 UI 映射到字符串资源(仓库层不该持用户可见文案)。 */
@@ -97,7 +104,10 @@ object ContextWindowRepository {
             appContext = app
             // 同步读缓存:本地文件,开销可忽略,且能让首帧就有正确分母
             table = readCache(app)
-            _status.value = _status.value.copy(tableUpdatedAt = table?.updatedAt)
+            _status.value = _status.value.copy(
+                tableUpdatedAt = table?.updatedAt,
+                lastRefreshedAtMillis = lastRefreshMillis(app),
+            )
             refreshScope.launch { refreshIfNeeded() }
         }
     }
@@ -111,6 +121,15 @@ object ContextWindowRepository {
         val t = table ?: return null
         return modelId?.let(t::lookup)
     }
+
+    /**
+     * 本机上次成功更新的时刻 = 缓存文件的修改时间;从未成功落盘时为 null。
+     *
+     * 复用文件时间戳而非另存一份状态:它与 TTL 判断用的是**同一个**依据,不会出现
+     * "显示说刚更新过、TTL 却认为早过期了"这种自相矛盾。
+     */
+    private fun lastRefreshMillis(context: Context): Long? =
+        cacheFile(context).lastModified().takeIf { it > 0L }
 
     /** 缓存文件的绝对路径。 */
     private fun cacheFile(context: Context): File = File(File(context.filesDir, CACHE_DIR), CACHE_FILE)
@@ -168,7 +187,12 @@ object ContextWindowRepository {
             // fetchAndApply 是阻塞的 OkHttp 调用,必须切到 IO
             val outcome = withContext(Dispatchers.IO) { fetchAndApply(context) }
             _status.value = when (outcome) {
-                RefreshOutcome.UPDATED -> ContextWindowTableStatus(tableUpdatedAt = table?.updatedAt)
+                RefreshOutcome.UPDATED -> _status.value.copy(
+                    tableUpdatedAt = table?.updatedAt,
+                    lastRefreshedAtMillis = lastRefreshMillis(context),
+                    lastError = null,
+                )
+
                 RefreshOutcome.REJECTED -> _status.value.copy(lastError = RefreshError.REJECTED)
                 RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = RefreshError.UNREACHABLE)
             }
