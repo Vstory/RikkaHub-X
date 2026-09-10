@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): UTF-16 安全切割
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): UTF-16 安全切割
 // .x 独立新文件(me.rerere.rikkahub.x.compress),上游无此文件,merge 零冲突。
 // 移植自 kelivo lib/utils/utf16_safe_cut.dart。
 //

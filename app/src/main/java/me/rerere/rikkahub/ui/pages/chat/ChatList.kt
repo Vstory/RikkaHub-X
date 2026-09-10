@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 消息来源显示增强(上游 issue #1805)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 消息来源显示增强(上游 issue #1805)
 // — providerNameById 反查 + 模型切换分隔线(上一条/本条助手回复 modelId 不同时居中提示)
 package me.rerere.rikkahub.ui.pages.chat
 

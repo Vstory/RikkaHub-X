@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 上下文容量表仓库
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文容量表仓库
 // .x 独立新文件(me.rerere.rikkahub.x.context),上游无此文件,merge 零冲突。
 // 静态单例,免 DI 侵入:assets 内置表兜底(离线/首启即用) + 远端表异步静默刷新(失败不阻塞)。
 // 远端地址默认 main 分支的 model-contexts/context-windows.json,失败自动切 jsDelivr CDN 镜像。

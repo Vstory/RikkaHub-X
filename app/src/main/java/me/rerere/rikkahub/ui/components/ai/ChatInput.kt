@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 语音输入提示音/振动 + 会话模型切换 UI
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 语音输入提示音/振动 + 会话模型切换 UI
 package me.rerere.rikkahub.ui.components.ai
 
 import androidx.compose.animation.AnimatedVisibility

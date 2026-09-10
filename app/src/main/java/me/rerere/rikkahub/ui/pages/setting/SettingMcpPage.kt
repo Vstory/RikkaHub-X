@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): MCP 服务器名解耦——displayName 本地显示名(可中文) + name 内部标识(ASCII,上游协议/工具逻辑);导入非 ASCII key 自动生成内部名
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): MCP 服务器名解耦——displayName 本地显示名(可中文) + name 内部标识(ASCII,上游协议/工具逻辑);导入非 ASCII key 自动生成内部名
 package me.rerere.rikkahub.ui.pages.setting
 
 import androidx.compose.animation.animateContentSize

@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩结果升级系统通知+压缩前请求通知权限
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 压缩结果升级系统通知+压缩前请求通知权限
 package me.rerere.rikkahub
 
 import android.app.Application

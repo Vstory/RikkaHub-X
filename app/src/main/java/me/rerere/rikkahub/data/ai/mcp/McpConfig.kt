@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): McpCommonOptions 增加 displayName(本地显示名,可中文)与 name(内部标识,ASCII)解耦;协议/工具链路仍用 name=上游逻辑
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): McpCommonOptions 增加 displayName(本地显示名,可中文)与 name(内部标识,ASCII)解耦;协议/工具链路仍用 name=上游逻辑
 package me.rerere.rikkahub.data.ai.mcp
 
 import kotlinx.serialization.SerialName

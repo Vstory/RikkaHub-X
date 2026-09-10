@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 上下文容量表解析与查找
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文容量表解析与查找
 // .x 独立新文件(me.rerere.rikkahub.x.context),上游无此文件,merge 零冲突。
 // 数据来源:远端 model-contexts/context-windows.json(schema v1),assets 内置同构文件兜底。
 package me.rerere.rikkahub.x.context

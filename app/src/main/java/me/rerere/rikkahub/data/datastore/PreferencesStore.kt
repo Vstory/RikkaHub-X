@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩会话反馈设置 + 语音输入提示音/振动增强开关
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 压缩会话反馈设置 + 语音输入提示音/振动增强开关
 package me.rerere.rikkahub.data.datastore
 
 import android.content.Context

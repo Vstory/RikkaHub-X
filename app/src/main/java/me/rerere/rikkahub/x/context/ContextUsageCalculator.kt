@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 上下文已用量计算
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文已用量计算
 // .x 独立新文件(me.rerere.rikkahub.x.context),上游无此文件,merge 零冲突。
 // 分子口径:优先取「最近一次助手回复携带的 usage.promptTokens」= 上一轮真实送入模型的
 // 完整历史 token(API 实测);其上再叠当前输入框新增文本的粗估增量(约 4 字符 ≈ 1 token)。

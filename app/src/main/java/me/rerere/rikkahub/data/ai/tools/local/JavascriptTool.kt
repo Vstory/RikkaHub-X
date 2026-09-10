@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): eval_javascript 工具资源安全与错误处理加固
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): eval_javascript 工具资源安全与错误处理加固
 package me.rerere.rikkahub.data.ai.tools.local
 
 import com.whl.quickjs.wrapper.QuickJSContext

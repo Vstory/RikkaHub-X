@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): OCR 仅识别本轮新增图片;
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): OCR 仅识别本轮新增图片;
 // 历史图片一律只读缓存(未命中给占位),纯文字续聊不再强制进入图片识别流程(上游 issue #1736)
 package me.rerere.rikkahub.data.ai.transformers
 

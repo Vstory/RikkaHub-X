@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue #1314/#1663/#1820: 停止/异常落库 + initializeConversation 防覆盖流式态)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue #1314/#1663/#1820: 停止/异常落库 + initializeConversation 防覆盖流式态)
 package me.rerere.rikkahub.service
 
 import android.app.Application
@@ -89,7 +89,7 @@ import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
-// [X-custom] 压缩执行健壮性(对照 X-CUSTOM.md 保留):.x 独立包,合并上游零冲突
+// [X-custom] 压缩执行健壮性(merge 上游时保留):.x 独立包,合并上游零冲突
 import me.rerere.rikkahub.x.compress.CompressBudget
 import me.rerere.rikkahub.x.compress.MAX_MERGE_ROUNDS
 import me.rerere.rikkahub.x.compress.chunkMessagesForCompress
@@ -1035,7 +1035,7 @@ class ChatService(
 
         val providerHandler = providerManager.getProviderByType(provider)
 
-        // [X-custom] 压缩执行健壮性:窗口感知预算 / 超限重试 / 多层合并(对照 X-CUSTOM.md 保留)
+        // [X-custom] 压缩执行健壮性:窗口感知预算 / 超限重试 / 多层合并(merge 上游时保留)
         // 移植 kelivo 策略(见 x/compress/);保留段策略仍用 RikkaHub 原逻辑
         // (keepRecentMessages 条原始消息,默认 32,不做 user-message 计数改造)。
         val allMessages = conversation.currentMessages

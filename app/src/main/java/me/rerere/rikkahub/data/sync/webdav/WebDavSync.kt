@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 云备份(WebDAV)上传文件名前缀 RikkaHub-X_backup_ 与上游区分,列表双前缀兼容历史 backup_ 备份
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 云备份(WebDAV)上传文件名前缀 RikkaHub-X_backup_ 与上游区分,列表双前缀兼容历史 backup_ 备份
 package me.rerere.rikkahub.data.sync.webdav
 
 import android.content.Context

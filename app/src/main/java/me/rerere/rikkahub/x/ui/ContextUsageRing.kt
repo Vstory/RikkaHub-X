@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 上下文用量圆环
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文用量圆环
 // .x 独立新文件(me.rerere.rikkahub.x.ui),上游无此文件,merge 零冲突。
 // Codex 风格上下文占用圆环:外圈弧 = 占用比例,中心百分比文本;按占用分段变色。
 // 纯展示组件,数据由调用方算好传入。

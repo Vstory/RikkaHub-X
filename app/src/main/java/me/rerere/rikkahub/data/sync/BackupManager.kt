@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 官方备份库导入适配(x.sync.OfficialBackupCompat)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 官方备份库导入适配(x.sync.OfficialBackupCompat)
 package me.rerere.rikkahub.data.sync
 
 import android.content.Context

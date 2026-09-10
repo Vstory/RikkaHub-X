@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): X 定制设置聚合页
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): X 定制设置聚合页
 // 收纳 RikkaHub-X 全部「有开关」的增强定制项(语音输入提示音/振动增强/压缩会话反馈)。
 // 2026-09-10 由 SettingPreferencesGeneralPage 迁移而来,通用页不再混入 X 项。
 package me.rerere.rikkahub.ui.pages.setting

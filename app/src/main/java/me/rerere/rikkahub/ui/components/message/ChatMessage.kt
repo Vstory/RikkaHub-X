@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 消息来源显示增强(上游 issue #1805)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 消息来源显示增强(上游 issue #1805)
 // — 新增 providerName 参数,助手消息末尾灰字落款"路由名 · 模型名"
 package me.rerere.rikkahub.ui.components.message
 

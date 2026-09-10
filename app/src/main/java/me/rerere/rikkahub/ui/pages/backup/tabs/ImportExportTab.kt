@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): 备份导出文件名前缀 RikkaHub-X_ 与上游区分(导入不卡文件名,兼容上游格式)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 备份导出文件名前缀 RikkaHub-X_ 与上游区分(导入不卡文件名,兼容上游格式)
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons

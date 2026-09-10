@@ -1,4 +1,4 @@
-// [X-custom] RikkaHub-X 定制(与上游合并对照 X-CUSTOM.md 保留): MCP 服务器显示名改 uiName(displayName 优先,可中文;协议逻辑仍用 name)
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): MCP 服务器显示名改 uiName(displayName 优先,可中文;协议逻辑仍用 name)
 package me.rerere.rikkahub.ui.components.ai
 
 import androidx.compose.animation.AnimatedVisibility
