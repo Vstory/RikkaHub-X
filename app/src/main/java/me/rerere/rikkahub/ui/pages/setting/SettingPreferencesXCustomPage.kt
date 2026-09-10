@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -21,8 +23,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
@@ -32,6 +36,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.Select
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.x.chat.GenerationAutosave
 import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import org.koin.androidx.compose.koinViewModel
 
@@ -163,6 +168,86 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                     }
                 }
             }
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.setting_page_generation_autosave)) },
+                ) {
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_generation_autosave_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_generation_autosave_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableGenerationAutosave,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableGenerationAutosave = it))
+                                }
+                            )
+                        },
+                    )
+                    // 间隔输入:开关关闭时该项不可达,故仅在开启后展示(同圆环的弹窗样式)
+                    if (displaySetting.enableGenerationAutosave) {
+                        item(
+                            headlineContent = { Text(stringResource(R.string.setting_generation_autosave_interval_title)) },
+                            supportingContent = {
+                                Column {
+                                    Text(
+                                        stringResource(
+                                            R.string.setting_generation_autosave_interval_desc,
+                                            GenerationAutosave.intervalRangeDescription(),
+                                        )
+                                    )
+                                    var intervalInput by remember(displaySetting.generationAutosaveIntervalSeconds) {
+                                        mutableStateOf(displaySetting.generationAutosaveIntervalSeconds.toString())
+                                    }
+                                    var intervalFocused by remember { mutableStateOf(false) }
+
+                                    // 失焦才提交:边输边存会把中间值(如想输 60 时的 "6")落库
+                                    fun commitInterval() {
+                                        val parsed = intervalInput.toIntOrNull()
+                                        if (parsed == null) {
+                                            intervalInput = displaySetting.generationAutosaveIntervalSeconds.toString()
+                                            return
+                                        }
+                                        val clamped = GenerationAutosave.clampGenerationAutosaveInterval(parsed)
+                                        intervalInput = clamped.toString()
+                                        if (clamped != displaySetting.generationAutosaveIntervalSeconds) {
+                                            updateDisplaySetting(
+                                                displaySetting.copy(generationAutosaveIntervalSeconds = clamped)
+                                            )
+                                        }
+                                    }
+
+                                    OutlinedTextField(
+                                        value = intervalInput,
+                                        onValueChange = { input ->
+                                            if (input.all(Char::isDigit) &&
+                                                (input.isEmpty() || input.toIntOrNull() != null)
+                                            ) {
+                                                intervalInput = input
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onFocusChanged { focusState ->
+                                                if (intervalFocused && !focusState.isFocused) {
+                                                    commitInterval()
+                                                }
+                                                intervalFocused = focusState.isFocused
+                                            },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        singleLine = true,
+                                        suffix = {
+                                            Text(stringResource(R.string.setting_generation_autosave_interval_unit))
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
         }
     }
 }
