@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 更新检查停用(上游更新源只提供官方 APK)
 package me.rerere.rikkahub.utils
 
 import android.app.DownloadManager
@@ -7,12 +8,12 @@ import android.widget.Toast
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.common.http.await
@@ -29,13 +30,31 @@ class UpdateChecker(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    val updateState: StateFlow<UiState<UpdateInfo>> = checkUpdate().stateIn(
-        scope = appScope,
-        started = SharingStarted.Lazily,
-        initialValue = UiState.Loading,
-    )
+    /**
+     * [X-custom] 更新检查已停用。
+     *
+     * 上游更新源(updates.rikka-ai.com)只提供**官方 RikkaHub** 的 APK，包名 me.rerere.rikkahub
+     * 与本 fork 的 me.rerere.rikkahub.x 不同 —— 安装后等于多出一个 App、无法覆盖升级，
+     * 对 X 用户属于误导。X 为自用 fork、版本号跟随上游，自动提醒亦无意义。
+     *
+     * 恒返回「当前已是最新」(version = 本地版本) → UpdateCard 的 latest > current 判定为假，
+     * 不显示更新卡片；且不发起任何网络请求。
+     * 如需恢复：改用下方 checkUpdateFromUpstream()，或改造为指向自有 release。
+     */
+    val updateState: StateFlow<UiState<UpdateInfo>> = MutableStateFlow<UiState<UpdateInfo>>(
+        UiState.Success(
+            UpdateInfo(
+                version = BuildConfig.VERSION_NAME,
+                publishedAt = "",
+                changelog = "",
+                downloads = emptyList(),
+            )
+        )
+    ).asStateFlow()
 
-    private fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
+    /** 上游更新检查逻辑。当前未调用，保留以便将来改为指向自有 release。 */
+    @Suppress("unused")
+    private fun checkUpdateFromUpstream(): Flow<UiState<UpdateInfo>> = flow {
         emit(UiState.Loading)
         emit(
             UiState.Success(

@@ -1,3 +1,4 @@
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 关于页显示 X 名称与 X 仓库链接
 package me.rerere.rikkahub.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
@@ -121,7 +122,9 @@ fun SettingAboutPage() {
                         )
 
                         Text(
-                            text = "RikkaHub",
+                            // [X-custom] 原为硬编码 "RikkaHub"，改为随 app_name 资源(RikkaHub X)，
+                            // 各语言自动跟随，不再与桌面图标名称不一致
+                            text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.displaySmall,
                         )
                     }
@@ -163,15 +166,17 @@ fun SettingAboutPage() {
                             headlineContent = { Text(stringResource(R.string.about_page_website)) },
                         )
                         item(
-                            onClick = { context.openUrl("https://github.com/rikkahub/rikkahub") },
+                            // [X-custom] 原指向上游 rikkahub/rikkahub，X 版改为指向自身仓库
+                            onClick = { context.openUrl("https://github.com/Vstory/RikkaHub-X") },
                             leadingContent = { Icon(HugeIcons.Github, null) },
-                            supportingContent = { Text("https://github.com/rikkahub/rikkahub") },
+                            supportingContent = { Text("https://github.com/Vstory/RikkaHub-X") },
                             headlineContent = { Text(stringResource(R.string.about_page_github)) },
                         )
                         item(
-                            onClick = { context.openUrl("https://github.com/rikkahub/rikkahub/blob/master/LICENSE") },
+                            // [X-custom] 同左；分支取默认分支 main
+                            onClick = { context.openUrl("https://github.com/Vstory/RikkaHub-X/blob/main/LICENSE") },
                             leadingContent = { Icon(HugeIcons.File02, null) },
-                            supportingContent = { Text("https://github.com/rikkahub/rikkahub/blob/master/LICENSE") },
+                            supportingContent = { Text("https://github.com/Vstory/RikkaHub-X/blob/main/LICENSE") },
                             headlineContent = { Text(stringResource(R.string.about_page_license)) },
                         )
                     }
