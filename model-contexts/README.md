@@ -55,7 +55,12 @@
 | 来源 | 值 | 说明 |
 |---|---|---|
 | **锚点(可信)** | `claude sonnet/opus 5`、`deepseek v4 flash/pro/v4.1` = **1M** | 与代码 `ModelRegistry.kt` 中 `contextLength(1.m)` 六处一致 |
-| **联网核验(2026-09-10)** | GPT-6/5.6/5.5/5.4 = 1.05M、GPT-5 系 = 400K、GPT-4.1 = 1M、GPT-4o/oss = 128K;Claude Opus 4.6+/Sonnet 4.6+/5 系 = 1M、其余 Claude = 200K;Gemini 2.x/3.x = 1M;DeepSeek V4 = 1M / v3.x-chat = 128K / r1-reasoner = 64K;Qwen3 系 = 256K(3.7-Max = 1M);GLM-5.2/5.3 = 1M、5/5.1 = 200K、4.x = 128K;Kimi = 256K;Doubao = 256K(2.1 约 512K、Seed-Evolving 1024K);Grok-4.6/4.5 = 500K、4.3 = 1M、4.1/4.20 = 2M、Grok-4 = 256K;MiniMax M3 = 1M、M2 系 = 204800;MiMo 2.5/3/2-Pro = 1M、V2 其余 ≈262K;Step = 256K;InternLM2 = 200K | 均附官方文档/发布页来源标注于 `context-windows.json` 各条 note,版本变动**欢迎 PR 修正** |
-| **待核(推断)** | hy、muse = 128K;longcat = 200K;step-3、intern-s1 同族推断 | note 已标注"推断待核",请以实测/官方为准修正 |
+| **联网核验(2026-09-10)** | GPT-6/5.6/5.5/5.4 = 1.05M、GPT-5 系 = 400K、GPT-4.1 = 1M、GPT-4o/oss = 128K;Claude **Fable 5/5.1 与 Mythos 5/5.1/Mythos Preview = 1M**、Opus 4.6+/Sonnet 4.6+/5 系 = 1M、其余 Claude = 200K;Gemini 2.x/3.x = 1M;DeepSeek V4(含 V4.1)= 1M / v3.x-chat = 128K / r1-reasoner = 64K;**Qwen3.8-Max 与 Flash = 1M**、Qwen3 系 = 256K(3.7-Max/3.8-Max = 1M;3.8-27B 仍 256K);GLM-5.2/5.3 = 1M、5/5.1 = 200K、4.x = 128K;**Kimi K3 = 1M(1,048,576)**、K2 系 = 256K;Doubao = 256K(Seed-Evolving 1024K);Grok-4.6/4.5 = 500K、4.3 = 1M、4.1/4.20 = 2M、Grok-4 = 256K;**Llama 4 Scout = 10M、Maverick = 1M、Llama 3.x = 128K**;**LongCat-2.0 = 1M**(旧 Flash-Chat 131072);MiniMax M3 = 1M、M2 系 = 204800;MiMo 2.5/3/2-Pro = 1M、V2 其余 ≈262K;Step 3.5/3.7 = 256K;InternLM2 = 200K;**Meta Muse Spark 1.3 = 1M** | 均附官方文档/发布页来源标注于 `context-windows.json` 各条 note,版本变动**欢迎 PR 修正** |
+| **本轮更正(2026-09-10 复核)** | ① **Doubao-Seed-2.1:512K → 256K** —— 火山方舟模型表与 AI Hub 页均为 `上下文窗口 256k`,此前按"50 万 token"宣传口径记录,已更正;② **Kimi:此前通用规则把 K3 一并记作 256K** —— K3 实为 1M,已单列更具体规则;③ **LongCat:200K(推断)→ 1M**;④ **Muse:128K(推断)→ 1M**;⑤ **Llama 4 系此前无规则** → 落到 200K 兜底(Scout 实为 10M,偏差 50 倍),已补三条规则 | 更正依据与来源随各条 note 记录 |
+| **待核(推断)** | hy = 128K;intern-s1、Muse Glimmer 同族推断 | note 已标注"推断待核",请以实测/官方为准修正 |
+
+> **口径纪律**:同一模型若官方与第三方数值不一致,以**官方文档/模型卡**为准并在 note 注明分歧。
+> 例:Gemini 3 系有第三方称 2M/10M,官方文档与 DeepMind 模型卡均为 **1M**,故取 1M;
+> GLM-5.1 有一处第三方称 1M,但官方发布稿与 OpenRouter/Kilo 等四处均为 **200K**,故取 200K。
 
 > 该表只决定"100% 是多少";"已用多少(分子)"由各 provider 响应 `usage` 提供,与本文无关。
