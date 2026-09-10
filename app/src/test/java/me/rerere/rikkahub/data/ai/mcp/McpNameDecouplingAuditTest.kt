@@ -1,10 +1,11 @@
 // 审计验证用例(2026-09-10,分支 audit/verify-x)
 // 约定见 WorkspaceArchiveAuditTest 头注释:断言期望的正确行为,失败 = 结论成立。
 //
-// A8:displayName(UI 显示名)与 name(协议内部名)解耦后,
-//     只填显示名时 UI 看起来已配置,但内部名为空 —— 而 McpSessionRegistry 的
-//     连接条件含 `commonOptions.name.isNotBlank()`(上游既有代码,未改动),
-//     结果是「界面显示已启用,实际静默不连接」。
+// A8 复核结论(2026-09-10):该状态**不可经 UI 落库**,不构成缺陷,本文件仅记录
+//     数据类语义(displayName 与 name 可各自独立为空,消费侧以 name 为连接条件)。
+//     依据:落库唯一入口 UseEditState.confirm() 只有一个调用点(保存按钮),
+//     其 onClick 守卫 `name.isNotBlank() && isValidMcpName(...)`;
+//     新增/导入亦 filter { name.isNotBlank() } —— 均为上游既有逻辑,X 未改动。
 package me.rerere.rikkahub.data.ai.mcp
 
 import org.junit.Assert.assertEquals
@@ -20,7 +21,7 @@ class McpNameDecouplingAuditTest {
         val options = McpCommonOptions(name = "", displayName = "我的服务器")
         assertEquals("我的服务器", options.uiName)
         assertTrue(
-            "内部名为空:UI 显示已配置,但 name.isBlank() 会让会话注册表跳过连接",
+            "数据类语义:内部名可与显示名独立为空(UI 落库有守卫,不会产生该状态)",
             options.name.isBlank(),
         )
     }
