@@ -1,11 +1,5 @@
 # Repository Guidelines
 
-<!-- [X-custom] 本仓库是 rikkahub/rikkahub 的 fork。下方通用说明之外,本 fork 特有约定
-     (分支模型 / CI 三个 workflow 分工 / 提交与推送铁律 / 定制文档分工) 见 AGENTS-X.md。 -->
-
-> **本仓库为 RikkaHub-X(fork)**:除本文档外,请先读 [`AGENTS-X.md`](./AGENTS-X.md)
-> —— 内含本 fork 专属的分支模型、CI 约定、提交铁律与推送方式。
-
 ## Project Overview
 
 RikkaHub is a native Android LLM chat client that supports switching between different AI providers
