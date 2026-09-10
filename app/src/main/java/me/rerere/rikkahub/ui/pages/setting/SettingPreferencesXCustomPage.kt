@@ -45,6 +45,7 @@ import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import me.rerere.rikkahub.x.context.ContextWindowRepository
 import me.rerere.rikkahub.x.context.formatRefreshedAt
 import me.rerere.rikkahub.x.context.formatTableUpdatedAt
+import me.rerere.rikkahub.x.context.MAX_RETRY_ATTEMPTS
 import me.rerere.rikkahub.x.context.RefreshError
 import org.koin.androidx.compose.koinViewModel
 
@@ -236,6 +237,20 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                                                 stringResource(R.string.setting_context_usage_ring_error_unreachable)
                                         },
                                         color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                                // 失败原因之后紧跟「还会再试」的交代:否则用户看到报错只会以为没救了。
+                                // 显示下次重试的**时刻**(与上面两个时间同一口径),而非「5 分钟后」这种相对说法
+                                // —— 相对说法要随秒刷新才保持正确,静态显示会越来越不准。
+                                tableStatus.retry?.let { plan ->
+                                    Text(
+                                        text = stringResource(
+                                            R.string.setting_context_usage_ring_retry_pending,
+                                            plan.attemptNumber,
+                                            MAX_RETRY_ATTEMPTS,
+                                            formatRefreshedAt(plan.nextAttemptAt),
+                                        ),
+                                        color = MaterialTheme.colorScheme.primary,
                                     )
                                 }
                             }

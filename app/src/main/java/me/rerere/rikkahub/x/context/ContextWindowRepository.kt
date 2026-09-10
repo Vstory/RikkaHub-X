@@ -16,9 +16,11 @@ package me.rerere.rikkahub.x.context
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +52,14 @@ data class ContextWindowTableStatus(
     val isRefreshing: Boolean = false,
     /** 上次刷新失败原因;成功后清空。只给**类型**,展示文案由 UI 映射到字符串资源(仓库层不该持用户可见文案)。 */
     val lastError: RefreshError? = null,
+    
+    /**
+     * 正在进行的自动重试链;为 null 表示没有在重试。
+     *
+     * 只在**用户手动点过刷新却没取到新内容**时才有值 —— 那次点击该有个交代,
+     * 不能让用户守着界面反复点。重试额度用完即回落到 TTL 定时刷新。
+     */
+    val retry: RefreshRetryPlan? = null,
 )
 
 /** 刷新失败的原因类型。 */
@@ -66,6 +76,9 @@ object ContextWindowRepository {
 
     private const val CACHE_DIR = "x-context"
     private const val CACHE_FILE = "context-windows.json"
+
+    /** 重试链落盘的文件名(与表缓存同目录)。 */
+    private const val RETRY_FILE = "refresh-retry.json"
 
     /**
      * 数据源候选 —— **只用 GitHub 官方**,并列而非主从。
@@ -117,6 +130,9 @@ object ContextWindowRepository {
 
     private var initialized = false
 
+    /** 当前重试链的协程;重启链条或成功取到更新时取消/清空。 */
+    private var retryJob: Job? = null
+
     private val _status = MutableStateFlow(ContextWindowTableStatus())
     /** 容量表状态(数据日期 / 是否拉取中 / 上次失败原因),供设置页展示与手动刷新按钮使用。 */
     val status: StateFlow<ContextWindowTableStatus> = _status.asStateFlow()
@@ -140,6 +156,10 @@ object ContextWindowRepository {
                 tableUpdatedAt = table?.updatedAt,
                 lastRefreshedAtMillis = lastRefreshMillis(app),
             )
+            // 上次点击触发的重试链若仍在时限内,接着跑 —— 用户点完就切走是常态
+            readRetry(app)?.takeIf { it.shouldContinue(System.currentTimeMillis()) }?.let {
+                armRetry(app, it)
+            }
             refreshScope.launch { refreshIfNeeded() }
         }
     }
@@ -180,6 +200,8 @@ object ContextWindowRepository {
 
     private suspend fun refreshIfNeeded() {
         val context = appContext ?: return
+        // 重试链正在跑就别和它抢 —— 那条链正在替用户这次刷新较真
+        if (_status.value.retry != null) return
         if (!isStale(context)) return
         refresh(context)
     }
@@ -220,22 +242,38 @@ object ContextWindowRepository {
     fun refreshNow() {
         val context = appContext ?: return
         if (_status.value.isRefreshing) return
-        refreshScope.launch { refresh(context) }
+        refreshScope.launch {
+            val outcome = refresh(context)
+            // 没取到新内容就把点击时刻记下来,稍后自动重试几次 —— 用户点完往往就切走了,
+            // 不该要求他守着界面反复点。已有链条则被这次点击重置(以最新点击为准)。
+            if (outcome != null && outcome != RefreshOutcome.UPDATED) {
+                armRetry(context, RefreshRetryPlan.newRequest(System.currentTimeMillis()))
+            }
+        }
     }
 
-    /** 实际拉取 + 校验 + 落盘,并把结果写入 [status]。并发调用由 isRefreshing 挡住。 */
-    private suspend fun refresh(context: Context) {
-        if (_status.value.isRefreshing) return
+    /**
+     * 实际拉取 + 校验 + 落盘,并把结果写入 [status]。并发调用由 isRefreshing 挡住。
+     *
+     * @return 本次结果;已有刷新在进行而本次被挡下时返回 null
+     */
+    private suspend fun refresh(context: Context): RefreshOutcome? {
+        if (_status.value.isRefreshing) return null
         _status.value = _status.value.copy(isRefreshing = true, lastError = null)
         try {
             // fetchAndApply 是阻塞的 OkHttp 调用,必须切到 IO
             val outcome = withContext(Dispatchers.IO) { fetchAndApply(context) }
             _status.value = when (outcome) {
-                RefreshOutcome.UPDATED -> _status.value.copy(
-                    tableUpdatedAt = table?.updatedAt,
-                    lastRefreshedAtMillis = lastRefreshMillis(context),
-                    lastError = null,
-                )
+                RefreshOutcome.UPDATED -> {
+                    // 目标已达成,重试链失去意义:连同落盘状态一起撤掉。
+                    // 不取消协程 —— 链条自身会因 status.retry 变了而在下次醒来时退出。
+                    clearRetryState(context)
+                    _status.value.copy(
+                        tableUpdatedAt = table?.updatedAt,
+                        lastRefreshedAtMillis = lastRefreshMillis(context),
+                        lastError = null,
+                    )
+                }
 
                 // 本地表未变,但"最后检查时刻"已推进,故更新时间要跟着刷新
                 RefreshOutcome.UP_TO_DATE -> _status.value.copy(
@@ -246,10 +284,72 @@ object ContextWindowRepository {
                 RefreshOutcome.REJECTED -> _status.value.copy(lastError = RefreshError.REJECTED)
                 RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = RefreshError.UNREACHABLE)
             }
+            return outcome
         } finally {
             _status.value = _status.value.copy(isRefreshing = false)
         }
     }
+
+    /**
+     * 开一条自动重试链:按 [RefreshRetryPlan] 的档位等待后重试,直至取到更新、额度用尽或超出时限。
+     *
+     * 只在**手动刷新没取到新内容**后调用 —— 重试是给用户那次点击一个交代,不是常驻轮询;
+     * 额度用完即回落到按 TTL 的定时刷新。
+     */
+    private fun armRetry(context: Context, plan: RefreshRetryPlan) {
+        retryJob?.cancel()
+        persistRetry(context, plan)
+        _status.value = _status.value.copy(retry = plan)
+        Log.i(TAG, "自动重试已排定:第 1/${MAX_RETRY_ATTEMPTS} 次在 ${RETRY_INTERVAL_MINUTES} 分钟后")
+        retryJob = refreshScope.launch {
+            var current = plan
+            while (current.shouldContinue(System.currentTimeMillis())) {
+                val waitMillis = current.nextAttemptAt - System.currentTimeMillis()
+                if (waitMillis > 0) delay(waitMillis)
+                // 链条可能已被撤销(定时刷新抢先取到更新)或被新的点击替换 —— 都不该再跑
+                if (_status.value.retry != current) return@launch
+
+                // 被并发刷新挡下(null)也算一次尝试:否则可能在同一档反复醒来空转。
+                // 代价只是可能少一次重试,好过卡住不前进。
+                if (refresh(context) == RefreshOutcome.UPDATED) return@launch
+
+                current = current.afterFailure()
+                if (!current.shouldContinue(System.currentTimeMillis())) break
+                persistRetry(context, current)
+                _status.value = _status.value.copy(retry = current)
+                Log.i(TAG, "第 ${current.attemptNumber}/${MAX_RETRY_ATTEMPTS} 次重试已排定")
+            }
+            Log.i(TAG, "自动重试结束(额度用尽或超出时限),回落定时刷新")
+            clearRetryState(context)
+        }
+    }
+
+    private fun retryFile(context: Context): File = File(File(context.filesDir, CACHE_DIR), RETRY_FILE)
+
+    /**
+     * 只清落盘状态与对外的 [ContextWindowTableStatus.retry],**不取消协程**。
+     *
+     * 取消留给 [armRetry](换链时)和链条自身的"已被替换"判断 —— 在链条内部取消自己会让
+     * 后续代码走到不可预期的地方。
+     */
+    private fun clearRetryState(context: Context) {
+        runCatching { retryFile(context).delete() }
+        _status.value = _status.value.copy(retry = null)
+    }
+
+    private fun persistRetry(context: Context, plan: RefreshRetryPlan) {
+        runCatching {
+            val file = retryFile(context)
+            file.parentFile?.mkdirs()
+            file.writeText(RefreshRetryPlan.encode(plan))
+        }.onFailure { Log.w(TAG, "重试状态写入失败", it) }
+    }
+
+    private fun readRetry(context: Context): RefreshRetryPlan? = runCatching {
+        val file = retryFile(context)
+        if (!file.isFile) return@runCatching null
+        RefreshRetryPlan.decode(file.readText())
+    }.getOrNull()
 
     /**
      * 拉取全部候选源 → 各自校验 → 取最新的一版落盘。

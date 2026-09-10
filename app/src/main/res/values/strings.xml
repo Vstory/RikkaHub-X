@@ -944,6 +944,7 @@
   <string name="setting_context_usage_ring_refresh_now_title">Refresh table now</string>
   <string name="setting_context_usage_ring_refresh_now_desc">Fetch the latest model context windows immediately, ignoring the automatic refresh interval</string>
   <string name="setting_context_usage_ring_refreshing">Refreshing…</string>
+  <string name="setting_context_usage_ring_retry_pending">Retrying automatically: attempt %1$d/%2$d, next %3$s</string>
   <string name="setting_context_usage_ring_refreshed_at">Updated: %1$s</string>
   <string name="setting_context_usage_ring_refresh_action">Refresh</string>
   <string name="setting_context_usage_ring_error_rejected">The remote table failed validation; kept the previous one</string>
