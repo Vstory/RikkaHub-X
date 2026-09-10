@@ -27,10 +27,13 @@ on:
 #   pnpm/action-setup           v4->v6   ea17c68d
 #   softprops/action-gh-release v2->v3   efb35369
 
-# 同一时间只跑一个构建，避免并发往同一个 nightly release 上传/清理造成冲突
-concurrency:
-  group: nightly-build
-  cancel-in-progress: false
+# 并发：**不设 concurrency 锁**（2026-09-10 移除）。
+# 原先用 concurrency.group 强制串行，理由是"避免并发往同一个 nightly release
+# 上传/清理冲突"。但那是**用锁掩盖脚本竞态**——正确做法是让脚本本身幂等：
+#   - Cleanup 改为「保留最新 6 组构建」的不变式，任何交错都收敛到同一稳态，
+#     且永不删到更新的产物（详见该步骤注释）
+#   - 重复删除按 404 容忍，不再使步骤误报失败
+# 故并发构建现在是安全的，无需人为排队（GitHub 默认本就允许并行）。
 
 jobs:
   # 检查过去 24 小时内是否有新提交，没有则跳过构建，避免重复打包
@@ -261,34 +264,72 @@ jobs:
           body_path: release_body.md
           files: app/build/outputs/apk/release/*.apk
 
-      # 只保留最近 6 次构建的产物（6 组 × 3 ABI = 18 个带短号 asset），防止 release 无限膨胀。
-      # 先休眠等新 asset 落库。正则匹配所有「尾部带 8 位短号」的 asset，兼容旧 release-<短号> 与
-      # 新 app-<时间>-<架构>-release-<短号> 两种命名；无短号的最老格式不在规则内、永不清理。
-      # 迁移期：旧命名 asset 上传时间更早会被先清出，最终稳定为新命名 18 个。
+      # 保留最近 6 次构建的产物，其余删除。
+      #
+      # ⚠️ 为什么不用「总数 - 18」计数法（2026-09-10 重构）：
+      #   计数法基于**某一时刻的快照**算 to_delete，并发构建时两次运行的快照不同，
+      #   叠加后会**多删**（A 见 24 个→删 6；B 见 21 个→再删 3；最终只剩 15 个而非 18 个）；
+      #   且重复删除同一 asset 会返回 404 → xargs 退出码非 0 → 整个步骤**误报失败**。
+      #
+      # ✅ 现改为**幂等的不变式**：「按构建时间保留最新 6 组，删除其余」。
+      #   性质：① 无论并发如何交错，都收敛到同一稳态（跑第二遍不会再多删）；
+      #        ② **最新构建必然落在保留集内 → 永不删到更新的产物**（计数法无此保证）；
+      #        ③ 重复删除按 404 容忍，不再导致步骤失败。
       - name: Cleanup old nightly assets (keep latest 6 builds)
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sleep 30
-          # 按 uploaded_at 升序列出所有带 8 位短号后缀的 asset
-          mapfile -t assets < <(gh api --paginate \
+          sleep 30   # 等本次上传的 asset 在 API 中可见
+
+          # 一次性取出全部 asset 的 (id, name)：只取一次，避免两次请求快照不一致
+          mapfile -t ASSETS < <(gh api --paginate \
             -H "Accept: application/vnd.github+json" \
             repos/${{ github.repository }}/releases/tags/nightly \
-            --jq '.assets[] | select(.name | test("-[0-9a-f]{8}\\.apk$")) | [.id, .uploaded_at, .name] | @tsv')
-          echo "匹配命名规则的 asset 总数: ${#assets[@]}"
-          # 总数超过 18 时，删掉最旧的 (总数-18) 个
-          to_delete=$(( ${#assets[@]} - 18 ))
-          if [ "$to_delete" -gt 0 ]; then
-            # 按上传时间排序（第2列），取最旧的前 to_delete 个删除
-            printf '%s\n' "${assets[@]}" \
-              | sort -k2 \
-              | head -n "$to_delete" \
-              | cut -f1 \
-              | xargs -r -n1 gh api -X DELETE \
-                  -H "Accept: application/vnd.github+json" \
-                  repos/${{ github.repository }}/releases/assets/
-            echo "已清理 $to_delete 个旧 asset，保留最近 18 个（6 次构建）"
-          else
-            echo "未超上限，无需清理"
+            --jq '.assets[] | select(.name | test("-[0-9a-f]{8}\\.apk$")) | [.id, .name] | @tsv')
+          echo "匹配命名规则的 asset 共 ${#ASSETS[@]} 个"
+
+          # 从文件名解析「构建键」= "构建时间戳 短号"；旧命名解析不出键 → 视为待清理
+          key_of() {
+            sed -nE 's/^app-([0-9]{8}-[0-9]{4})-(arm64-v8a|universal|x86_64)-release-([0-9a-f]{8})\.apk$/\1 \3/p' <<< "$1"
+          }
+
+          KEYS_FILE="$(mktemp)"
+          while IFS=$'\t' read -r _id name; do
+            [ -n "$name" ] || continue
+            key_of "$name"
+          done < <(printf '%s\n' "${ASSETS[@]}") | sort -u -r > "$KEYS_FILE"
+
+          # 保留集 = 构建时间最新的 6 组（"时间戳 短号" 降序 → 最新在前）
+          declare -A KEEP=()
+          kept=0
+          while read -r k; do
+            [ -n "$k" ] || continue
+            if [ "$kept" -ge 6 ]; then break; fi
+            KEEP["$k"]=1
+            kept=$((kept + 1))
+          done < "$KEYS_FILE"
+          echo "保留最新 $kept 组构建：$(tr '\n' ' ' < "$KEYS_FILE" | cut -c1-200)"
+
+          # 删除集 = 不在保留集内的 asset（含解析不出构建键的旧命名）
+          deleted=0
+          failed=0
+          while IFS=$'\t' read -r id name; do
+            [ -n "$id" ] || continue
+            k="$(key_of "$name")"
+            if [ -n "$k" ] && [ -n "${KEEP[$k]:-}" ]; then
+              continue
+            fi
+            if gh api -X DELETE -H "Accept: application/vnd.github+json" \
+                 "repos/${{ github.repository }}/releases/assets/$id" >/dev/null 2>&1; then
+              deleted=$((deleted + 1))
+            else
+              failed=$((failed + 1))
+            fi
+          done < <(printf '%s\n' "${ASSETS[@]}")
+          rm -f "$KEYS_FILE"
+
+          echo "已删除 $deleted 个旧 asset"
+          if [ "$failed" -gt 0 ]; then
+            echo "::notice::$failed 个 asset 删除失败（并发下被另一次运行抢先删除会返回 404，属正常，不影响收敛结果）"
           fi
