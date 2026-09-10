@@ -759,7 +759,7 @@
   <string name="setting_model_page_translate_model">번역 모델</string>
   <string name="setting_model_page_translate_model_desc">번역 기능에 사용되는 모델</string>
   <string name="setting_model_page_translate_prompt_vars">변수: 원문: {source_text}, 대상 언어: {target_lang}</string>
-  <string name="setting_page_about">정보</string>
+  <string name="setting_page_about">정보 X</string>
   <string name="setting_page_about_desc">앱 정보</string>
   <string name="setting_page_assistant">어시스턴트</string>
   <string name="setting_page_assistant_desc">개인화된 어시스턴트(에이전트) 설정</string>

@@ -759,7 +759,7 @@
   <string name="setting_model_page_translate_model">Модель перевода</string>
   <string name="setting_model_page_translate_model_desc">Модель, используемая для функций перевода</string>
   <string name="setting_model_page_translate_prompt_vars">Переменные: Исходный текст: {source_text}, Целевой язык: {target_lang}</string>
-  <string name="setting_page_about">О приложении</string>
+  <string name="setting_page_about">О приложении X</string>
   <string name="setting_page_about_desc">Об этом приложении</string>
   <string name="setting_page_assistant">Ассистент</string>
   <string name="setting_page_assistant_desc">Настроить персонализированных ассистентов (агентов)</string>
