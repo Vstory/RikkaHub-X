@@ -49,6 +49,7 @@ import me.rerere.rikkahub.data.sync.s3.S3Config
 import me.rerere.rikkahub.ui.theme.CustomTheme
 import me.rerere.rikkahub.ui.theme.PresetThemes
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import me.rerere.rikkahub.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
@@ -631,6 +632,8 @@ data class DisplaySetting(
     val enableCompressFeedback: Boolean = true,
     // 上下文用量圆环(issue 1669,默认关:X 增强需手动开启)
     val enableContextUsageRing: Boolean = false,
+    // 圆环点击后的弹窗样式(X 定制二选一,默认 classic 保持既有外观)
+    val contextUsageDialogStyle: ContextUsageDialogStyle = ContextUsageDialogStyle.CLASSIC,
     val pasteLongTextAsFile: Boolean = false,
     val pasteLongTextThreshold: Int = 1000,
     val sendOnEnter: Boolean = false,

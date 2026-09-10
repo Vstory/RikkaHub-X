@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -27,8 +28,10 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.ui.Select
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -133,8 +136,39 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                             )
                         },
                     )
+                    // 弹窗样式二选一:圆环关闭时该弹窗不可达,故仅在开启后展示
+                    if (displaySetting.enableContextUsageRing) {
+                        item(
+                            headlineContent = { Text(stringResource(R.string.context_usage_dialog_style_title)) },
+                            supportingContent = {
+                                Column {
+                                    Text(stringResource(R.string.context_usage_dialog_style_desc))
+                                    Select(
+                                        options = ContextUsageDialogStyle.entries,
+                                        selectedOption = displaySetting.contextUsageDialogStyle,
+                                        onOptionSelected = { style ->
+                                            updateDisplaySetting(
+                                                displaySetting.copy(contextUsageDialogStyle = style)
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .padding(top = 4.dp)
+                                            .fillMaxWidth(),
+                                        optionToString = { it.labelUI() },
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/** 上下文弹窗样式的显示名(与 ContextUsageDialogStyle 一一对应)。 */
+@Composable
+private fun ContextUsageDialogStyle.labelUI(): String = when (this) {
+    ContextUsageDialogStyle.CLASSIC -> stringResource(R.string.context_usage_dialog_style_classic)
+    ContextUsageDialogStyle.CODEX -> stringResource(R.string.context_usage_dialog_style_codex)
 }

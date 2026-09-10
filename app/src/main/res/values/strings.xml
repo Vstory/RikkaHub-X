@@ -947,6 +947,12 @@
   <string name="context_usage_segment_completion">Last reply output</string>
   <string name="context_usage_segment_input">Pending input</string>
   <string name="context_usage_segment_free">Free space</string>
+  <string name="context_usage_used_of">Used %1$s / %2$s tokens</string>
+  <string name="context_usage_remaining_value">%1$d%% left · %2$s tokens</string>
+  <string name="context_usage_dialog_style_title">Dialog style</string>
+  <string name="context_usage_dialog_style_desc">Appearance of the dialog shown after tapping the ring; only one style can be active</string>
+  <string name="context_usage_dialog_style_classic">Default (used share)</string>
+  <string name="context_usage_dialog_style_codex">Codex (remaining budget)</string>
   <string name="context_usage_messages">Messages</string>
   <string name="context_usage_model">Model</string>
   <string name="context_usage_note">"Pending input" is estimated from character count; the rest is reported by the API</string>

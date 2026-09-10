@@ -435,9 +435,10 @@ fun ChatInput(
         onSelect = onUpdateChatModel,
     )
 
-    // [X-custom] 上下文窗口弹窗(圆环点击打开,Codex /status 版式);从弹窗里可进入压缩
+    // [X-custom] 上下文窗口弹窗(圆环点击打开,样式由 X 定制选择);从弹窗里可进入压缩
     if (showUsageDialog && ctxBreakdown != null) {
         ContextUsageDialog(
+            style = settings.displaySetting.contextUsageDialogStyle,
             breakdown = ctxBreakdown,
             cumulative = ctxCumulative,
             messageCount = conversation.currentMessages.size,
