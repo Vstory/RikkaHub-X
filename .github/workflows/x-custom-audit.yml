@@ -1,0 +1,61 @@
+name: X Custom Audit
+
+# run 标题(2026-09-10):push 触发的 run 默认拿 commit message 首行当标题,同一提交
+# 多次触发时标题完全重复。显式声明 run-name 后可按触发方式与分支区分。
+# 不用 head_commit.message:那是多行全文,塞进标题会截断。
+run-name: "X Custom Audit · ${{ github.event_name }} · ${{ github.ref_name }}"
+
+# X 定制审计(2026-09-10)。
+#
+# 解决什么:本仓库是 rikkahub/rikkahub 的 fork,main 上叠加了大量 X 定制。合并上游时有三类
+# 风险,而且**都通不过编译检查** —— 语法没问题,行为却错了:
+#   · 文本冲突    —— git 能发现,但以往要等到真正合并那一刻才暴露
+#   · 语义冲突    —— 文本无冲突,但 X 的补丁在合并后逻辑失效(上游重构了调用点)
+#   · 静默丢弃    —— merge 时误取上游版本,把 X 定制连带标签一起丢掉
+#
+# 本 workflow 把**能自动判定的部分**做掉:
+#   ① 标签存活   —— 对比 HEAD 与 HEAD^ 的 [X-custom] 标签集合;文件仍在但标签消失 = 强信号
+#   ② 上游预演   —— git merge-tree --write-tree 提前暴露文本冲突(只读,不碰工作区),
+#                   并输出「双方都改过」的文件清单 —— 文本不冲突,但这是语义冲突的唯一候选
+#
+# ⚠️ 能力边界(不要误解为"合并安全了"):
+#   语义层面能否仍成立**无法静态判定**。上游改了函数签名/调用链、X 的补丁语法正确却不再
+#   被执行 —— 这类问题只有针对性用例与真机验证能回答,由 x-custom-guard.yml 与 daily-build.yml
+#   承担。本 workflow 只负责把冲突与丢失提前暴露,缩小人工复核范围。
+#
+# 为什么纯 shell 不跑 Gradle:两项检查都只依赖 git 与文本,秒级完成。若塞进 guard,
+# 既会拖到几分钟,又受路径过滤限制(审查的重点恰恰是「上游改到 X 却没人知道」)。
+#
+# 三个触发场合的分工:
+#   · push main  —— 合并后立刻确认定制没被丢(含合上游之后)
+#   · 每日定时   —— **上游一改到 X 定制文件就提前知道**,不必等下一次合并才发现
+#   · 手动       —— 随时复查
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # 每日 22:00 UTC = 次日 06:00(北京) —— 上游提交多在北京时间白天/晚上,
+    # 次日早晨即可看到它对 X 定制的影响。
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+# 只读即可:不发布、不写仓库。
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 需要完整历史:① HEAD^ 对比;② 算 HEAD 与上游的共同祖先(merge-base)。
+          # 不拉 submodule —— 本审计只读 git 与文本,不需要 material3 等源码。
+          fetch-depth: 0
+
+      # 脚本内含两项检查,并会把结果写入 Job Summary(GITHUB_STEP_SUMMARY)。
+      # 退出码非 0 = 检测到文本冲突或标签消失,红灯即需处理。
+      # 上游 fetch 失败(网络原因)只在摘要里提示,不计失败 —— 那不是本仓库的问题。
+      - name: Audit custom points and upstream merge
+        run: bash scripts/x_custom_audit.sh
