@@ -117,6 +117,7 @@ import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.x.context.ContextUsageCalculator
 import me.rerere.rikkahub.x.context.ContextWindowRepository
+import me.rerere.rikkahub.x.ui.ContextUsageDialog
 import me.rerere.rikkahub.x.ui.ContextUsageRing
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.utils.SoundEffectPlayer
@@ -160,16 +161,22 @@ fun ChatInput(
     // 会话当前生效模型:会话级覆盖优先,回退助手/全局默认(与顶部 TopBar、模型选择器同源)
     val effectiveChatModel = conversation.modelId?.let { settings.findModelById(it) }
         ?: settings.getCurrentChatModel()
-    // [X-custom] 上下文用量圆环(issue 1669):容量=远端/内置容量表;用量=最近 usage.promptTokens + 输入框估算;点击弹压缩对话框
+    // [X-custom] 上下文用量圆环(issue 1669):容量=远端/内置容量表;用量=上一轮输入 + 上一轮输出 + 输入框估算;
+    // 点击查看用量明细弹窗(参照 Codex),弹窗内可进入压缩
     val xContext = LocalContext.current
     LaunchedEffect(Unit) { ContextWindowRepository.ensureLoaded(xContext.applicationContext) }
     var showCompressDialog by remember { mutableStateOf(false) }
+    var showUsageDialog by remember { mutableStateOf(false) }
     val ctxModelId = effectiveChatModel?.modelId
     val ctxInputText = state.textContent.text.toString()
     val ctxCapacity = ContextWindowRepository.contextWindowFor(ctxModelId)
-    val ctxUsage = remember(conversation.messageNodes, ctxInputText) {
-        ContextUsageCalculator.currentUsageTokens(conversation.currentMessages, ctxInputText)
+    // 圆环与用量明细共用同一分解,避免两处数字不一致
+    val ctxBreakdown = remember(conversation.messageNodes, ctxInputText, ctxCapacity) {
+        ctxCapacity?.let {
+            ContextUsageCalculator.breakdown(conversation.currentMessages, ctxInputText, it)
+        }
     }
+    val ctxUsage = ctxBreakdown?.usedTokens
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeBlurStyle.Material3 {
         blurRadius(12.dp)
@@ -353,13 +360,13 @@ fun ChatInput(
 
                         }
 
-                        // [X-custom] 上下文用量圆环(issue 1669):点击打开压缩对话框;受 X 定制开关 enableContextUsageRing 控制(默认关)
+                        // [X-custom] 上下文用量圆环(issue 1669):点击打开用量明细;受 X 定制开关 enableContextUsageRing 控制(默认关)
                         if (settings.displaySetting.enableContextUsageRing && ctxModelId != null && ctxCapacity != null && ctxUsage != null) {
                             ContextUsageRing(
                                 usedTokens = ctxUsage,
                                 capacityTokens = ctxCapacity,
                                 modifier = Modifier,
-                                onClick = { showCompressDialog = true },
+                                onClick = { showUsageDialog = true },
                             )
                         }
 
@@ -425,7 +432,21 @@ fun ChatInput(
         onSelect = onUpdateChatModel,
     )
 
-    // [X-custom] 上下文用量圆环点击后的压缩对话框(复用上游 CompressContextDialog)
+    // [X-custom] 上下文用量明细(圆环点击打开);从明细里可进入压缩
+    if (showUsageDialog && ctxBreakdown != null) {
+        ContextUsageDialog(
+            breakdown = ctxBreakdown,
+            messageCount = conversation.currentMessages.size,
+            modelName = ctxModelId,
+            onDismiss = { showUsageDialog = false },
+            onCompressClick = {
+                showUsageDialog = false
+                showCompressDialog = true
+            },
+        )
+    }
+
+    // [X-custom] 压缩对话框(复用上游 CompressContextDialog)
     if (showCompressDialog) {
         CompressContextDialog(
             onDismiss = { showCompressDialog = false },

@@ -8,6 +8,7 @@ package me.rerere.rikkahub.x.context
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
+import kotlin.math.roundToInt
 
 object ContextUsageCalculator {
     private const val CHARS_PER_TOKEN = 4
@@ -19,6 +20,40 @@ object ContextUsageCalculator {
         /** 该次回复的输出 token —— 回复发出后同样进入上下文。 */
         val completionTokens: Long,
     )
+
+    /**
+     * 上下文占用的完整分解,供用量明细展示。
+     *
+     * `usedTokens` 与 [currentUsageTokens] 同口径,两者共用同一下层计算,不会漂移。
+     */
+    data class UsageBreakdown(
+        /** 上一轮请求的输入上下文(系统提示词 + 工具定义 + 历史消息)。 */
+        val promptTokens: Long,
+        /** 上一轮回复自身的输出。 */
+        val completionTokens: Long,
+        /** 输入框待发送文本的估算增量。 */
+        val inputTokens: Long,
+        /** 当前占用合计。 */
+        val usedTokens: Long,
+        /** 剩余可用(`usedTokens` 超出容量时为 0,不出现负数)。 */
+        val remainingTokens: Long,
+        /** 模型上下文窗口。 */
+        val capacityTokens: Int,
+    ) {
+        /** 占用比例,恒在 0..1。 */
+        val percent: Float
+            get() = if (capacityTokens <= 0) {
+                0f
+            } else {
+                (usedTokens.toFloat() / capacityTokens).coerceIn(0f, 1f)
+            }
+
+        /** 占用百分比(四舍五入整数)。 */
+        val percentInt: Int get() = (percent * 100).roundToInt()
+
+        /** 剩余百分比;已超容量时为 0。 */
+        val remainingPercent: Int get() = (100 - percentInt).coerceAtLeast(0)
+    }
 
     /** 最近一次含 usage 的助手回复所报告的 token(输入 + 输出)。 */
     fun lastReportedUsage(messages: List<UIMessage>): ReportedUsage? =
@@ -49,5 +84,31 @@ object ContextUsageCalculator {
     fun currentUsageTokens(messages: List<UIMessage>, inputText: String): Long? {
         val reported = lastReportedUsage(messages) ?: return null
         return reported.promptTokens + reported.completionTokens + estimateExtraTokens(inputText)
+    }
+
+    /**
+     * 计算上下文占用的完整分解(圆环点击后的用量明细用)。
+     *
+     * 各分量之和恒等于 [UsageBreakdown.usedTokens];`remaining` 在超容量时钳为 0,
+     * 保证明细各项不会出现负数。
+     *
+     * @return 有据可依的分解;从未有过 usage 时返回 null
+     */
+    fun breakdown(
+        messages: List<UIMessage>,
+        inputText: String,
+        capacityTokens: Int,
+    ): UsageBreakdown? {
+        val reported = lastReportedUsage(messages) ?: return null
+        val inputTokens = estimateExtraTokens(inputText).toLong()
+        val usedTokens = reported.promptTokens + reported.completionTokens + inputTokens
+        return UsageBreakdown(
+            promptTokens = reported.promptTokens,
+            completionTokens = reported.completionTokens,
+            inputTokens = inputTokens,
+            usedTokens = usedTokens,
+            remainingTokens = (capacityTokens - usedTokens).coerceAtLeast(0L),
+            capacityTokens = capacityTokens,
+        )
     }
 }

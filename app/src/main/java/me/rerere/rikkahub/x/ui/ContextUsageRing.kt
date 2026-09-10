@@ -25,10 +25,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
-private const val LOW_THRESHOLD = 0.6f
-private const val HIGH_THRESHOLD = 0.85f
+internal const val LOW_THRESHOLD = 0.6f
+internal const val HIGH_THRESHOLD = 0.85f
 
-private fun usageColor(percent: Float): Color = when {
+/** 用量配色:红=接近上限,橙=建议压缩,绿=健康。圆环与用量弹窗共用,避免两处色阶漂移。 */
+internal fun usageColor(percent: Float): Color = when {
     percent >= HIGH_THRESHOLD -> Color(0xFFE5484D)   // 红:接近上限
     percent >= LOW_THRESHOLD -> Color(0xFFFFB224)    // 橙:建议压缩
     else -> Color(0xFF30A46C)                        // 绿:健康

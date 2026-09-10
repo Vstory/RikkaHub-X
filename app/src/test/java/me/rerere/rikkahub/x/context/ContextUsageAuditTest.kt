@@ -6,6 +6,8 @@
 //       用例转为回归守护(失败 = 修复被回退)。
 // A9 —— **已确认为缺陷并修复**(2026-09-10):分子漏算上一轮回复的 completionTokens,
 //       导致占用被持续低估;用例转为回归守护(失败 = 修复被回退)。
+// A10 —— 用量分解(圆环点击后的明细弹窗):各项之和 == 合计、与圆环口径一致、
+//       剩余钳零不出现负数、无 usage 时同样隐藏。
 package me.rerere.rikkahub.x.context
 
 import me.rerere.ai.core.TokenUsage
@@ -62,5 +64,66 @@ class ContextUsageAuditTest {
     @Test
     fun `DOC empty conversation returns null`() {
         assertNull(ContextUsageCalculator.currentUsageTokens(emptyList(), ""))
+    }
+
+    // ─────────────────── A10:用量分解(圆环点击后的明细弹窗) ───────────────────
+
+    /** A10:分解各项之和 == 合计,且与圆环口径一致(两处数字不得漂移)。 */
+    @Test
+    fun `A10 breakdown parts sum to used and match ring formula`() {
+        val messages = listOf(
+            UIMessage.user("问题"),
+            UIMessage.assistant("回答").copy(usage = TokenUsage(promptTokens = 1200, completionTokens = 300)),
+        )
+        val input = "1234567890123456"
+        val breakdown = ContextUsageCalculator.breakdown(messages, input, 200_000)!!
+        assertEquals(
+            "分解各项之和与合计不符",
+            breakdown.usedTokens,
+            breakdown.promptTokens + breakdown.completionTokens + breakdown.inputTokens,
+        )
+        assertEquals(
+            "明细弹窗与圆环口径不一致",
+            ContextUsageCalculator.currentUsageTokens(messages, input),
+            breakdown.usedTokens,
+        )
+    }
+
+    /** A10:剩余 = 容量 − 合计;百分比按四舍五入取整。 */
+    @Test
+    fun `A10 remaining equals capacity minus used`() {
+        val messages = listOf(
+            UIMessage.assistant("答").copy(usage = TokenUsage(promptTokens = 1_000)),
+        )
+        val breakdown = ContextUsageCalculator.breakdown(messages, "", 10_000)!!
+        assertEquals(9_000L, breakdown.remainingTokens)
+        assertEquals(10, breakdown.percentInt)
+        assertEquals(90, breakdown.remainingPercent)
+    }
+
+    /** A10:占用超出容量时,剩余与剩余百分比钳为 0,不出现负数。 */
+    @Test
+    fun `A10 remaining clamps at zero when over capacity`() {
+        val messages = listOf(
+            UIMessage.assistant("答").copy(usage = TokenUsage(promptTokens = 5_000, completionTokens = 1_000)),
+        )
+        val breakdown = ContextUsageCalculator.breakdown(messages, "", 4_000)!!
+        assertEquals(0L, breakdown.remainingTokens)
+        assertEquals(0, breakdown.remainingPercent)
+        assertEquals(100, breakdown.percentInt)
+        assertEquals(1f, breakdown.percent, 1e-6f)
+    }
+
+    /** A10:无 usage 时分解同样返回 null(与圆环门控一致,不显示无据可依的数值)。 */
+    @Test
+    fun `A10 breakdown returns null without usage`() {
+        assertNull(ContextUsageCalculator.breakdown(emptyList(), "x", 200_000))
+        assertNull(
+            ContextUsageCalculator.breakdown(
+                listOf(UIMessage.user("问题"), UIMessage.assistant("回答")),
+                "x",
+                200_000,
+            ),
+        )
     }
 }
