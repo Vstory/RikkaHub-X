@@ -1,4 +1,5 @@
 // [X-custom] RikkaHub-X 定制(merge 上游时保留): 语音输入提示音/振动 + 会话模型切换 UI
+//              + UI 侧助手/模型解析对齐发送侧口径(会话绑定助手,详见 x/chat/ConversationAssistantScope.kt)
 package me.rerere.rikkahub.ui.components.ai
 
 import androidx.compose.animation.AnimatedVisibility
@@ -94,9 +95,7 @@ import me.rerere.hugeicons.stroke.Fullscreen
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
-import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getQuickMessagesOfAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
@@ -115,6 +114,8 @@ import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.ChatInputState
+import me.rerere.rikkahub.x.chat.getConversationAssistant
+import me.rerere.rikkahub.x.chat.getConversationChatModel
 import me.rerere.rikkahub.x.context.ContextUsageCalculator
 import me.rerere.rikkahub.x.context.ContextWindowRepository
 import me.rerere.rikkahub.x.ui.ContextUsageDialog
@@ -157,10 +158,12 @@ fun ChatInput(
     onStopVoiceMode: () -> Unit = {},
 ) {
     val toaster = LocalToaster.current
-    val assistant = settings.getCurrentAssistant()
+    // [X-custom] UI 侧口径对齐发送侧:会话绑定的助手(而非全局当前助手)。
+    // 详见 x/chat/ConversationAssistantScope.kt —— 全局助手被 Web UI 写偏后,此处原先会解析成
+    // 另一个助手的模型/推理档位,导致界面显示与实际生成不符。
+    val assistant = settings.getConversationAssistant(conversation)
     // 会话当前生效模型:会话级覆盖优先,回退助手/全局默认(与顶部 TopBar、模型选择器同源)
-    val effectiveChatModel = conversation.modelId?.let { settings.findModelById(it) }
-        ?: settings.getCurrentChatModel()
+    val effectiveChatModel = settings.getConversationChatModel(conversation)
     // [X-custom] 上下文用量圆环(issue 1669):容量=远端/内置容量表;用量=上一轮输入 + 上一轮输出 + 输入框估算;
     // 点击查看用量明细弹窗(参照 Codex),弹窗内可进入压缩
     val xContext = LocalContext.current
