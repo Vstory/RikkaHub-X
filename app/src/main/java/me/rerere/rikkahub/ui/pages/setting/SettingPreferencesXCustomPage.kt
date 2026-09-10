@@ -227,7 +227,7 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                                         )
                                     )
                                 }
-                                // 手动刷新没取到新内容时,这里交代自动重试的去向 —— 紧跟时间信息,
+                                // 手动更新没取到新内容时,这里交代自动重试的去向 —— 紧跟时间信息,
                                 // 因为它回答的正是"接下来什么时候会更新"。
                                 // 显示下次重试的**时刻**(与上面两个时间同一口径),而非「5 分钟后」这种
                                 // 相对说法:相对说法要随秒刷新才不至于越看越不准。
@@ -235,7 +235,7 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                                     val done = plan.attemptsDone
                                     Text(
                                         text = if (plan.isExhausted) {
-                                            // 额度用尽:说清已交给自动刷新,否则界面上只剩一条失败原因,
+                                            // 额度用尽:说清已交给定时更新,否则界面上只剩一条失败原因,
                                             // 用户无从知道后续还有没有人管
                                             stringResource(
                                                 R.string.setting_context_usage_ring_retry_handed_over,

@@ -1,11 +1,11 @@
-// [X-custom] RikkaHub-X 定制(merge 上游时保留): 手动刷新未取到新内容后的自动重试
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 手动更新未取到新内容后的自动重试
 // .x 独立新文件(me.rerere.rikkahub.x.context),上游无此文件,merge 零冲突。
 //
 // 为什么需要它:数据源是 CDN,推完之后各源刷新不同步,主源可能仍返回上一版(HTTP 仍是 200)。
 // 用户点「立即更新」时若恰好撞上这个窗口,拿到的还是旧数据 —— 而此时**再等几分钟就好了**。
 // 让人守在设置页反复点按钮是没道理的,故:记下点击时刻,之后自动重试几次。
 //
-// 重试用完即止(不无限重试),回落到按表内 TTL 的定时刷新 —— 重试是"给用户那次点击一个交代",
+// 重试用完即止(不无限重试),回落到按表内 TTL 的定时更新 —— 重试是"给用户那次点击一个交代",
 // 不是常驻轮询;常态的新鲜度由 TTL 负责。
 package me.rerere.rikkahub.x.context
 
@@ -15,7 +15,7 @@ import kotlinx.serialization.json.Json
 /** 自动重试的间隔(分钟)。第 N 次重试发生在点击后 N × 该值,故三次分别在 5 / 10 / 15 分钟。 */
 const val RETRY_INTERVAL_MINUTES: Long = 5
 
-/** 手动刷新未取到新内容后,最多自动重试几次。用完回落定时刷新。 */
+/** 手动更新未取到新内容后,最多自动重试几次。用完回落定时更新。 */
 const val MAX_RETRY_ATTEMPTS: Int = 3
 
 /**
@@ -50,17 +50,17 @@ data class RefreshRetryPlan(
     val hasAttemptsLeft: Boolean get() = attemptsDone < MAX_RETRY_ATTEMPTS
 
     /**
-     * 额度已用尽 —— 此后交给按 TTL 的自动刷新,不再由本链负责。
+     * 额度已用尽 —— 此后交给按 TTL 的定时更新,不再由本链负责。
      *
      * 与 [shouldContinue] 的区别很重要:用尽的链条不该再重试,但**仍要显示**出来,
-     * 好让界面把"已转交自动刷新"这句话说清楚。故两者必须是不同的判断。
+     * 好让界面把「改由定时更新获取」这句话说清楚。故两者必须是不同的判断。
      */
     val isExhausted: Boolean get() = !hasAttemptsLeft
 
     /**
      * 这条链此刻是否**仍在活动**(还有额度且在时限内)。
      *
-     * 自动刷新据此决定要不要让路 —— 让给一条已用尽的链,会让自动刷新被永久堵死。
+     * 定时更新据此决定要不要让路 —— 让给一条已用尽的链,会让定时更新被永久堵死。
      */
     fun isActive(now: Long): Boolean = shouldContinue(now)
 

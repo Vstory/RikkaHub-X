@@ -942,11 +942,11 @@
   <string name="setting_context_usage_ring_table_updated_at">Data date: %1$s</string>
   <string name="setting_context_usage_ring_table_missing">No table yet — connect to the network once</string>
   <string name="setting_context_usage_ring_refresh_now_title">Refresh table now</string>
-  <string name="setting_context_usage_ring_refresh_now_desc">Fetch the latest model context windows immediately, ignoring the automatic refresh interval</string>
-  <string name="setting_context_usage_ring_refreshing">Refreshing…</string>
-  <string name="setting_context_usage_ring_retry_pending">%1$d/%2$d retries done, next attempt %3$s</string>
-  <string name="setting_context_usage_ring_retry_handed_over">%1$d/%2$d retries done, handed over to automatic refresh</string>
-  <string name="setting_context_usage_ring_refreshed_at">Updated: %1$s</string>
+  <string name="setting_context_usage_ring_refresh_now_desc">Fetch the latest capacities now without waiting for the scheduled update; a few retries follow if nothing new is found</string>
+  <string name="setting_context_usage_ring_refreshing">Fetching…</string>
+  <string name="setting_context_usage_ring_retry_pending">“Refresh” found nothing new · %1$d/%2$d retries done · next retry %3$s</string>
+  <string name="setting_context_usage_ring_retry_handed_over">“Refresh” found nothing new · %1$d/%2$d retries done · now handled by the scheduled update</string>
+  <string name="setting_context_usage_ring_refreshed_at">Last checked: %1$s</string>
   <string name="setting_context_usage_ring_refresh_action">Refresh</string>
   <string name="setting_context_usage_ring_error_rejected">The remote table failed validation; kept the previous one</string>
   <string name="setting_context_usage_ring_error_unreachable">Network unreachable</string>

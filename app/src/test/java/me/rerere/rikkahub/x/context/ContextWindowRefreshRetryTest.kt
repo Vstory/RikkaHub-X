@@ -1,6 +1,6 @@
-// 手动刷新未取到新内容后的重试链测试。
+// 手动更新未取到新内容后的重试链测试。
 //
-// 规则要点:三次重试分别落在点击后 5 / 10 / 15 分钟,用完即止并回落到 TTL 定时刷新;
+// 规则要点:三次重试分别落在点击后 5 / 10 / 15 分钟,用完即止并回落到 TTL 定时更新;
 // 整链有时限,防止陈旧链条在进程重启后突然开跑。
 package me.rerere.rikkahub.x.context
 
@@ -99,18 +99,18 @@ class ContextWindowRefreshRetryTest {
     /**
      * 用尽的链条**不能**再算"活动"。
      *
-     * 自动刷新靠 isActive 决定是否让路,若用尽的链条仍算活动,自动刷新会被**永久堵死** ——
+     * 定时更新靠 isActive 决定是否让路,若用尽的链条仍算活动,定时更新会被**永久堵死** ——
      * 重试没了、定时更新也不跑,表从此不再更新。
      */
     @Test
     fun `exhausted plan is not active`() {
         val plan = RefreshRetryPlan(requestedAt = now, attemptsDone = MAX_RETRY_ATTEMPTS)
         assertTrue("用尽后仍要能被识别出来(界面要显示已转交)", plan.isExhausted)
-        assertFalse("用尽后不得拦着自动刷新", plan.isActive(now))
+        assertFalse("用尽后不得拦着定时更新", plan.isActive(now))
         assertFalse(plan.shouldContinue(now))
     }
 
-    /** 还有额度的链条算活动,自动刷新此时让路(不打断用户那次刷新的较真)。 */
+    /** 还有额度的链条算活动,定时更新此时让路(不打断用户那次刷新的较真)。 */
     @Test
     fun `plan with attempts left is active`() {
         val plan = RefreshRetryPlan(requestedAt = now, attemptsDone = 1)
@@ -128,7 +128,7 @@ class ContextWindowRefreshRetryTest {
     }
 
     /**
-     * 用尽的那一刻仍要在时限内 —— 否则"已转交自动刷新"这句话根本没机会显示:
+     * 用尽的那一刻仍要在时限内 —— 否则「改由定时更新获取」这句话根本没机会显示:
      * 三次重试在 15 分钟处结束,而时限是 30 分钟。
      */
     @Test

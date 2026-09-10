@@ -36,15 +36,23 @@ import java.util.concurrent.TimeUnit
 /**
  * 容量表的对外状态,供设置页展示与「立即更新」按钮使用。
  *
- * 只暴露「人需要知道的东西」:表的数据日期、是否正在拉取、上次失败原因。
+ * 只暴露「人需要知道的东西」:表的数据日期、最近一次检查的时刻、是否正在拉取、
+ * 上次失败原因、以及手动更新后的自动重试进度。
+ *
+ * 「数据日期」与「最近检查」是**两个不同的时间**,别再合成一个:前者是数据自己声明的版本时刻
+ * (数据没变它就不变),后者是本机最后一次成功获取的时刻(源可达但无新版时也会推进)。
  */
 data class ContextWindowTableStatus(
     /** 表内声明的**数据源时间**(`updatedAt`,ISO-8601);null 表示本地还没有可用表。 */
     val tableUpdatedAt: String? = null,
     /**
-     * 本机**最后一次成功拉取并落盘**的时刻(毫秒)。
+     * 本机**最后一次成功获取**的时刻(毫秒) —— 界面上叫「最近检查」。
      *
-     * 取值来自缓存文件的修改时间,故跨进程重启依然保留 —— 隔很久再进来看到的是上次真正更新的时刻,
+     * 注意它**不是**「最近一次数据变动」:各源可达但没有比本地更新的版本时(CDN 滞后),
+     * 也会推进这个时刻并同时前推 TTL 的计时起点 —— 否则每次进来都会重新拉一遍,
+     * 而结果只是再次确认"还没有新版"。
+     *
+     * 取值来自缓存文件的修改时间,故跨进程重启依然保留 —— 隔很久再进来看到的是上次真正检查的时刻,
      * 而不是"打开设置页"的时刻。
      */
     val lastRefreshedAtMillis: Long? = null,
@@ -57,7 +65,7 @@ data class ContextWindowTableStatus(
      * 正在进行的自动重试链;为 null 表示没有在重试。
      *
      * 只在**用户手动点过刷新却没取到新内容**时才有值 —— 那次点击该有个交代,
-     * 不能让用户守着界面反复点。重试额度用完即回落到 TTL 定时刷新。
+     * 不能让用户守着界面反复点。重试额度用完即回落到 TTL 定时更新。
      */
     val retry: RefreshRetryPlan? = null,
 )
@@ -134,7 +142,7 @@ object ContextWindowRepository {
     private var retryJob: Job? = null
 
     private val _status = MutableStateFlow(ContextWindowTableStatus())
-    /** 容量表状态(数据日期 / 是否拉取中 / 上次失败原因),供设置页展示与手动刷新按钮使用。 */
+    /** 容量表状态(数据日期 / 是否拉取中 / 上次失败原因),供设置页展示与手动更新按钮使用。 */
     val status: StateFlow<ContextWindowTableStatus> = _status.asStateFlow()
 
     /**
@@ -162,7 +170,7 @@ object ContextWindowRepository {
                 when {
                     // 还有额度 → 接着跑
                     plan.isActive(now) -> armRetry(app, plan)
-                    // 已用尽但仍在时限内 → 只需把它显示出来("已转交自动刷新"),
+                    // 已用尽但仍在时限内 → 只需把它显示出来(界面会说「改由定时更新获取」),
                     // 它会在下一次成功更新时被清掉
                     plan.isExhausted && plan.withinWindow(now) ->
                         _status.value = _status.value.copy(retry = plan)
@@ -247,8 +255,8 @@ object ContextWindowRepository {
      * **异步执行**:内部是网络请求,绝不能卡在 UI 线程上 —— 结果通过 [status] 反馈
      * (拉取中 / 成功后的数据日期 / 失败原因)。
      *
-     * 与自动刷新的差别只在"是否检查 TTL";**校验与拒表策略完全一致** ——
-     * 手动刷新同样不能绕过校验,否则按一下按钮就能把坏表灌进来。
+     * 与定时更新的差别只在"是否检查 TTL";**校验与拒表策略完全一致** ——
+     * 手动更新同样不能绕过校验,否则按一下按钮就能把坏表灌进来。
      */
     fun refreshNow() {
         val context = appContext ?: return
@@ -304,8 +312,8 @@ object ContextWindowRepository {
     /**
      * 开一条自动重试链:按 [RefreshRetryPlan] 的档位等待后重试,直至取到更新、额度用尽或超出时限。
      *
-     * 只在**手动刷新没取到新内容**后调用 —— 重试是给用户那次点击一个交代,不是常驻轮询;
-     * 额度用完即回落到按 TTL 的自动刷新(状态保留给界面显示,不再重试)。
+     * 只在**手动更新没取到新内容**后调用 —— 重试是给用户那次点击一个交代,不是常驻轮询;
+     * 额度用完即回落到按 TTL 的定时更新(状态保留给界面显示,不再重试)。
      */
     private fun armRetry(context: Context, plan: RefreshRetryPlan) {
         retryJob?.cancel()
@@ -317,7 +325,7 @@ object ContextWindowRepository {
             while (current.shouldContinue(System.currentTimeMillis())) {
                 val waitMillis = current.nextAttemptAt - System.currentTimeMillis()
                 if (waitMillis > 0) delay(waitMillis)
-                // 链条可能已被撤销(定时刷新抢先取到更新)或被新的点击替换 —— 都不该再跑
+                // 链条可能已被撤销(定时更新抢先取到更新)或被新的点击替换 —— 都不该再跑
                 if (_status.value.retry != current) return@launch
 
                 // 被并发刷新挡下(null)也算一次尝试:否则可能在同一档反复醒来空转。
@@ -333,9 +341,9 @@ object ContextWindowRepository {
                 }
             }
             if (current.isExhausted) {
-                // 额度用尽:状态**留着**,让"已转交自动刷新"看得见 —— 否则界面上只会剩一条失败原因,
+                // 额度用尽:状态**留着**,让「改由定时更新获取」看得见 —— 否则界面上只会剩一条失败原因,
                 // 用户无从知道后续还有人管。下一次成功更新会清掉它,故不会长期挂着。
-                Log.i(TAG, "重试 $MAX_RETRY_ATTEMPTS 次均未取到新内容,转交自动刷新")
+                Log.i(TAG, "重试 $MAX_RETRY_ATTEMPTS 次均未取到新内容,转交定时更新")
             } else {
                 // 超出时限(App 长时间未运行):那次点击的链子已无意义
                 Log.i(TAG, "自动重试超出时限,丢弃该链")
