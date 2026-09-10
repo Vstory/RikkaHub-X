@@ -7,6 +7,15 @@ on:
   # schedule:
   #   - cron: '0 9,18 * * *'
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型: nightly=随机临时签名测试版(默认) / release=正式固定签名(需配置 KEY_BASE64 等 secrets)'
+        required: true
+        default: nightly
+        type: choice
+        options:
+          - nightly
+          - release
 
 # 供应链加固(2026-09-09):第三方 action 全部 pin 到 commit SHA,
 # 避免可变 tag 被上游改动/账号被盗后投毒。
@@ -94,21 +103,31 @@ jobs:
 
       - name: Prepare build files
         run: |
-          # 每次构建生成一次性随机临时 keystore 签名（不依赖、不使用正式签名 secrets）。
-          # 随机口令 + 随机 dname → 每次产物签名指纹不同，仅供测试分发，升级需重装。
-          SP="$(openssl rand -hex 16)"
-          KP="$(openssl rand -hex 16)"
-          DN="CN=RikkaHub Nightly $(date +%s) O=RikkaHubDev C=CN"
-          keytool -genkeypair -v -keystore app/app.key \
-            -storepass "$SP" -alias rikkahub -keypass "$KP" \
-            -keyalg RSA -keysize 2048 -validity 3650 \
-            -dname "$DN" >/dev/null 2>&1
-          echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
-          echo "storePassword=$SP" >> local.properties
-          echo "keyAlias=rikkahub" >> local.properties
-          echo "keyPassword=$KP" >> local.properties
-          # Firebase 走占位配置（不接真实服务）
-          cp .github/google-services.placeholder.json app/google-services.json
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'nightly' }}"
+          if [ "$BUILD_TYPE" = "release" ] && [ -n "${{ secrets.KEY_BASE64 }}" ]; then
+            # 正式构建(release)且已提供密钥:解码正式 keystore → 固定正式签名,接真实 Firebase
+            echo "正式构建:使用正式密钥固定签名(commit ${{ github.sha }})"
+            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          else
+            # 其余(nightly 默认 / 未提供密钥):每次构建生成一次性随机临时 keystore 签名。
+            # 随机口令 + 随机 dname → 每次产物签名指纹不同,仅供测试分发,升级需重装。
+            # (即使仓库配了密钥,只要没主动选 release,仍走随机签名——2026-09-10 用户确认)
+            echo "nightly 构建:每次随机临时签名(commit ${{ github.sha }})"
+            SP="$(openssl rand -hex 16)"
+            KP="$(openssl rand -hex 16)"
+            DN="CN=RikkaHub Nightly $(date +%s) O=RikkaHubDev C=CN"
+            keytool -genkeypair -v -keystore app/app.key \
+              -storepass "$SP" -alias rikkahub -keypass "$KP" \
+              -keyalg RSA -keysize 2048 -validity 3650 \
+              -dname "$DN" >/dev/null 2>&1
+            echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
+            echo "storePassword=$SP" >> local.properties
+            echo "keyAlias=rikkahub" >> local.properties
+            echo "keyPassword=$KP" >> local.properties
+            cp .github/google-services.placeholder.json app/google-services.json
+          fi
 
       - name: Gradle Build
         run: |
