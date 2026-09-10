@@ -1,12 +1,17 @@
 name: Verify context window matching
 
-# 本分支专用验证(2026-09-10):容量表「结构化匹配」改造的 CI 验证。
-# 与 audit-tests.yml 的区别:只跑容量表这一个测试类,判定严格(有失败即 job 失败)。
-# 验证通过(全绿)后,源文件改动才会被挑进 main —— 本 workflow 与测试不进 main。
+# 容量表「结构化匹配」的回归守护(2026-09-10)。
+#
+# 为什么需要:ContextWindowTable 的匹配逻辑涉及版本组合并、有序不重叠匹配、前后缀、
+# v 前缀、隔文字版本与数字段边界,任一环节改动都可能静默算错 —— 症状是圆环百分比不对
+# 但不易察觉。故对相关文件做路径触发,平时不跑,改到才跑。
 on:
   push:
-    branches:
-      - 'feat/context-window-ordered-match'
+    paths:
+      - 'app/src/main/java/me/rerere/rikkahub/x/context/**'
+      - 'app/src/test/java/me/rerere/rikkahub/x/context/**'
+      - 'model-contexts/context-windows.json'
+      - '.github/workflows/verify-context-window.yml'
   workflow_dispatch:
 
 permissions:
