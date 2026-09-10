@@ -22,15 +22,18 @@ object ContextUsageCalculator {
 
     /**
      * 计算当前上下文占用 token。
-     * @return 有据可依的占用值(usage 实测 + 输入增量);从未有过 usage 且无输入文本时返回 null
+     *
+     * 只认「有据可依」的占用值:必须存在最近一次助手回复上报的 usage.promptTokens,
+     * 在其上叠加输入框未发送文本的粗估增量。
+     *
+     * **无任何 usage 时一律返回 null**(即便已有历史消息、输入框也有文字):
+     * 那种情况下唯一能算出的只有输入框增量,不含整段历史,返回它会让长会话显示
+     * 接近 0% 的占用(圆环门控只判 null 与否),属于误导性数值。宁可不显示。
+     *
+     * @return 有据可依的占用值;从未有过 usage 时返回 null
      */
     fun currentUsageTokens(messages: List<UIMessage>, inputText: String): Long? {
-        val reported = lastReportedPromptTokens(messages)
-        val extra = estimateExtraTokens(inputText)
-        return when {
-            reported != null -> reported + extra
-            inputText.isBlank() -> null
-            else -> extra.toLong()
-        }
+        val reported = lastReportedPromptTokens(messages) ?: return null
+        return reported + estimateExtraTokens(inputText)
     }
 }

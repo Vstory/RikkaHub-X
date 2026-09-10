@@ -208,11 +208,17 @@ object WorkspaceArchiver {
                             target.parentFile?.mkdirs()
                             target.delete()
                             val linkName = entry.linkName
-                            // [X-fix] 符号链接目标安全校验:绝对路径或含 ".." 段的链接
-                            // 会把外部路径引入工作区;不安全一律降级空文件(同建链失败分支)
-                            val segments = linkName.split('/')
-                            val safeLink = !linkName.startsWith("/") && ".." !in segments
-                            if (safeLink) {
+                            // 链接目标是**惰性数据**,解包时不会被跟随:
+                            // 「经符号链接向外写入」已由 resolveInside 的 canonicalPath 前缀校验拦下
+                            // (该路径会解析链接,一旦穿透则前缀不符而抛错),故此处按原样重建。
+                            //
+                            // 曾经此处对「绝对路径 / 含 ..」的链接一律降级为空文件 —— 那是错的:
+                            //   · rootfs 用户区(etc/alternatives、usr/local/lib、etc/rc*.d 等)
+                            //     本就大量使用绝对链接与 ../../ 形式的相对链接;
+                            //   · 导出端原样写出这些链接,导入端却把它们杀掉,
+                            //     导致自己产出的归档往返一次即静默丢内容(A1 已由 CI 证实)。
+                            // 安全性未削弱:向外的写入仍被 resolveInside 拒绝(SEC 用例守护)。
+                            if (linkName.isNotEmpty()) {
                                 runCatching {
                                     Files.createSymbolicLink(target.toPath(), Paths.get(linkName))
                                 }.onFailure {
@@ -220,7 +226,27 @@ object WorkspaceArchiver {
                                     target.writeBytes(ByteArray(0))
                                 }
                             } else {
+                                // 空目标无意义,createSymbolicLink 会抛 —— 直接落空文件
                                 target.writeBytes(ByteArray(0))
+                            }
+                        }
+
+                        // 硬链接(tar LF_LINK):条目自身 size=0,内容在目标条目里。
+                        // 不处理会被 else 当普通文件写出 0 字节 → 内容丢失(A2)。
+                        // 链接目标同样经 resolveInside 校验,不允许指向 staging 之外;
+                        // 无法建硬链接的环境(权限/跨设备)退化为复制内容。
+                        entry.isLink -> {
+                            target.parentFile?.mkdirs()
+                            target.delete()
+                            val linkTarget = resolveInside(stagingDir, entry.linkName)
+                            runCatching {
+                                Files.createLink(target.toPath(), linkTarget.toPath())
+                            }.onFailure {
+                                if (linkTarget.isFile) {
+                                    linkTarget.copyTo(target, overwrite = true)
+                                } else {
+                                    target.writeBytes(ByteArray(0))
+                                }
                             }
                         }
 
@@ -286,10 +312,9 @@ object WorkspaceArchiver {
             TarArchiveInputStream(gzip).use { tar ->
                 while (true) {
                     val entry: TarArchiveEntry = tar.nextEntry ?: break
-                    val segments = entry.name.split('/')
-                    if (entry.isDirectory) {
-                        if (segments.last().isEmpty()) segments.dropLast(1)
-                    }
+                    // 目录条目名常带尾斜杠(files/),过滤空段即可:原写法 `segments.dropLast(1)`
+                    // 的返回值未被接收,等于没执行,于是产出 "files/" 这类尾斜杠伪路径(A3)。
+                    val segments = entry.name.split('/').filter { it.isNotEmpty() }
                     var acc = ""
                     for ((i, seg) in segments.withIndex()) {
                         acc = if (acc.isEmpty()) seg else "$acc/$seg"
@@ -308,8 +333,10 @@ object WorkspaceArchiver {
                 while (true) {
                     val entry: TarArchiveEntry = tar.nextEntry ?: break
                     if (!entry.isDirectory && entry.name == targetName) {
-                        // [X-fix] size 防线:非正或超预算 → 视为不可读(null),避免 toInt() 溢出后 readNBytes 抛异常
-                        if (entry.size <= 0 || entry.size > MAX_MANIFEST_BYTES) return null
+                        // size 防线:越界/超限 → 视为不可读(null),避免 toInt() 溢出后 readNBytes 抛异常。
+                        // 这里读的是**归档内用户文件**(如 tools/tools.txt),不能用 manifest 的 512KB 阈值:
+                        // 否则稍大的清单会被静默当成读不到(实测 600KB 即返回 null,A4)。
+                        if (entry.size < 0 || entry.size > MAX_ARCHIVE_FILE_BYTES) return null
                         return tar.readNBytes(entry.size.toInt())
                     }
                 }
@@ -323,6 +350,9 @@ object WorkspaceArchiver {
     private const val IO_BUFFER = 64 * 1024
     private const val MANIFEST_ESTIMATE_BYTES = 4096L
     private const val MAX_MANIFEST_BYTES = 512 * 1024
+
+    /** 归档内单个**用户文件**(tools/tools.txt 等)的读取上限,与 manifest 阈值分开(A4) */
+    private const val MAX_ARCHIVE_FILE_BYTES = 8 * 1024 * 1024
 
     private data class Section(val dir: File, val archiveName: String)
 

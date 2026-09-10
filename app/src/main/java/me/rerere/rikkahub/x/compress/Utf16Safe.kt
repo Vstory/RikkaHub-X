@@ -38,7 +38,13 @@ fun utf16SafeTailStart(value: String, start: Int): Int {
 fun truncateHeadUtf16Safe(value: String, maxLength: Int): String {
     if (maxLength <= 0) return ""
     if (value.length <= maxLength) return value
-    return value.substring(0, utf16SafeHeadEnd(value, maxLength))
+    var end = utf16SafeHeadEnd(value, maxLength)
+    // 首字符就是代理对时回退到 0 会把整段内容丢成空串;宁可多留一个代理对(1 码元)
+    // 也不返回空串 —— 调用点的预算(数万字符)远大于 1,这点溢出无实际影响。
+    if (end == 0 && value.length >= 2 && isHighSurrogate(value[0]) && isLowSurrogate(value[1])) {
+        end = 2
+    }
+    return value.substring(0, end)
 }
 
 /** 从尾部截断到 [maxLength] 码元以内,且不切断代理对。 */

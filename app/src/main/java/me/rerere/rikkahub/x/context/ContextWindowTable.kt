@@ -31,9 +31,27 @@ data class ContextWindowExact(val id: String = "", val contextWindow: Int = 0, v
 @Serializable
 data class ContextWindowRule(val keywords: List<String> = emptyList(), val contextWindow: Int = 0, val note: String = "")
 
-/** 归一化 modelId/keyword:小写 + 去分隔符,便于模糊匹配 */
+/**
+ * 训练语料里的「日期戳」:2024-08-06 / 20241022 / 2024_08_06 等。
+ *
+ * 必须**先于**分隔符剥离处理:OpenAI 风格的 `gpt-4o-2024-08-06` 剥掉日期后
+ * 才等价于 `gpt-4o`,否则日期里的 6/1 会被当成版本号命中 `["gpt","6"]`
+ * 这类规则(实测把 128K 的 gpt-4o 报成 1.05M)。
+ */
+private val DATE_STAMP = Regex("""\d{4}[-_/.]?\d{2}[-_/.]?\d{2}""")
+
+/**
+ * 归一化 modelId/keyword:剔除日期戳 → 小写 → 去分隔符,便于模糊匹配。
+ *
+ * 已知局限:纯数字 keyword 仍可能与**版本号**里的数字撞车(如
+ * `claude-3-5-sonnet` 里的 "5" 会让 `["claude","sonnet","5"]` 命中,
+ * 报 1M 而实际 200K)。彻底解决需按 token 位置有序匹配或语义解析,
+ * 超出本表「子串匹配」的设计范围,故暂按数据侧规避(规则从具体到泛化排序)。
+ */
 private fun normalize(raw: String): String =
-    raw.lowercase().replace(Regex("[-_/.\\s]"), "")
+    raw.lowercase()
+        .replace(DATE_STAMP, "")
+        .replace(Regex("[-_/.\\s]"), "")
 
 /**
  * 按 modelId 查容量。命中返回容量值,未命中返回 null(调用方决定隐藏圆环)。
