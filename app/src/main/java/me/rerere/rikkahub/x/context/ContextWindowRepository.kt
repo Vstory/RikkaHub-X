@@ -156,9 +156,19 @@ object ContextWindowRepository {
                 tableUpdatedAt = table?.updatedAt,
                 lastRefreshedAtMillis = lastRefreshMillis(app),
             )
-            // 上次点击触发的重试链若仍在时限内,接着跑 —— 用户点完就切走是常态
-            readRetry(app)?.takeIf { it.shouldContinue(System.currentTimeMillis()) }?.let {
-                armRetry(app, it)
+            // 上次点击触发的重试链:用户点完就切走是常态,故要把它的去向恢复出来
+            readRetry(app)?.let { plan ->
+                val now = System.currentTimeMillis()
+                when {
+                    // 还有额度 → 接着跑
+                    plan.isActive(now) -> armRetry(app, plan)
+                    // 已用尽但仍在时限内 → 只需把它显示出来("已转交自动刷新"),
+                    // 它会在下一次成功更新时被清掉
+                    plan.isExhausted && plan.withinWindow(now) ->
+                        _status.value = _status.value.copy(retry = plan)
+                    // 超出时限:那次点击早已过时,信息也不再对人有意义
+                    else -> clearRetryState(app)
+                }
             }
             refreshScope.launch { refreshIfNeeded() }
         }
@@ -200,8 +210,9 @@ object ContextWindowRepository {
 
     private suspend fun refreshIfNeeded() {
         val context = appContext ?: return
-        // 重试链正在跑就别和它抢 —— 那条链正在替用户这次刷新较真
-        if (_status.value.retry != null) return
+        // 重试链正在跑就别和它抢 —— 那条链正在替用户这次刷新较真。
+        // 但只让给**还在活动**的链:已用尽的链已经把这活交回来了,再让路就等于永久不刷新。
+        if (_status.value.retry?.isActive(System.currentTimeMillis()) == true) return
         if (!isStale(context)) return
         refresh(context)
     }
@@ -294,7 +305,7 @@ object ContextWindowRepository {
      * 开一条自动重试链:按 [RefreshRetryPlan] 的档位等待后重试,直至取到更新、额度用尽或超出时限。
      *
      * 只在**手动刷新没取到新内容**后调用 —— 重试是给用户那次点击一个交代,不是常驻轮询;
-     * 额度用完即回落到按 TTL 的定时刷新。
+     * 额度用完即回落到按 TTL 的自动刷新(状态保留给界面显示,不再重试)。
      */
     private fun armRetry(context: Context, plan: RefreshRetryPlan) {
         retryJob?.cancel()
@@ -314,13 +325,22 @@ object ContextWindowRepository {
                 if (refresh(context) == RefreshOutcome.UPDATED) return@launch
 
                 current = current.afterFailure()
-                if (!current.shouldContinue(System.currentTimeMillis())) break
+                // 每失败一次就把进度落盘:界面要显示"已重试几次",且进程被杀后不该从头再来
                 persistRetry(context, current)
                 _status.value = _status.value.copy(retry = current)
-                Log.i(TAG, "第 ${current.attemptNumber}/${MAX_RETRY_ATTEMPTS} 次重试已排定")
+                if (current.isActive(System.currentTimeMillis())) {
+                    Log.i(TAG, "第 ${current.attemptNumber}/${MAX_RETRY_ATTEMPTS} 次重试已排定")
+                }
             }
-            Log.i(TAG, "自动重试结束(额度用尽或超出时限),回落定时刷新")
-            clearRetryState(context)
+            if (current.isExhausted) {
+                // 额度用尽:状态**留着**,让"已转交自动刷新"看得见 —— 否则界面上只会剩一条失败原因,
+                // 用户无从知道后续还有人管。下一次成功更新会清掉它,故不会长期挂着。
+                Log.i(TAG, "重试 $MAX_RETRY_ATTEMPTS 次均未取到新内容,转交自动刷新")
+            } else {
+                // 超出时限(App 长时间未运行):那次点击的链子已无意义
+                Log.i(TAG, "自动重试超出时限,丢弃该链")
+                clearRetryState(context)
+            }
         }
     }
 

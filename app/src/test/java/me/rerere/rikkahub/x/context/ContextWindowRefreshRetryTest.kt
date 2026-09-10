@@ -94,6 +94,51 @@ class ContextWindowRefreshRetryTest {
         assertNull(RefreshRetryPlan.decode("""{"attemptsDone": 1}"""))  // 缺 requestedAt
     }
 
+    // ── 「用尽」与「仍在活动」必须分开 ────────────────────────────
+
+    /**
+     * 用尽的链条**不能**再算"活动"。
+     *
+     * 自动刷新靠 isActive 决定是否让路,若用尽的链条仍算活动,自动刷新会被**永久堵死** ——
+     * 重试没了、定时更新也不跑,表从此不再更新。
+     */
+    @Test
+    fun `exhausted plan is not active`() {
+        val plan = RefreshRetryPlan(requestedAt = now, attemptsDone = MAX_RETRY_ATTEMPTS)
+        assertTrue("用尽后仍要能被识别出来(界面要显示已转交)", plan.isExhausted)
+        assertFalse("用尽后不得拦着自动刷新", plan.isActive(now))
+        assertFalse(plan.shouldContinue(now))
+    }
+
+    /** 还有额度的链条算活动,自动刷新此时让路(不打断用户那次刷新的较真)。 */
+    @Test
+    fun `plan with attempts left is active`() {
+        val plan = RefreshRetryPlan(requestedAt = now, attemptsDone = 1)
+        assertFalse(plan.isExhausted)
+        assertTrue(plan.isActive(now))
+    }
+
+    /** 超时限的链条既不该重试也不该拦路。 */
+    @Test
+    fun `expired plan is not active`() {
+        val plan = RefreshRetryPlan(requestedAt = now, attemptsDone = 1)
+        val later = now + RETRY_WINDOW_MINUTES * minute + 1
+        assertTrue("额度还在", plan.hasAttemptsLeft)
+        assertFalse("但已超时限,不该算活动", plan.isActive(later))
+    }
+
+    /**
+     * 用尽的那一刻仍要在时限内 —— 否则"已转交自动刷新"这句话根本没机会显示:
+     * 三次重试在 15 分钟处结束,而时限是 30 分钟。
+     */
+    @Test
+    fun `exhaustion happens inside the window so the handover can be shown`() {
+        var plan = RefreshRetryPlan.newRequest(now)
+        repeat(MAX_RETRY_ATTEMPTS) { plan = plan.afterFailure() }
+        assertTrue(plan.isExhausted)
+        assertTrue("用尽时应仍在时限内,否则界面来不及交代去向", plan.withinWindow(plan.nextAttemptAt))
+    }
+
     /** 未知字段要能忽略:升级/降级时格式可能多出字段,不该因此丢掉整条链。 */
     @Test
     fun `unknown fields are tolerated`() {

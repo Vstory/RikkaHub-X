@@ -49,6 +49,21 @@ data class RefreshRetryPlan(
     /** 还有重试额度。 */
     val hasAttemptsLeft: Boolean get() = attemptsDone < MAX_RETRY_ATTEMPTS
 
+    /**
+     * 额度已用尽 —— 此后交给按 TTL 的自动刷新,不再由本链负责。
+     *
+     * 与 [shouldContinue] 的区别很重要:用尽的链条不该再重试,但**仍要显示**出来,
+     * 好让界面把"已转交自动刷新"这句话说清楚。故两者必须是不同的判断。
+     */
+    val isExhausted: Boolean get() = !hasAttemptsLeft
+
+    /**
+     * 这条链此刻是否**仍在活动**(还有额度且在时限内)。
+     *
+     * 自动刷新据此决定要不要让路 —— 让给一条已用尽的链,会让自动刷新被永久堵死。
+     */
+    fun isActive(now: Long): Boolean = shouldContinue(now)
+
     /** 是否仍在整体时限内。 */
     fun withinWindow(now: Long): Boolean = now <= requestedAt + RETRY_WINDOW_MINUTES * 60_000L
 
