@@ -428,6 +428,17 @@ class WorkspaceRepository(
      *  - rootfs 用户区:rootfs 已就绪则立即合入 linux/;否则整包暂存 .rikkahub/pending_restore.tar.gz,
      *    待用户先安装 rootfs(重装只重置 linux/,files 不受影响)后由 finishPendingUserAreaImport 合入
      */
+    /**
+     * 解压预算(audit A5 加固):取「可用空间的 80%」与默认上限的较小者 ——
+     * 既要挡住 tar bomb,也不能把「合法地很大」的工作区误拒。
+     * `usableSpace` 取不到时返回 0 → 退回默认上限(不因查不到空间就拒绝导入)。
+     */
+    private fun extractBudget(dir: File): Long {
+        val usable = runCatching { dir.usableSpace }.getOrDefault(0L)
+        if (usable <= 0L) return WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES
+        return minOf(usable / 10 * 8, WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES)
+    }
+
     suspend fun importWorkspaceArchive(
         file: File,
         onProgress: (WorkspaceArchiveProgress) -> Unit = {},
@@ -447,7 +458,14 @@ class WorkspaceRepository(
             manager.ensureWorkspace(target.root)
             val metaDir = File(manager.workspaceDir(target.root), META_DIR).apply { mkdirs() }
             val staging = File(metaDir, IMPORT_STAGING_DIR)
-            file.inputStream().use { WorkspaceArchiver.extractArchive(it, staging, onProgress) }
+            file.inputStream().use {
+                WorkspaceArchiver.extractArchive(
+                    input = it,
+                    stagingDir = staging,
+                    onProgress = onProgress,
+                    maxTotalBytes = extractBudget(metaDir),
+                )
+            }
 
             // 1. files 工作区
             val stagingFiles = File(staging, "files")
@@ -512,7 +530,13 @@ class WorkspaceRepository(
         var toolsRestored = false
         withContext(Dispatchers.IO) {
             val staging = File(metaDir, "${IMPORT_STAGING_DIR}-finalize")
-            pending.inputStream().use { WorkspaceArchiver.extractArchive(it, staging) }
+            pending.inputStream().use {
+                WorkspaceArchiver.extractArchive(
+                    input = it,
+                    stagingDir = staging,
+                    maxTotalBytes = extractBudget(manager.workspaceDir(workspace.root)),
+                )
+            }
             val stagingLinux = File(staging, "linux")
             if (stagingLinux.isDirectory) {
                 mergeUserArea(stagingLinux, workspace.root)
