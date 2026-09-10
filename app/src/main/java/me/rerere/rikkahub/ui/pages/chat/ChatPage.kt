@@ -1,4 +1,5 @@
 // [X-custom] RikkaHub-X 定制(merge 上游时保留): 压缩通知权限请求 + 会话模型切换 UI
+//              + 标题栏助手/模型解析对齐发送侧口径(详见 x/chat/ConversationAssistantScope.kt)
 package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
@@ -72,10 +73,11 @@ import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
-import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.x.chat.getConversationAssistant
+import me.rerere.rikkahub.x.chat.getConversationChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedASRProvider
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
@@ -712,11 +714,11 @@ private fun TopBar(
                 color = Color.Transparent,
             ) {
                 Column {
-                    val assistant = settings.getCurrentAssistant()
-                    // 会话级模型覆盖优先,回退助手/全局默认(与输入框模型选择器同源,
-                    // 否则切换会话模型后此处仍显示助手默认,不随 conversation.modelId 更新)
-                    val model = conversation.modelId?.let { settings.findModelById(it) }
-                        ?: settings.getCurrentChatModel()
+                    // [X-custom] UI 侧口径对齐发送侧:会话绑定助手(详见 x/chat/ConversationAssistantScope.kt)。
+                    // 否则全局助手被 Web UI 写偏后,标题栏会显示另一个助手的名字与模型。
+                    val assistant = settings.getConversationAssistant(conversation)
+                    // 会话当前生效模型:会话级覆盖优先,回退助手/全局默认(与输入框模型选择器同源)
+                    val model = settings.getConversationChatModel(conversation)
                     val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
                     Text(
                         text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
