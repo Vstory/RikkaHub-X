@@ -255,7 +255,10 @@ class ContextWindowTableOrderedMatchTest {
 
     @Test
     fun `unknown ids fall back to the default window`() {
-        assertLookup("llama-3.3-70b", 200_000)
+        // 样例须是**任何规则都命中不了**的 id:此前用 llama-3.3-70b,
+        // 本轮补录 llama 族后它成了已知模型,兜底用例反被撞翻。
+        assertLookup("acme-unknown-model-v9", 200_000)
+        assertLookup("some-random-name", 200_000)
     }
 
     /** 空白 id 不做匹配(调用方据此隐藏圆环)。 */
