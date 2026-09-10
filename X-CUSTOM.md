@@ -19,6 +19,11 @@
 | `app/.../x/context/ContextUsageCalculator.kt` | 上下文已用量:最近 usage.promptTokens + 输入估算 | ✅ `me.rerere.rikkahub.x.context` |
 | `app/.../x/ui/ContextUsageRing.kt` | 上下文用量圆环组件(Codex 风格,分档变色) | ✅ `me.rerere.rikkahub.x.ui` |
 | `app/.../x/chat/ChatDraftStore.kt` | 会话输入草稿持久化(issue 1715):按会话 key 存 SharedPreferences,纯文本,进入恢复/防抖保存/发送后自动清 | ✅ `me.rerere.rikkahub.x.chat` |
+| `app/.../x/compress/Utf16Safe.kt` | UTF-16 安全切割(head/tail/chunks/halves),避免切出孤立代理字符(移植 kelivo) | ✅ `me.rerere.rikkahub.x.compress` |
+| `app/.../x/compress/CompressBudget.kt` | 压缩请求字符预算:模型窗口 →(1-30%)×1.6,硬上限 10 万字符(移植 kelivo) | ✅ 同上 |
+| `app/.../x/compress/CompressRetry.kt` | 上下文超限识别 + 递归二分重试(树共享 5 次切分/单段下限 512)(移植 kelivo) | ✅ 同上 |
+| `app/.../x/compress/CompressChunker.kt` | 压缩按字符预算分块 + 摘要多层合并打包(移植 kelivo) | ✅ 同上 |
+| `app/src/test/.../x/compress/*Test.kt` | X 压缩链单测 29 用例(UTF-16/预算/重试/分块) | ✅ 同上 |
 | `app/.../assets/context-windows/context-windows.json` | 内置容量表(与远端 model-contexts/ 同构,离线兜底) | 资源文件 |
 | `.github/google-services.placeholder.json` | CI 占位配置 | 非代码,仓库文件+cp |
 | `scripts/pangu_format_resources.py` | 盘古之白资源格式化脚本 | 工程脚本 |
@@ -41,7 +46,7 @@
 | `data/ai/mcp/McpConfig.kt` | MCP 服务器名解耦:`displayName`(本地显示名,可中文)+ `name`(内部标识,ASCII);协议/工具链路仍用 `name`=上游逻辑 |
 | `ui/components/ai/McpPicker.kt` | MCP 服务器显示改 `uiName`(displayName 优先,可中文) |
 | `ui/pages/setting/SettingMcpPage.kt` | MCP 设置双名称输入(显示名+内部标识,ASCII 违规=上游同警告);导入非 ASCII key 自动生成内部名;展示用 uiName |
-| `service/ChatService.kt` | 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue #1314/#1663/#1820: 停止/异常落库,initializeConversation 防覆盖流式态) |
+| `service/ChatService.kt` | 压缩通知 + 会话级模型覆盖优先读取 + 会话切换消息保持修复(上游 issue #1314/#1663/#1820: 停止/异常落库,initializeConversation 防覆盖流式态) + **压缩执行健壮性**(`compressConversation`:窗口感知字符预算 / 超限递归二分重试 / 多层合并收敛为单段摘要,调 `x.compress.*`;保留段仍用上游 `keepRecentMessages=32` 原始消息逻辑,未做 user-message 计数改造) |
 | `data/ai/transformers/OcrTransformer.kt` | OCR 仅识别本轮新增图片,历史图片只读缓存/占位,纯文字续聊不再强制识别(上游 issue #1736);缓存窗口 3天/64→30天/256 |
 | `ui/pages/chat/ChatList.kt` | 消息来源显示增强(上游 issue #1805):providerNameById 反查所属路由 + 模型切换分隔线(相邻助手回复 modelId 变化时居中提示) |
 | `ui/components/message/ChatMessage.kt` | 消息来源显示增强(上游 issue #1805):新增 providerName 参数,助手消息末尾灰字落款"路由名 · 模型名" |

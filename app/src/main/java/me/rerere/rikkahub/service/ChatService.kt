@@ -89,6 +89,14 @@ import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
+// [X-custom] 压缩执行健壮性(对照 X-CUSTOM.md 保留):.x 独立包,合并上游零冲突
+import me.rerere.rikkahub.x.compress.CompressBudget
+import me.rerere.rikkahub.x.compress.MAX_MERGE_ROUNDS
+import me.rerere.rikkahub.x.compress.chunkMessagesForCompress
+import me.rerere.rikkahub.x.compress.chunkPlainTexts
+import me.rerere.rikkahub.x.compress.summarizeWithContextRetry
+import me.rerere.rikkahub.x.compress.truncateHeadUtf16Safe
+import me.rerere.rikkahub.x.context.ContextWindowRepository
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -1027,7 +1035,9 @@ class ChatService(
 
         val providerHandler = providerManager.getProviderByType(provider)
 
-        val maxMessagesPerChunk = 256
+        // [X-custom] 压缩执行健壮性:窗口感知预算 / 超限重试 / 多层合并(对照 X-CUSTOM.md 保留)
+        // 移植 kelivo 策略(见 x/compress/);保留段策略仍用 RikkaHub 原逻辑
+        // (keepRecentMessages 条原始消息,默认 32,不做 user-message 计数改造)。
         val allMessages = conversation.currentMessages
 
         // Split messages into those to compress and those to keep
@@ -1045,18 +1055,16 @@ class ChatService(
             messagesToKeep = emptyList()
         }
 
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            val left = splitMessages(messages.subList(0, mid))
-            val right = splitMessages(messages.subList(mid, messages.size))
-            return left + right
-        }
+        // 单请求字符预算:模型窗口 → (1-30%) × 1.6 chars/token,硬上限 10 万字符。
+        // 上游原先按「消息条数 256」分块,块大小与模型窗口无关,极易触发供应商超限。
+        ContextWindowRepository.ensureLoaded(context)
+        val requestChars = CompressBudget.requestCharBudget(
+            ContextWindowRepository.contextWindowFor(model.modelId)
+        )
 
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
+        suspend fun compressContent(content: String): String {
             val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
+                "content" to content,
                 "target_tokens" to targetTokens.toString(),
                 "additional_context" to if (additionalPrompt.isNotBlank()) {
                     "Additional instructions from user: $additionalPrompt"
@@ -1074,17 +1082,49 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
+        // 单块摘要:命中「上下文超限」时自动二分重试(整棵重试树最多 5 次切分、单段下限 512 字符)。
+        // 上游无任何超限兜底 → 长对话压缩一旦超限即整次失败,这里改为自动降级直到成功。
+        suspend fun compressChunk(content: String): String = summarizeWithContextRetry(
+            text = content,
+            summarize = { compressContent(it) },
+            onSplitRetry = { error, chars ->
+                Log.w(TAG, "compress: context-length split-retry (chars=$chars): ${error.message}")
+            },
+        )
+
+        val chunks = chunkMessagesForCompress(messagesToCompress, requestChars)
+        if (chunks.isEmpty()) {
+            throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
+        }
+
         val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
+            chunks.map { chunk -> async { compressChunk(chunk) } }
                 .awaitAll()
         }
 
-        // Create new conversation with compressed history as multiple user messages + kept messages
-        val newMessageNodes = buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
+        // 多层合并:把 N 段摘要逐轮合并收敛为单段摘要(最多 8 轮,防止病态输入无限合并)。
+        // 上游无合并步骤 → N 块产生 N 条独立摘要直接插入,产物零散且可能互相矛盾。
+        var pending = compressedSummaries
+        var mergeRound = 0
+        while (pending.size > 1 && mergeRound < MAX_MERGE_ROUNDS) {
+            mergeRound++
+            val packed = chunkPlainTexts(pending, requestChars)
+            pending = coroutineScope {
+                packed.map { group -> async { compressChunk(group) } }
+                    .awaitAll()
             }
+        }
+        val finalSummary = if (pending.size > 1) {
+            // 轮数用尽仍有剩余 → 截断(UTF-16 安全)后做最后一次合并
+            compressChunk(truncateHeadUtf16Safe(pending.joinToString("\n\n"), requestChars))
+        } else {
+            pending.singleOrNull()
+                ?: throw IllegalStateException("Failed to generate compressed summary")
+        }
+
+        // Create new conversation with compressed history as a single summary + kept messages
+        val newMessageNodes = buildList {
+            add(UIMessage.user(finalSummary).toMessageNode())
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
         val newConversation = conversation.copy(
