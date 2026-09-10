@@ -177,6 +177,9 @@ fun ChatInput(
         }
     }
     val ctxUsage = ctxBreakdown?.usedTokens
+    val ctxCumulative = remember(conversation.messageNodes) {
+        ContextUsageCalculator.cumulativeUsage(conversation.currentMessages)
+    }
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeBlurStyle.Material3 {
         blurRadius(12.dp)
@@ -432,10 +435,11 @@ fun ChatInput(
         onSelect = onUpdateChatModel,
     )
 
-    // [X-custom] 上下文用量明细(圆环点击打开);从明细里可进入压缩
+    // [X-custom] 上下文窗口弹窗(圆环点击打开,Codex /status 版式);从弹窗里可进入压缩
     if (showUsageDialog && ctxBreakdown != null) {
         ContextUsageDialog(
             breakdown = ctxBreakdown,
+            cumulative = ctxCumulative,
             messageCount = conversation.currentMessages.size,
             modelName = ctxModelId,
             onDismiss = { showUsageDialog = false },

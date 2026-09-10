@@ -1,11 +1,11 @@
-// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文用量明细弹窗
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 上下文窗口弹窗
 // .x 独立新文件(me.rerere.rikkahub.x.ui),上游无此文件,merge 零冲突。
 //
-// 参照 OpenAI Codex 的上下文展示:总量与占比 + 构成分解 + 剩余可用。
-// 数据来源分两类,展示时分别标注,不把估算值伪装成实测值:
-//   · 上一轮请求输入 / 上一轮回复输出 —— 模型 API 上报的权威值
-//   · 输入框待发送 —— 按字符估算
-// 分解数值由 ContextUsageCalculator.breakdown 纯函数算出,与圆环同口径。
+// 版式对齐 OpenAI Codex 的 /status 卡片(codex-rs/tui/src/status/card.rs):
+//   主行   「89% left (123K used / 272K)」 → 剩余百分比为主指标 + 已用/窗口
+//   累计行 「1.5M total (1.2M input + 300K output)」
+//   进度条  固定 20 段、按「剩余」比例填充(render_limit_progress_bar)
+// 数字与条形几何由 ContextUsageFormat / ContextUsageCalculator 纯函数产出,与圆环同源。
 package me.rerere.rikkahub.x.ui
 
 import androidx.compose.foundation.background
@@ -30,37 +30,34 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.x.context.ContextUsageCalculator
-
-/** 千分位分组(不依赖 Locale,行为稳定)。 */
-private fun groupDigits(value: Long): String {
-    val s = value.toString()
-    if (s.length <= 3) return s
-    return s.reversed().chunked(3).joinToString(",").reversed()
-}
+import me.rerere.rikkahub.x.context.ContextUsageFormat
 
 /**
- * 上下文用量明细弹窗。
+ * 上下文窗口弹窗(Codex /status 卡片版式)。
  *
- * @param breakdown 占用分解(由 [ContextUsageCalculator.breakdown] 算出)
+ * @param breakdown 窗口占用分解(与圆环同源)
+ * @param cumulative 会话累计用量
  * @param messageCount 当前会话消息条数
  * @param modelName 当前生效模型标识
  */
 @Composable
 fun ContextUsageDialog(
     breakdown: ContextUsageCalculator.UsageBreakdown,
+    cumulative: ContextUsageCalculator.CumulativeUsage,
     messageCount: Int,
     modelName: String?,
     onDismiss: () -> Unit,
     onCompressClick: () -> Unit,
 ) {
-    val percent = breakdown.percent
-    val percentInt = breakdown.percentInt
-    val accent = usageColor(percent)
+    val percentRemaining = breakdown.remainingPercent
+    val accent = usageColor(breakdown.percent)
+    val compact = ContextUsageFormat::compactTokens
 
     // 构成分段:上一轮输入 / 上一轮输出 / 输入框待发送 / 剩余
     val segments = listOf(
@@ -90,62 +87,80 @@ fun ContextUsageDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.context_usage_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                // 总量与占比
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+                // ── 主指标:剩余百分比(Codex 以「剩余」为准)──
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        text = "$percentInt%",
+                        text = "$percentRemaining%",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = accent,
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.padding(bottom = 3.dp)) {
-                        Text(
-                            text = stringResource(
-                                R.string.context_usage_used_of,
-                                groupDigits(breakdown.usedTokens),
-                                groupDigits(breakdown.capacityTokens.toLong()),
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Text(
-                            text = stringResource(
-                                R.string.context_usage_remaining_value,
-                                breakdown.remainingPercent,
-                                groupDigits(breakdown.remainingTokens),
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.context_usage_remaining_suffix),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
                 }
 
-                // 构成条
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(10.dp)
-                        .clip(RoundedCornerShape(5.dp)),
-                ) {
-                    segments.forEach { (_, value, color) ->
-                        Box(
-                            modifier = Modifier
-                                .weight(value.toFloat())
-                                .fillMaxWidth()
-                                .height(10.dp)
-                                .background(color),
+                // ── 进度条:20 段,按剩余比例填充 ──
+                SegmentedBar(
+                    filled = ContextUsageFormat.filledSegments(percentRemaining.toDouble()),
+                    total = ContextUsageFormat.BAR_SEGMENTS,
+                    filledColor = accent,
+                )
+
+                // ── 「123K 已用 / 272K」(Codex 的 used / window)──
+                Text(
+                    text = stringResource(
+                        R.string.context_usage_used_of_compact,
+                        compact(breakdown.usedTokens),
+                        compact(breakdown.capacityTokens.toLong()),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                HorizontalDivider()
+
+                // ── 累计用量(Codex 的 Token usage 行)──
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ContextUsageInfoRow(
+                        label = stringResource(R.string.context_usage_cumulative),
+                        value = stringResource(
+                            R.string.context_usage_cumulative_value,
+                            compact(cumulative.totalTokens),
+                            compact(cumulative.inputTokens),
+                            compact(cumulative.outputTokens),
+                        ),
+                    )
+                    if (!modelName.isNullOrBlank()) {
+                        ContextUsageInfoRow(
+                            label = stringResource(R.string.context_usage_model),
+                            value = modelName,
                         )
                     }
+                    ContextUsageInfoRow(
+                        label = stringResource(R.string.context_usage_messages),
+                        value = messageCount.toString(),
+                    )
                 }
 
-                // 构成明细
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider()
+
+                // ── 窗口构成 ──
+                Text(
+                    text = stringResource(R.string.context_usage_breakdown),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     segments.forEach { (label, value, color) ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
+                                    .size(7.dp)
                                     .clip(CircleShape)
                                     .background(color),
                             )
@@ -156,27 +171,11 @@ fun ContextUsageDialog(
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
-                                text = groupDigits(value),
+                                text = compact(value),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    }
-                }
-
-                HorizontalDivider()
-
-                // 会话信息
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ContextUsageInfoRow(
-                        label = stringResource(R.string.context_usage_messages),
-                        value = messageCount.toString(),
-                    )
-                    if (!modelName.isNullOrBlank()) {
-                        ContextUsageInfoRow(
-                            label = stringResource(R.string.context_usage_model),
-                            value = modelName,
-                        )
                     }
                 }
 
@@ -198,6 +197,36 @@ fun ContextUsageDialog(
             }
         },
     )
+}
+
+/**
+ * 分段进度条:等宽格子,前 [filled] 格实心。
+ *
+ * 几何沿用 Codex 的 20 段制;此处画成格子而非拼接 █/░ 字符,
+ * 避免依赖设备字体字形,也让颜色能随占用档位变化。
+ */
+@Composable
+private fun SegmentedBar(
+    filled: Int,
+    total: Int,
+    filledColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val emptyColor = MaterialTheme.colorScheme.surfaceVariant
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        repeat(total) { index ->
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(if (index < filled) filledColor else emptyColor),
+            )
+        }
+    }
 }
 
 @Composable

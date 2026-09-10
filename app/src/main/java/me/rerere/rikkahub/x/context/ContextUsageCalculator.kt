@@ -65,6 +65,34 @@ object ContextUsageCalculator {
     /** 输入框未发送文本的粗估 token 增量。 */
     fun estimateExtraTokens(inputText: String): Int = inputText.length / CHARS_PER_TOKEN
 
+    /** 会话累计 token 用量(对应 Codex `/status` 的 Token usage 行)。 */
+    data class CumulativeUsage(
+        /** 各轮请求的输入合计(= 各轮真实送出的历史,逐轮累加)。 */
+        val inputTokens: Long,
+        /** 各轮回复的输出合计。 */
+        val outputTokens: Long,
+    ) {
+        /** 入 + 出。 */
+        val totalTokens: Long get() = inputTokens + outputTokens
+    }
+
+    /**
+     * 统计会话累计用量。
+     *
+     * 逐条累加各轮上报的 promptTokens / completionTokens,反映「一共消耗了多少」,
+     * 与 [currentUsageTokens] 的「此刻窗口占了多少」是两回事,展示时须分开标注。
+     */
+    fun cumulativeUsage(messages: List<UIMessage>): CumulativeUsage {
+        var input = 0L
+        var output = 0L
+        messages.forEach { message ->
+            val usage = message.usage ?: return@forEach
+            if (usage.promptTokens > 0) input += usage.promptTokens
+            if (usage.completionTokens > 0) output += usage.completionTokens
+        }
+        return CumulativeUsage(input, output)
+    }
+
     /**
      * 计算当前上下文占用 token。
      *
