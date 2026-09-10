@@ -867,7 +867,7 @@
   <string name="setting_page_preferences_network_auto_retry">Automatic retry</string>
   <string name="setting_page_preferences_network_auto_retry_desc">Retry model requests up to 3 times when network errors occur.</string>
   <string name="setting_page_preferences_x_custom">X Custom</string>
-  <string name="setting_page_preferences_x_custom_desc">RikkaHub X exclusive feature switches</string>
+  <string name="setting_page_preferences_x_custom_desc">RikkaHub X exclusive features</string>
   <string name="setting_page_documentation">Documentation</string>
   <string name="setting_page_documentation_desc">View app usage instructions and help documentation</string>
   <string name="setting_page_donate">Donate</string>
