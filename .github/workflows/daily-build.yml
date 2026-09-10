@@ -1,5 +1,9 @@
 name: Daily Build
 
+# run 标题(2026-09-10):本 workflow 仅手动触发,默认标题就是 workflow 名,
+# 多跑几次同样分不清批次;带上构建类型与分支后可辨认。
+run-name: "Daily Build · ${{ inputs.build_type || 'nightly' }} · ${{ github.ref_name }}"
+
 on:
   # 2026-09-10:定时自动构建已停用(注释掉 schedule),仅保留手动触发。
   # 原因:不再需要按时间自动打包,历史凌晨自动构建积累大量重复 APK。

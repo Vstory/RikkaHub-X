@@ -1,5 +1,9 @@
 name: X Custom Guard
 
+# run 标题(2026-09-10):理由同 compile-check.yml —— push 触发的 run 默认用
+# commit message 首行当标题,同一 commit 多次触发时标题完全重复。
+run-name: "X Custom Guard · ${{ github.event_name }} · ${{ github.ref_name }}"
+
 # X 定制回归守护(2026-09-10)。
 #
 # 为什么需要:以下几处 X 定制的逻辑细节多、边界绕,改坏了往往**不报错只是算错**

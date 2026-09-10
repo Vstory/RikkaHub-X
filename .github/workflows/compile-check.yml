@@ -1,5 +1,11 @@
 name: Compile Check
 
+# run 标题(2026-09-10):push 触发的 run 默认拿 commit message 首行当标题 ——
+# 同一 commit 在多个 workflow / 多个分支上跑(先在 feat 分支验证、再合 main),
+# 列表里就出现一串完全相同的标题,无法区分。显式声明 run-name 后可辨认来源。
+# 不用 head_commit.message:那是多行全文,塞进标题会截断。
+run-name: "Compile Check · ${{ github.event_name }} · ${{ github.ref_name }}"
+
 # 轻量编译检查(2026-09-10)。
 #
 # 为什么需要:验证一个改动「能否编译」原本只能靠 daily-build,而它要跑完整
