@@ -39,6 +39,10 @@ on:
       - 'app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt'
       - 'app/src/main/java/me/rerere/rikkahub/ui/components/ai/ChatInput.kt'
       - 'app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingPreferencesXCustomPage.kt'
+      # 2026-09-10 补登:ChatService.kt 是 X 定制改动最重的上游文件(压缩执行 / 会话级模型
+      # 优先读取 / 会话切换消息保持 / 生成过程自动保存),此前整体不在守护范围内 ——
+      # 改它不会触发本工作流,等于这些定制没有回归网。登记后其改动必过一遍 x 包守护测试。
+      - 'app/src/main/java/me/rerere/rikkahub/service/ChatService.kt'
   workflow_dispatch:
 
 permissions:
