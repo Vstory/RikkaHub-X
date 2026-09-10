@@ -118,7 +118,7 @@ jobs:
             # 若 keypass≠storepass,AGP 用 storePassword 解 key 会报 "Given final block not properly padded"。
             echo "nightly 构建:每次随机临时签名(commit ${{ github.sha }})"
             SP="$(openssl rand -hex 16)"
-            DN="CN=RikkaHub Nightly $(date +%s) O=RikkaHubDev C=CN"
+            DN="CN=RikkaHubX Nightly $(date +%s), O=RikkaHubX Dev, C=CN"
             keytool -genkeypair -v -keystore app/app.key \
               -storepass "$SP" \
               -alias rikkahub \
