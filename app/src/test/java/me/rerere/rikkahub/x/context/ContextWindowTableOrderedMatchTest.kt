@@ -26,6 +26,8 @@ class ContextWindowTableOrderedMatchTest {
         ContextWindowRule(listOf("gpt", "4", "5"), 400_000),
         ContextWindowRule(listOf("gpt", "oss"), 131_072),
         ContextWindowRule(listOf("gpt", "4"), 128_000),
+        ContextWindowRule(listOf("claude", "fable"), 1_000_000),
+        ContextWindowRule(listOf("claude", "mythos"), 1_000_000),
         ContextWindowRule(listOf("claude", "opus", "5"), 1_000_000),
         ContextWindowRule(listOf("claude", "sonnet", "5"), 1_000_000),
         ContextWindowRule(listOf("claude", "opus", "4"), 1_000_000),
@@ -36,6 +38,8 @@ class ContextWindowTableOrderedMatchTest {
         ContextWindowRule(listOf("deepseek", "r", "1"), 64_000),
         ContextWindowRule(listOf("deepseek", "reasoner"), 64_000),
         ContextWindowRule(listOf("deepseek"), 128_000),
+        ContextWindowRule(listOf("qwen", "3", "8", "max"), 1_000_000),
+        ContextWindowRule(listOf("qwen", "3", "8", "flash"), 1_000_000),
         ContextWindowRule(listOf("qwen", "3", "7", "max"), 1_000_000),
         ContextWindowRule(listOf("qwen"), 262_144),
         ContextWindowRule(listOf("glm", "5", "3"), 1_000_000),
@@ -43,9 +47,10 @@ class ContextWindowTableOrderedMatchTest {
         ContextWindowRule(listOf("glm", "5", "1"), 200_000),
         ContextWindowRule(listOf("glm", "5"), 200_000),
         ContextWindowRule(listOf("glm", "4"), 128_000),
+        ContextWindowRule(listOf("kimi", "k3"), 1_048_576),
         ContextWindowRule(listOf("kimi"), 262_144),
         ContextWindowRule(listOf("doubao", "seed", "evolving"), 1_024_000),
-        ContextWindowRule(listOf("doubao", "2", "1"), 512_000),
+        ContextWindowRule(listOf("doubao", "2", "1"), 262_144),
         ContextWindowRule(listOf("doubao"), 262_144),
         ContextWindowRule(listOf("grok", "4", "20"), 2_000_000),
         ContextWindowRule(listOf("grok", "4", "1"), 2_000_000),
@@ -53,6 +58,9 @@ class ContextWindowTableOrderedMatchTest {
         ContextWindowRule(listOf("grok", "4", "6"), 500_000),
         ContextWindowRule(listOf("grok", "4", "5"), 500_000),
         ContextWindowRule(listOf("grok"), 262_144),
+        ContextWindowRule(listOf("llama", "4", "scout"), 10_000_000),
+        ContextWindowRule(listOf("llama", "4"), 1_000_000),
+        ContextWindowRule(listOf("llama"), 128_000),
         ContextWindowRule(listOf("minimax", "m3"), 1_000_000),
         ContextWindowRule(listOf("minimax"), 204_800),
         ContextWindowRule(listOf("mimo", "2", "5"), 1_000_000),
@@ -62,8 +70,9 @@ class ContextWindowTableOrderedMatchTest {
         ContextWindowRule(listOf("step"), 262_144),
         ContextWindowRule(listOf("intern"), 200_000),
         ContextWindowRule(listOf("hy"), 128_000),
-        ContextWindowRule(listOf("longcat"), 200_000),
-        ContextWindowRule(listOf("muse"), 128_000),
+        ContextWindowRule(listOf("longcat", "flash"), 131_072),
+        ContextWindowRule(listOf("longcat"), 1_048_576),
+        ContextWindowRule(listOf("muse"), 1_048_576),
     )
 
     private val table = ContextWindowTable(
@@ -166,7 +175,7 @@ class ContextWindowTableOrderedMatchTest {
     /** 版本可隔文字出现:`doubao-seed-2.1` 的 2.1 在 seed 之后。 */
     @Test
     fun `version may appear after intervening words`() {
-        assertLookup("doubao-seed-2.1", 512_000)
+        assertLookup("doubao-seed-2.1", 262_144)
         assertLookup("doubao-seed-1.6", 262_144)
         assertLookup("doubao-seed-evolving", 1_024_000)
     }
@@ -206,8 +215,34 @@ class ContextWindowTableOrderedMatchTest {
         assertLookup("minimax-m2.5", 204_800)
         assertLookup("step-3.5-flash", 262_144)
         assertLookup("internlm2.5-1m", 200_000)
-        assertLookup("longcat-2.0", 200_000)
-        assertLookup("muse-spark", 128_000)
+        assertLookup("longcat-2.0", 1_048_576)
+        assertLookup("muse-spark", 1_048_576)
+    }
+
+    /** 2026-09-10 补录与更正:新增家族的窗口。 */
+    @Test
+    fun `newly added families keep their documented windows`() {
+        // Claude:Fable / Mythos 级高于 Opus,均为 1M —— 且不得污染旧款(见上组 3.5 Sonnet 仍 200K)
+        assertLookup("claude-fable-5", 1_000_000)
+        assertLookup("claude-fable-5-1", 1_000_000)
+        assertLookup("claude-mythos-5", 1_000_000)
+        assertLookup("claude-mythos-5-1", 1_000_000)
+        // Qwen3.8:Max 与 Flash 均 1M;同代 27B 仍 256K(版本更具体者优先)
+        assertLookup("qwen3.8-max", 1_000_000)
+        assertLookup("qwen3.8-flash", 1_000_000)
+        assertLookup("qwen3.8-27b", 262_144)
+        // Kimi K3 是 1M,不属 K2 系的 256K
+        assertLookup("kimi-k3", 1_048_576)
+        assertLookup("kimi-k2.7", 262_144)
+        // Llama 4:Scout 10M / Maverick 1M;Llama 3.x 128K
+        assertLookup("llama-4-scout", 10_000_000)
+        assertLookup("llama-4-maverick", 1_000_000)
+        assertLookup("llama-3.3-70b", 128_000)
+        // LongCat:2.0 原生 1M;旧 Flash-Chat 131072
+        assertLookup("longcat-2.0", 1_048_576)
+        assertLookup("longcat-flash-chat", 131_072)
+        // Meta Muse
+        assertLookup("muse-spark-1.3", 1_048_576)
     }
 
     // ── 精确命中与兜底 ──────────────────────────────────────────────────────
