@@ -429,15 +429,11 @@ class WorkspaceRepository(
      *    待用户先安装 rootfs(重装只重置 linux/,files 不受影响)后由 finishPendingUserAreaImport 合入
      */
     /**
-     * 解压预算(audit A5 加固):取「可用空间的 80%」与默认上限的较小者 ——
-     * 既要挡住 tar bomb,也不能把「合法地很大」的工作区误拒。
-     * `usableSpace` 取不到时返回 0 → 退回默认上限(不因查不到空间就拒绝导入)。
+     * 解压预算(audit A5 加固):由可用空间推导 —— 见 [WorkspaceArchiver.extractBudgetFor]。
+     * 取 40% 而非更高:解包产物随后要复制进工作区,峰值占用约 2 倍。
      */
-    private fun extractBudget(dir: File): Long {
-        val usable = runCatching { dir.usableSpace }.getOrDefault(0L)
-        if (usable <= 0L) return WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES
-        return minOf(usable / 10 * 8, WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES)
-    }
+    private fun extractBudget(dir: File): Long =
+        WorkspaceArchiver.extractBudgetFor(runCatching { dir.usableSpace }.getOrDefault(0L))
 
     suspend fun importWorkspaceArchive(
         file: File,

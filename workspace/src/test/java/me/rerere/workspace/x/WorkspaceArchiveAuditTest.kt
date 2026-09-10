@@ -17,6 +17,13 @@
 //   A5  解压加入总量预算 —— tar bomb(几 KB 输入解出几十 GB)被拒,且不留半份产物
 //   A5b 预算内的归档仍正常解出(防加固误伤合法导入)
 //   A5c 条目数预算 —— 海量空条目同样被拒
+//   A5d 预算策略 —— 40% 可用空间(合并复制阶段峰值 2 份)、上限与兜底
+//   A5e sparse 归档的「孔」须计入预算(16 MiB 全零 → 归档仅 133 字节)
+//   A5f sparse 归档按逻辑大小解出(内容不因孔丢失)
+// 端到端(不含 UI):
+//   A6  完整往返 —— 目录层级/内容/空文件/可执行位逐项保留
+//   A7  真实文件系统可用空间可读,预算留出合并余量
+//   A7b 按真实可用空间预算跑通「解压 → 合并」全链路
 //
 // 残留边界(未加固,风险较低):listArchivePaths / 归档预览只遍历条目不落盘,
 //   故未加条目上限;其资源占用受输入体积约束,不构成「写满存储」类风险。
@@ -27,6 +34,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.Base64
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.archivers.tar.TarConstants
@@ -273,6 +281,140 @@ class WorkspaceArchiveAuditTest {
         }
         assertTrue("错误信息应指明条目数超限: ${error.message}", error.message!!.contains("too many entries"))
     }
+
+    /** A5d:解压预算策略 —— 40% 可用空间,受默认上限约束,查不到空间时退回上限。 */
+    @Test
+    fun `A5d extract budget policy keeps room for the merge copy`() {
+        val gb = 1024L * 1024 * 1024
+        assertEquals(
+            "可用 20 GiB 时应取 40%(复制阶段还要一份),而非 80%",
+            8L * gb,
+            WorkspaceArchiver.extractBudgetFor(20L * gb),
+        )
+        assertEquals(4L * gb, WorkspaceArchiver.extractBudgetFor(10L * gb))
+        assertEquals(
+            "查不到可用空间时退回默认上限,不因此拒绝导入",
+            WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES,
+            WorkspaceArchiver.extractBudgetFor(0L),
+        )
+        assertEquals(
+            "极大可用空间仍受默认上限约束",
+            WorkspaceArchiver.MAX_EXTRACT_TOTAL_BYTES,
+            WorkspaceArchiver.extractBudgetFor(10_000L * gb),
+        )
+    }
+
+    /**
+     * A5e:sparse 归档的「孔」必须计入预算。
+     *
+     * 素材为真实 GNU tar 1.35 `--sparse` 产出的归档(头部 typeflag='S',GNU sparse 0.0):
+     * 16 MiB 全零文件 → 归档仅 **133 字节**,是 tar bomb 的极致形态。
+     * 若计数只算「存储的数据段」(此处为 0),这类归档将完全绕过上限。
+     */
+    @Test
+    fun `A5e sparse archive counts toward the size budget`() {
+        val staging = tempDir("sparse-bomb")
+        val error = assertThrows(IllegalStateException::class.java) {
+            WorkspaceArchiver.extractArchive(
+                ByteArrayInputStream(sparseArchive()),
+                staging,
+                maxTotalBytes = 1L * 1024 * 1024,
+            )
+        }
+        assertTrue("错误信息应指明体积超限: ${error.message}", error.message!!.contains("size budget"))
+        assertTrue("中止后不应留下产物", !File(staging, "files/sparse.bin").exists())
+    }
+
+    /** A5f:预算足够时 sparse 归档按**逻辑大小**解出(零填充),内容不因孔而丢失。 */
+    @Test
+    fun `A5f sparse archive extracts to its logical size`() {
+        val staging = tempDir("sparse-ok")
+        WorkspaceArchiver.extractArchive(
+            ByteArrayInputStream(sparseArchive()),
+            staging,
+            maxTotalBytes = 64L * 1024 * 1024,
+        )
+        val restored = File(staging, "files/sparse.bin")
+        assertEquals("sparse 文件应按逻辑大小解出", 16L * 1024 * 1024, restored.length())
+        restored.inputStream().use { input ->
+            val probe = ByteArray(4096)
+            var read = 0
+            while (read < probe.size) {
+                val n = input.read(probe, read, probe.size - read)
+                if (n < 0) break
+                read += n
+            }
+            assertTrue("解出的内容应为零填充", probe.all { it == 0.toByte() })
+        }
+    }
+
+    /**
+     * A6:完整往返 —— 目录层级、文件内容、空文件、可执行位逐项保留。
+     * 这是**不含 UI** 的端到端:导出 → 解压,验证两侧一致。
+     */
+    @Test
+    fun `A6 roundtrip preserves layout content and exec bit`() {
+        val root = tempDir("roundtrip")
+        File(root, "files/docs/notes").mkdirs()
+        File(root, "files/docs/notes/a.txt").writeText("hello 你好")
+        File(root, "files/empty.txt").writeText("")
+        val script = File(root, "linux/usr/local/bin/tool").apply {
+            parentFile!!.mkdirs()
+            writeText("#!/bin/sh\necho hi\n")
+            setExecutable(true, false)
+        }
+        assertTrue("前置:脚本应可执行", script.canExecute())
+
+        val restored = tempDir("roundtrip-restored")
+        WorkspaceArchiver.extractArchive(ByteArrayInputStream(write(root)), restored)
+
+        assertEquals("utf-8 文件内容应一致", "hello 你好", File(restored, "files/docs/notes/a.txt").readText())
+        assertTrue("空文件应保留", File(restored, "files/empty.txt").isFile)
+        assertTrue("目录层级应保留", File(restored, "files/docs/notes").isDirectory)
+        val restoredScript = File(restored, "linux/usr/local/bin/tool")
+        assertEquals("脚本内容应一致", "#!/bin/sh\necho hi\n", restoredScript.readText())
+        assertTrue("可执行位应保留", restoredScript.canExecute())
+    }
+
+    /** A7:真实文件系统上可取到可用空间,且预算留出合并复制(峰值 2 份)的余量。 */
+    @Test
+    fun `A7 budget derives from real usable space leaving room for merge copy`() {
+        val dir = tempDir("usable")
+        val usable = dir.usableSpace
+        assertTrue("真实文件系统应能取到可用空间(实测 $usable)", usable > 0L)
+        val budget = WorkspaceArchiver.extractBudgetFor(usable)
+        assertTrue("预算($budget)应为正", budget > 0L)
+        assertTrue("预算($budget)应小于可用空间($usable)", budget < usable)
+    }
+
+    /**
+     * A7b:按真实可用空间推导的预算跑通完整导入链路(解压 → 合并),
+     * 覆盖「UI 之外」的全部失败面:预算计算、解包、mergeTree 落盘。
+     */
+    @Test
+    fun `A7b import flow with real usable-space budget merges into target`() {
+        val source = tempDir("import-src")
+        File(source, "files/docs").mkdirs()
+        File(source, "files/docs/readme.md").writeText("imported body")
+
+        val archive = write(source)
+        val staging = tempDir("import-staging")
+        val target = tempDir("import-target")
+
+        val budget = WorkspaceArchiver.extractBudgetFor(staging.usableSpace)
+        WorkspaceArchiver.extractArchive(ByteArrayInputStream(archive), staging, maxTotalBytes = budget)
+        WorkspaceArchiver.mergeTree(File(staging, "files"), target)
+
+        assertEquals("imported body", File(target, "docs/readme.md").readText())
+    }
+
+    /**
+     * 真实 GNU tar 1.35 `--sparse` 产出的归档(133 字节):
+     * files/sparse.bin = 16 MiB 全零,头部 typeflag='S'
+     */
+    private fun sparseArchive(): ByteArray = Base64.getDecoder().decode(
+        "H4sIAAAAAAAAA+3QUQrCMAyA4R6lJ5jp2upBdoIKFQpipa3339ZHFQWhL/J/LwlJICGXdI31UO+h1Did000NIJujSI/yGntuvJm9tc7tdeNPziu9jDjm2aO2ULRWJef2ae5b/2ciRt59ZMgCAAAAAAAAAAAAAAAAAMCfWAF6s7pkACgAAA==",
+    )
 
     /** 构造含单个指定大小文件的 tar.gz(内容为零字节,压缩比极高,等同 bomb)。 */
     private fun bombArchive(name: String, size: Long): ByteArray {
