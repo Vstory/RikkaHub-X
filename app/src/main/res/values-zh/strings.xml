@@ -921,7 +921,7 @@
   <string name="context_usage_dialog_style_codex">Codex（剩余额度）</string>
   <string name="context_usage_messages">消息</string>
   <string name="context_usage_model">模型</string>
-  <string name="context_usage_note">「输入框待发送」按字符估算，其余为接口上报的实际用量</string>
+  <string name="context_usage_note">「输入框待发送」按字符估算，其余为上一次回复上报的实际用量；切换模型后按新模型窗口计算，发送一次即按新模型重新统计</string>
   <string name="context_usage_compress">压缩上下文</string>
   <string name="context_usage_close">关闭</string>
   <string name="compress_feedback_success">会话历史压缩成功</string>

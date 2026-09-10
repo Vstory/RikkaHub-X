@@ -955,7 +955,7 @@
   <string name="context_usage_dialog_style_codex">Codex (remaining budget)</string>
   <string name="context_usage_messages">Messages</string>
   <string name="context_usage_model">Model</string>
-  <string name="context_usage_note">"Pending input" is estimated from character count; the rest is reported by the API</string>
+  <string name="context_usage_note">"Pending input" is estimated from character count; the rest is reported by the last reply. After switching models the window changes immediately, and the count follows the new model once you send</string>
   <string name="context_usage_compress">Compress context</string>
   <string name="context_usage_close">Close</string>
   <string name="compress_feedback_success">Conversation history compressed</string>
