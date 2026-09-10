@@ -1,3 +1,6 @@
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 偏好设置新增 X 定制子路由
+// 位置: Screen.SettingPreferencesXCustom 定义 + entry<...> 挂载点(约 431/667 行)。
+
 package me.rerere.rikkahub
 
 import android.annotation.SuppressLint

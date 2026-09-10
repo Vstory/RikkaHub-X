@@ -1,3 +1,6 @@
+// [X-custom] RikkaHub-X 定制(merge 上游时保留): 偏好设置板块新增「X Custom」入口行
+// 位置: 入口行 onClick 导航到 Screen.SettingPreferencesXCustom(约 94 行)。
+
 package me.rerere.rikkahub.ui.pages.setting
 
 import androidx.compose.foundation.layout.Arrangement
