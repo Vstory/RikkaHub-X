@@ -944,6 +944,8 @@
   <string name="setting_context_usage_ring_refresh_now_desc">Fetch the latest model context windows immediately, ignoring the automatic refresh interval</string>
   <string name="setting_context_usage_ring_refreshing">Refreshing…</string>
   <string name="setting_context_usage_ring_refresh_action">Refresh</string>
+  <string name="setting_context_usage_ring_error_rejected">The remote table failed validation; kept the previous one</string>
+  <string name="setting_context_usage_ring_error_unreachable">Network unreachable</string>
   <!-- [X-custom] 生成过程自动保存 -->
   <string name="setting_page_generation_autosave">Long Task Protection</string>
   <string name="setting_generation_autosave_title">Autosave During Generation</string>

@@ -917,6 +917,8 @@
   <string name="setting_context_usage_ring_refresh_now_desc">忽略自动刷新间隔,马上获取最新的模型上下文窗口容量</string>
   <string name="setting_context_usage_ring_refreshing">正在更新…</string>
   <string name="setting_context_usage_ring_refresh_action">立即更新</string>
+  <string name="setting_context_usage_ring_error_rejected">远端表未通过校验,已保留上一份可用表</string>
+  <string name="setting_context_usage_ring_error_unreachable">网络不可达</string>
   <string name="context_usage_title">上下文窗口</string>
   <string name="context_usage_remaining_suffix">剩余</string>
   <string name="context_usage_used_of_compact">%1$s 已用 / %2$s</string>

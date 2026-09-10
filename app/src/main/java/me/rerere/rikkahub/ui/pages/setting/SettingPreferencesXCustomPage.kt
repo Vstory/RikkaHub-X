@@ -43,6 +43,7 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.chat.GenerationAutosave
 import me.rerere.rikkahub.x.context.ContextUsageDialogStyle
 import me.rerere.rikkahub.x.context.ContextWindowRepository
+import me.rerere.rikkahub.x.context.RefreshError
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -200,7 +201,16 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                                     },
                                 )
                                 tableStatus.lastError?.let { error ->
-                                    Text(text = error, color = MaterialTheme.colorScheme.error)
+                                    Text(
+                                        text = when (error) {
+                                            RefreshError.REJECTED ->
+                                                stringResource(R.string.setting_context_usage_ring_error_rejected)
+
+                                            RefreshError.UNREACHABLE ->
+                                                stringResource(R.string.setting_context_usage_ring_error_unreachable)
+                                        },
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
                                 }
                             }
                         },

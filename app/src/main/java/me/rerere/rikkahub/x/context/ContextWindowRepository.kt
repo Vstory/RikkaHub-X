@@ -37,9 +37,18 @@ data class ContextWindowTableStatus(
     val tableUpdatedAt: String? = null,
     /** 是否正在拉取(用于禁用按钮、显示进度文案)。 */
     val isRefreshing: Boolean = false,
-    /** 上次刷新失败原因;成功后清空。 */
-    val lastError: String? = null,
+    /** 上次刷新失败原因;成功后清空。只给**类型**,展示文案由 UI 映射到字符串资源(仓库层不该持用户可见文案)。 */
+    val lastError: RefreshError? = null,
 )
+
+/** 刷新失败的原因类型。 */
+enum class RefreshError {
+    /** 远端表未通过校验(被拒),已保留上一份好表。 */
+    REJECTED,
+
+    /** 主站与镜像都不可达。 */
+    UNREACHABLE,
+}
 
 object ContextWindowRepository {
     private const val TAG = "ContextWindowRepo"
@@ -160,8 +169,8 @@ object ContextWindowRepository {
             val outcome = withContext(Dispatchers.IO) { fetchAndApply(context) }
             _status.value = when (outcome) {
                 RefreshOutcome.UPDATED -> ContextWindowTableStatus(tableUpdatedAt = table?.updatedAt)
-                RefreshOutcome.REJECTED -> _status.value.copy(lastError = "远端表被拒,已保留现有表")
-                RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = "网络不可达")
+                RefreshOutcome.REJECTED -> _status.value.copy(lastError = RefreshError.REJECTED)
+                RefreshOutcome.UNREACHABLE -> _status.value.copy(lastError = RefreshError.UNREACHABLE)
             }
         } finally {
             _status.value = _status.value.copy(isRefreshing = false)
