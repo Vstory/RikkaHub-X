@@ -2,9 +2,9 @@
 package me.rerere.rikkahub.x.storage
 
 import java.io.BufferedOutputStream
-import java.io.DigestOutputStream
 import java.io.File
 import java.io.InputStream
+import java.security.DigestOutputStream
 import java.security.MessageDigest
 
 /**
