@@ -2,22 +2,34 @@
 package me.rerere.rikkahub.x.storage
 
 /**
- * X 存储层的表名与列名常量。
+ * X 存储层的**表名与列名常量**(单一真源)。
  *
- * **为什么不用 Room 实体**（决策依据见知识库 `存储重构方案.md`「P0 架构决策」）：
- * 注册实体会改 `AppDatabase.kt` 的 `entities` / `version` / `autoMigrations` ——
- * 上游每次加表都动这几行，改它等于**保证反复冲突**（本仓库是 fork）；
- * 且 Room 迁移依赖编译期生成的 schema json（位于 `app/schemas` 目录），而本项目本地不跑构建。
- * 故表由**幂等 DDL** 建立（先例：同库的 `message_fts` 虚拟表就是这样建的，
- * 见 `AppDatabaseFactory` 的 `onOpen` 回调），列名以常量集中维护，
- * 并由 `XStorageV26DdlTest` 与 `scripts/check_x_room_alignment.py` 两处断言
- * 「常量 ↔ DDL / 实体 / DAO」一致，防迁移期漂移。
+ * ## ⚠️ 2026-09-11 更新:原「为什么不用 Room 实体」的理由已被推翻
  *
- * **为什么不另建 DB 文件**：DB 是单文件 `rikka_hub`，备份/同步/恢复
- * （`BackupManager` / `DatabaseBackup` / `S3Sync` / `WebDavSync` / `OfficialBackupCompat`）
- * 全围绕它；另建文件会牵动全部备份路径。故 X 表建在同一库内 —— 备份侧零改动。
+ * 本文件原先写着「注册实体会改 `AppDatabase.kt`,而上游每次加表都动那几行 → 保证反复冲突」,
+ * 并据此**拒绝了 Room 实体**,改用运行时手写 DDL。**该决策已撤销**,理由:
  *
- * 表名一律 `x_` 前缀，避免与上游未来新增表撞名。
+ * | 原担忧 | 实情 |
+ * |---|---|
+ * | 改 `AppDatabase.kt` 会反复冲突 | 是,但**冲突是可控的一次性成本**;而手写 SQL 的代价是**没有编译期校验** —— 列名写错编译不报,只在运行到那条语句时抛「无此列」。本项目已因此付出**两次生产事故与一天排查** |
+ * | Room 迁移依赖编译期生成的 schema json,而本地不跑构建 | schema json **由 CI 构建生成**即可,不需要本地跑 |
+ *
+ * 故 6 张表**已登记为 Room 实体**(`XStorageEntities.kt`,`AutoMigration(25, 26)`)。
+ * **详见知识库 `存储重构.md` §1.2(支线:⑪ 的实施方案)。**
+ *
+ * ## 本文件现在的职责
+ *
+ * **只剩「列名与表名的常量」** —— 它是业务代码与测试引用的单一真源。
+ * 与实体声明的一致性由 `scripts/check_x_room_alignment.py` **机械核对**
+ * (实体列名 / 索引名 / DAO 标识符 / 常量 / 设计契约)。
+ *
+ * ## 为什么不另建 DB 文件(这条理由仍然成立)
+ *
+ * DB 是单文件 `rikka_hub`,备份/同步/恢复
+ * (`BackupManager` / `DatabaseBackup` / `S3Sync` / `WebDavSync` / `OfficialBackupCompat`)
+ * 全围绕它;另建文件会牵动全部备份路径。故 X 表建在**同一库内** —— 备份侧零改动。
+ *
+ * 表名一律 `x_` 前缀,避免与上游未来新增表撞名。
  */
 object XStorageTables {
     const val ASSET = "x_asset"
