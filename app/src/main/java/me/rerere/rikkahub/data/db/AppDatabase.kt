@@ -55,8 +55,7 @@ import me.rerere.rikkahub.x.storage.XTombstoneEntity
         XTombstoneEntity::class,
         XStorageMetaEntity::class,
     ],
-    // [X-custom] 25 → 26:X 表纳入 Room 管理。迁移手写在 XStorageMigration_25_26
-    // (不用 AutoMigration:Room 生成的建表语句不带 IF NOT EXISTS,而早期构建可能已建过表)。
+    // [X-custom] 25 → 26:X 的 6 张表进 entities(见下方 autoMigrations 末尾)。无手写 SQL。
     version = 26,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -78,6 +77,16 @@ import me.rerere.rikkahub.x.storage.XTombstoneEntity
         AutoMigration(from = 22, to = 23, spec = Migration_22_23::class),
         AutoMigration(from = 23, to = 24),
         AutoMigration(from = 24, to = 25),
+        // [X-custom] 25 → 26:X 表纳入 Room。**用 AutoMigration,不手写 SQL** ——
+        // Room 能自动生成「新增表」的迁移语句,且它生成的建表语句**带 IF NOT EXISTS**
+        // (实测:`schemas/.../25.json` 里 8 张表、9 个索引全部带),
+        // 故「表已存在」的情况由 SQLite 自己跳过,不需要额外处理。
+        //
+        // ⚠️ 边界:若某台设备上**已存在形态不对的旧表**(早期未发布构建的运行时建表产物),
+        // `IF NOT EXISTS` 会跳过建表 → Room 结构校验不过 → 库打不开。
+        // 实测那些构建里建表**从未成功过**(见计划表「X 表从未建出来」事故),
+        // 且 P1 尚未发布,故受影响面 ≈ 0;真有则卸载重装即可。
+        AutoMigration(from = 25, to = 26),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
