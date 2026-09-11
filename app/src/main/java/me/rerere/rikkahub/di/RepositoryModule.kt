@@ -80,6 +80,13 @@ val repositoryModule = module {
         FilesManager(get(), get(), get())
     }
 
+    // [X-custom] X 存储层(X 存储重构 P1):资产 / 引用 / 回收候选的读写。
+    // X 表不注册为 Room 实体 → 拿不到 DAO,仓储内部走 openHelper.writableDatabase。
+    // filesDir 用于把 file:// 还原成相对路径,并判断资产文件是否真的还在盘上。
+    single {
+        AssetRepository(get(), get<Context>().filesDir)
+    }
+
     single {
         SkillManager(get(), get())
     }

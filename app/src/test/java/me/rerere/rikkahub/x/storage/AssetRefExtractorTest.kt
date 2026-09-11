@@ -22,6 +22,9 @@ class AssetRefExtractorTest {
 
     private val root = "/data/user/0/me.rerere.rikkahub/files"
 
+    /** 与 AssetHash.HEX_LENGTH 一致的合法哈希样本。 */
+    private val hash = "ab" + "cd" + "0".repeat(60)
+
     private fun fileUrl(relative: String) = "file://$root/$relative"
 
     private fun userMessage(vararg parts: UIMessagePart) =
@@ -235,5 +238,43 @@ class AssetRefExtractorTest {
             "恰为根目录时无相对路径",
             AssetRefExtractor.toRelativePath("file://$root", root),
         )
+    }
+
+    // ---- 相对路径 → 内容哈希 ----
+
+    @Test
+    fun `derives asset id from content addressed path`() {
+        assertEquals(hash, AssetRefExtractor.assetIdOf("assets/ab/cd/$hash.png"))
+        // 无扩展名同样能反解(哈希全为十六进制,不含 '.')
+        assertEquals(hash, AssetRefExtractor.assetIdOf("assets/ab/cd/$hash"))
+        // 目录里出现点不影响 —— 只看最后一段
+        assertEquals(hash, AssetRefExtractor.assetIdOf("assets/a.b.c/$hash.png"))
+    }
+
+    @Test
+    fun `rejects paths that carry no content fingerprint`() {
+        assertNull(
+            "存量上传文件没有内容指纹,由回填阶段处理",
+            AssetRefExtractor.assetIdOf("upload/550e8400-e29b.png"),
+        )
+        assertNull(
+            "文件名不是合法哈希",
+            AssetRefExtractor.assetIdOf("assets/ab/cd/not-a-hash.png"),
+        )
+        assertNull(
+            "大小写不合规(哈希一律小写十六进制)",
+            AssetRefExtractor.assetIdOf("assets/ab/cd/${hash.uppercase()}.png"),
+        )
+        assertNull("长度差一位", AssetRefExtractor.assetIdOf("assets/ab/cd/${hash.dropLast(1)}.png"))
+        assertNull("内容寻址根之外", AssetRefExtractor.assetIdOf("skills/a.md"))
+        assertNull("同前缀目录", AssetRefExtractor.assetIdOf("assets_evil/ab/cd/$hash.png"))
+    }
+
+    @Test
+    fun `asset id round trips with relative path`() {
+        // 由哈希生成的路径必须能反解回同一个哈希 —— 否则「写入登记」与「引用登记」
+        // 会用两个不同的 id,引用永远对不上资产
+        val path = AssetHash.relativePath(hash, "png")
+        assertEquals(hash, AssetRefExtractor.assetIdOf(path))
     }
 }

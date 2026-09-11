@@ -97,6 +97,22 @@ object AssetRefExtractor {
     }
 
     /**
+     * 相对路径 → 内容哈希（即 `x_asset.id`）。
+     *
+     * 只对**内容寻址路径**有效：`assets/ab/cd/<hash>.png` 里的哈希由路径本身携带，
+     * 故能反解。非内容寻址路径（如 `upload/<uuid>.png`）返回 `null` ——
+     * 那类存量文件没有内容指纹，需靠回填阶段（P1 任务 1.7）另行处理；
+     * 在此之前它们**不进引用表、也进不了回收候选**，方向安全（宁可留着）。
+     */
+    fun assetIdOf(relativePath: String): String? {
+        if (!AssetStorePolicy.isManagedPath(relativePath)) return null
+        val name = relativePath.substringAfterLast('/')
+        // 哈希全为十六进制、不含 '.'，故取最后一个 '.' 之前的部分即为哈希
+        val hash = name.substringBeforeLast('.', missingDelimiterValue = name)
+        return if (AssetHash.isValid(hash)) hash else null
+    }
+
+    /**
      * 本地文件 URL → 相对 `filesDir` 的路径（即 `x_asset.path` 的形态）。
      *
      * 返回 `null` 表示**不属于本应用的文件目录**（外部存储、缓存目录、其它 App 的路径），
