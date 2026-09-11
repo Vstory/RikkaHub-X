@@ -73,5 +73,14 @@ class XStorageEventsTest {
         val all = XStorageEvents.ALL.toSet()
         assertTrue("缺少写入降级事件", XStorageEvents.WRITE_FALLBACK in all)
         assertTrue("缺少引用登记失败事件", XStorageEvents.REF_FAIL in all)
+        assertTrue("缺少落盘成功但登记失败的事件", XStorageEvents.WRITE_UNRECORDED in all)
+    }
+
+    @Test
+    fun `unrecorded is distinct from fallback because they are handled differently`() {
+        // 两者必须分开:写入失败要回落到旧路径(否则用户存不下文件);
+        // 登记失败不该回落(内容已在内容寻址路径上,再写一份会让同一内容有两个文件)。
+        // 若哪天有人把它们合并成一个事件,这条用例会红,提醒同步改处置逻辑。
+        assertTrue(XStorageEvents.WRITE_UNRECORDED != XStorageEvents.WRITE_FALLBACK)
     }
 }

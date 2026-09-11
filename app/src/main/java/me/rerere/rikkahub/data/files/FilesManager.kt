@@ -556,6 +556,11 @@ class FilesManager(
             AssetWriteKind.REWRITTEN -> XStorageEvents.WRITE_REWRITE
         }
         XLog.info(XDomain.STORAGE, event) { written.relativePath }
+        if (!written.recorded) {
+            // 落盘成功但登记失败:文件能用,只是不去重、也不进引用表。
+            // 单独记一条,免得「资产表里少了这份内容」变成一个查不出原因的怪现象
+            XLog.warn(XDomain.STORAGE, XStorageEvents.WRITE_UNRECORDED) { written.relativePath }
+        }
     }
 
     /** 打开来源流；拿不到就抛（与旧实现一致，由调用方的 runCatching 处理）。 */

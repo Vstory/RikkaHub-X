@@ -204,6 +204,33 @@ class AssetWritePathTest {
     }
 
     // ────────────────────────────────────────────────────────────────
+    // 落盘成功但登记失败
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `record failure keeps the file and reports it instead of throwing`() {
+        // 登记那一步失败时**不能让异常冒出去**:调用方会把异常当成「这次写入失败」而回落到
+        // 旧路径,于是同一份内容在盘上出现两个文件(内容寻址一份 + 旧式一份)。
+        // 正确处置是照常返回,并如实告知「没登记上」,由调用方记一条日志。
+        val ledger = FakeLedger(filesDir).apply { failRecording = true }
+        val path = AssetWritePath(filesDir, ledger)
+
+        val written = path.writeBytes("txt", "ledger down".toByteArray())
+
+        assertEquals(AssetWriteKind.NEW, written.kind)
+        assertFalse("登记失败要如实上报", written.recorded)
+        assertTrue("内容仍应可用", written.file.isFile)
+        assertEquals("盘上只应有一份", 1, countFiles(File(filesDir, AssetHash.ROOT)))
+    }
+
+    @Test
+    fun `successful record reports recorded true`() {
+        // 与上一条成对:默认路径必须报告「已登记」,否则调用方会一直误报降级
+        val path = AssetWritePath(filesDir, FakeLedger(filesDir))
+        assertTrue(path.writeBytes("txt", "ok".toByteArray()).recorded)
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // 流式路径
     // ────────────────────────────────────────────────────────────────
 
@@ -275,6 +302,9 @@ class AssetWritePathTest {
         var lastSize = -1L
             private set
 
+        /** 打开后 [recordAsset] 抛错 —— 用来覆盖「内容已落盘但登记失败」的分支。 */
+        var failRecording = false
+
         override fun findKnown(hash: String): KnownAsset? {
             val relativePath = paths[hash] ?: return null
             return KnownAsset(relativePath = relativePath, fileExists = File(filesDir, relativePath).isFile)
@@ -289,6 +319,7 @@ class AssetWritePathTest {
         ) {
             recordCalls += 1
             lastSize = byteSize
+            if (failRecording) throw IllegalStateException("ledger unavailable")
             paths[hash] = relativePath
         }
 

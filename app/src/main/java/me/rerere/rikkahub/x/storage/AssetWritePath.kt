@@ -19,6 +19,13 @@ data class WrittenAsset(
     val file: File,
     val hash: String,
     val kind: AssetWriteKind,
+    /**
+     * 是否已登记进资产表。
+     *
+     * `false` 只可能出现在「内容已落盘、但登记那一步失败」的情形。调用方据此
+     * **只记日志、不回落到旧路径** —— 内容已经在盘上了，再写一份会让同一份内容出现两个文件。
+     */
+    val recorded: Boolean = true,
 ) {
     /** 是否没有真的写盘（内容已在盘上）。 */
     val reused: Boolean get() = kind == AssetWriteKind.REUSED
@@ -144,13 +151,18 @@ class AssetWritePath(
 
             is AssetStorePlan.WriteNew -> {
                 val target = writeAt(plan.relativePath, writeContent)
-                ledger.recordAsset(
-                    hash = hash,
-                    relativePath = plan.relativePath,
-                    byteSize = target.length(),
-                    nowMillis = System.currentTimeMillis(),
-                )
-                WrittenAsset(plan.relativePath, target, hash, AssetWriteKind.NEW)
+                // 登记失败**不抛出、也不回落**:内容已经在内容寻址路径上了 ——
+                // 让异常冒到调用方会让它往旧路径再写一份,同一份内容出现两个文件。
+                // 代价是这条内容不进引用表(故不会被回收判为候选),方向安全。
+                val recorded = runCatching {
+                    ledger.recordAsset(
+                        hash = hash,
+                        relativePath = plan.relativePath,
+                        byteSize = target.length(),
+                        nowMillis = System.currentTimeMillis(),
+                    )
+                }.isSuccess
+                WrittenAsset(plan.relativePath, target, hash, AssetWriteKind.NEW, recorded = recorded)
             }
 
             is AssetStorePlan.RewriteMissing -> {

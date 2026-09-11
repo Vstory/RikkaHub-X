@@ -28,6 +28,16 @@ object XStorageEvents {
     /** 写入路径接线失败（降级为旧行为：照常存文件，只是不进资产表）。 */
     const val WRITE_FALLBACK = "asset.write.fallback"
 
+    /**
+     * 内容**已落盘**但登记失败 —— 文件能用，只是不去重、也不进引用表。
+     *
+     * 与 [WRITE_FALLBACK] 分开成两个事件，因为它们对应的处置不同：
+     * 写入失败要**回落到旧路径**（否则用户存不下文件）；登记失败**不该回落** ——
+     * 内容已经在内容寻址路径上了，再往旧路径写一份，同一份内容就有两个文件，
+     * 既浪费又让「一份内容一个文件」的约定出现例外。
+     */
+    const val WRITE_UNRECORDED = "asset.write.unrecorded"
+
     // ── 引用：登记 / 跳过 / 撤销 / 失败 ──
 
     /** 会话保存时重建引用完成。 */
@@ -69,7 +79,7 @@ object XStorageEvents {
 
     /** 全部事件名，供单测核对（新增事件须登记到这里）。 */
     val ALL: List<String> = listOf(
-        WRITE_NEW, WRITE_REUSE, WRITE_REWRITE, WRITE_FALLBACK,
+        WRITE_NEW, WRITE_REUSE, WRITE_REWRITE, WRITE_FALLBACK, WRITE_UNRECORDED,
         REF_SYNC, REF_DROP, REF_DROP_FAIL, REF_SKIP, REF_FAIL,
         BACKFILL_SCAN, BACKFILL_DONE,
         GC_CANDIDATE, GC_PURGE, GC_REFUSE,
