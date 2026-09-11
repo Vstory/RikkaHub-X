@@ -159,7 +159,7 @@ object XDiagnostics {
      * 而它是「**下次启动开关会归零**」。用户看到它就知道：要么手动再开一次，
      * 要么去查存储权限/空间。
      */
-    const val PERSIST_FAIL_EVENT = "diag.persist_fail"
+    const val PERSIST_FAIL_EVENT = "diag.persist.fail"
 
     /** 记录一条。**调用方一般用 [XLog] 而不是直接调这里**。 */
     fun record(domain: XDomain, level: Level, event: String, message: String, error: Throwable? = null) {
