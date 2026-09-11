@@ -115,13 +115,56 @@ class XStorageSchemaTest {
         assertTrue("资产 id 非空", asset.contains("CHECK (${XStorageTables.Asset.ID} <> '')"))
         assertTrue("字节数非负", asset.contains("CHECK (${XStorageTables.Asset.BYTE_SIZE} >= 0)"))
         assertTrue(
-            "宽高若存在必须为正（0 是无效值而非'未知'）",
-            asset.contains("CHECK (${XStorageTables.Asset.WIDTH} IS NULL OR ${XStorageTables.Asset.WIDTH} > 0)"),
-        )
-        assertTrue(
             "同一路径只应有一个资产行",
             ddl.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_x_asset_path"),
         )
+    }
+
+    /**
+     * **免 schema 纪律的守护**（方案文档 1.4 节）。
+     *
+     * 只在读取时用的字段必须待在 `extras_json` 里，不得占真列 ——
+     * 真列每加一个就多一次迁移，而本仓库是 fork，迁移面即同步冲突面。
+     * 这条断言把"别顺手加列"变成机器可查：加了就红。
+     */
+    @Test
+    fun `asset table keeps only addressing and time columns`() {
+        val asset = ddlOf(XStorageTables.ASSET)
+        val forbidden = listOf("mime_type", "origin", "width", "height", "thumbnail_path", "display_name")
+        forbidden.forEach { column ->
+            assertFalse(
+                "`$column` 只用于读取/展示,应放进 extras_json 而非占真列（免 schema 纪律）:$column",
+                asset.contains("$column TEXT") || asset.contains("$column INTEGER"),
+            )
+        }
+        assertEquals(
+            "资产表真列集合被改动时,请同步确认是否真的需要索引/约束(免 schema 纪律)",
+            listOf(
+                XStorageTables.Asset.ID,
+                XStorageTables.Asset.PATH,
+                XStorageTables.Asset.BYTE_SIZE,
+                XStorageTables.Asset.CREATED_AT,
+                XStorageTables.Asset.LAST_REFERENCED_AT,
+                XStorageTables.Asset.EXTRAS_JSON,
+            ),
+            XStorageTables.Asset.COLUMNS,
+        )
+    }
+
+    @Test
+    fun `extras keys are namespaced and unique`() {
+        val keys = XStorageTables.AssetExtras.ALL
+        assertEquals("extras 键重复会互相覆盖", keys.size, keys.toSet().size)
+        keys.forEach { key ->
+            assertTrue("extras 键需带 asset. 前缀:$key", key.startsWith("asset."))
+        }
+        // 键名不得与真列同名,否则读起来会分不清数据在哪一侧
+        keys.forEach { key ->
+            assertFalse(
+                "extras 键不得与真列同名:$key",
+                XStorageTables.Asset.COLUMNS.contains(key),
+            )
+        }
     }
 
     @Test
@@ -180,6 +223,38 @@ class XStorageSchemaTest {
     @Test
     fun `schema version starts at one`() {
         assertTrue("结构版本应从 1 起", XStorageSchema.SCHEMA_VERSION >= 1)
+    }
+
+    /**
+     * 升级链的守护：v1→v2 的重建流程必须完整。
+     *
+     * 缺任何一步的后果都是**静默的**：
+     * - 缺重建语句 → 旧库永远停在旧形态（mime_type 等 NOT NULL 列还在，后续写入会失败）
+     * - 缺索引重建 → 唯一约束静默消失，去重不再成立
+     * - 缺临时表清理 → 库里留下幽灵表
+     */
+    @Test
+    fun `upgrade to v2 rebuilds asset table and restores indexes`() {
+        val upgrades = XStorageSchema.upgradeStatementsTo(2)
+        assertTrue("v1→v2 应有升级语句", upgrades.isNotEmpty())
+        assertTrue(
+            "重建表后必须重跑索引语句（表改名时索引会跟着走,删旧表即丢索引）",
+            upgrades.any { it.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_x_asset_path") },
+        )
+        assertTrue(
+            "重建流程需搬移旧数据",
+            upgrades.any { it.contains("INSERT OR REPLACE INTO ${XStorageTables.ASSET}") },
+        )
+        assertTrue(
+            "重建后需清理临时表",
+            upgrades.any { it.contains("DROP TABLE IF EXISTS") },
+        )
+    }
+
+    @Test
+    fun `upgrade statements are not needed for versions below current`() {
+        // 无历史版本的档位应为空 —— 否则会在每次打开库时重复执行无用语句
+        assertTrue("v1 是首版,不该有增量语句", XStorageSchema.upgradeStatementsTo(1).isEmpty())
     }
 
     // ---- 取值常量 ----

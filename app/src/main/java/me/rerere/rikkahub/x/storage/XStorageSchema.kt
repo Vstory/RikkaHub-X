@@ -11,14 +11,25 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * 这样 `AppDatabase.kt`（`entities` / `version` / `autoMigrations`）**零改动**，
  * Room 版本仍为 25，也不产生新的 schema json。
  *
+ * **真列纪律（对齐 Kelivo「先免 schema，需要时再提升」，见方案文档 1.4 节）**：
+ * 只在读取时用的字段一律放进 `extras_json`，**不占真列**；只有真正需要
+ * 索引 / 排序 / 唯一约束 / CHECK 的才提升为列。对 fork 而言，每少加一版，
+ * 同步上游时的冲突面就少一分。
+ *
  * **约束取舍**：表内保留 `CHECK`（数据自洽，越界即拒写），
  * 但**不建指向上游表的外键** —— 理由见 [XStorageTables.AssetRef] 注释。
  * 因不建外键，级联删除由 X 自己的代码在事务里显式完成（可单测、可审计）。
  */
 object XStorageSchema {
 
-    /** X 表结构版本（**独立于** Room 的 `AppDatabase.version`，二者互不影响）。 */
-    const val SCHEMA_VERSION = 1
+    /**
+     * X 表结构版本（**独立于** Room 的 `AppDatabase.version`，二者互不影响）。
+     *
+     * 1 → 初版。
+     * 2 → **精简真列**：`mime_type` / `origin` / `width` / `height` / `thumbnail_path`
+     * 移入 `extras_json`（它们只用于读取与展示，不参与任何 SQL 过滤或排序）。
+     */
+    const val SCHEMA_VERSION = 2
 
     /** 元数据键：X 表结构版本。 */
     const val META_SCHEMA_VERSION = "x.storage.schema_version"
@@ -32,31 +43,42 @@ object XStorageSchema {
     /** 元数据键：存量回填游标（P1 断点续跑用）。 */
     const val META_BACKFILL_CURSOR = "x.storage.backfill_cursor"
 
-    /** 建表语句（顺序无关，全部幂等）。单测会校验其与 [XStorageTables] 常量一致。 */
-    val CREATE_STATEMENTS: List<String> = listOf(
-        """
+    // ────────────────────────────────────────────────────────────────────
+    // 资产表：真列只留「寻址 / 统计 / 排序」三类
+    // ────────────────────────────────────────────────────────────────────
+
+    /**
+     * `x_asset` 建表语句。
+     *
+     * 单独抽出成常量，是因为 v1→v2 升级要**按同一形态重建表**（SQLite 的
+     * 标准做法：建新表 → 搬数据 → 旧表改名/删除）。共用一份 DDL 才不会有
+     * 「升级后的形态与新建的形态不一致」这种隐蔽偏差。
+     */
+    private val ASSET_TABLE_DDL: String = """
         CREATE TABLE IF NOT EXISTS ${XStorageTables.ASSET} (
             ${XStorageTables.Asset.ID} TEXT NOT NULL PRIMARY KEY,
             ${XStorageTables.Asset.PATH} TEXT NOT NULL,
             ${XStorageTables.Asset.BYTE_SIZE} INTEGER NOT NULL,
-            ${XStorageTables.Asset.MIME_TYPE} TEXT NOT NULL,
-            ${XStorageTables.Asset.ORIGIN} TEXT NOT NULL,
-            ${XStorageTables.Asset.WIDTH} INTEGER,
-            ${XStorageTables.Asset.HEIGHT} INTEGER,
-            ${XStorageTables.Asset.THUMBNAIL_PATH} TEXT,
             ${XStorageTables.Asset.CREATED_AT} INTEGER NOT NULL,
             ${XStorageTables.Asset.LAST_REFERENCED_AT} INTEGER NOT NULL,
             ${XStorageTables.Asset.EXTRAS_JSON} TEXT NOT NULL DEFAULT '{}',
             CHECK (${XStorageTables.Asset.ID} <> ''),
-            CHECK (${XStorageTables.Asset.BYTE_SIZE} >= 0),
-            CHECK (${XStorageTables.Asset.WIDTH} IS NULL OR ${XStorageTables.Asset.WIDTH} > 0),
-            CHECK (${XStorageTables.Asset.HEIGHT} IS NULL OR ${XStorageTables.Asset.HEIGHT} > 0)
+            CHECK (${XStorageTables.Asset.BYTE_SIZE} >= 0)
         )
-        """.trimIndent(),
+    """.trimIndent()
+
+    /** 资产表索引（重建表后需要重新建立，故单独成组）。 */
+    private val ASSET_INDEX_STATEMENTS: List<String> = listOf(
         // 同一份内容只应有一个落盘文件 → path 唯一
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_x_asset_path ON ${XStorageTables.ASSET} (${XStorageTables.Asset.PATH})",
         // GC 按 last_referenced_at 找候选
         "CREATE INDEX IF NOT EXISTS idx_x_asset_last_referenced ON ${XStorageTables.ASSET} (${XStorageTables.Asset.LAST_REFERENCED_AT})",
+    )
+
+    /** 建表语句（顺序无关，全部幂等）。单测会校验其与 [XStorageTables] 常量一致。 */
+    val CREATE_STATEMENTS: List<String> = listOf(
+        ASSET_TABLE_DDL,
+        *ASSET_INDEX_STATEMENTS.toTypedArray(),
 
         """
         CREATE TABLE IF NOT EXISTS ${XStorageTables.ASSET_REF} (
@@ -126,12 +148,15 @@ object XStorageSchema {
     )
 
     /**
-     * 建立/升级 X 表。**幂等**，可在每次打开库时安全调用。
+     * 建表/升级 X 表。**幂等**，可在每次打开库时安全调用。
      *
-     * 顺序：先建表（幂等）→ 再读元数据里的版本 → 版本落后则补升级语句 → 记版本。
-     * 先建表的原因：元数据表本身也是被建的，读它之前得保证存在。
+     * 顺序：先建表（幂等）→ 再读元数据里的版本 → 版本落后则跑增量语句 → 记版本。
+     * 先建表的原因：元数据表本身也是被建的，**读它之前得保证它存在**。
      *
      * 版本**更高**时不动作 —— 那说明用户装过更新的版本，本版本无从降级，保持原样最安全。
+     *
+     * 整个过程在一个事务内：任一语句失败则全部回滚，版本号也不会被写上，
+     * 下次打开会重新尝试（不会留下「半迁移」状态）。
      */
     fun ensure(db: SupportSQLiteDatabase) {
         db.beginTransaction()
@@ -141,8 +166,6 @@ object XStorageSchema {
             }
             val existing = readInt(db, META_SCHEMA_VERSION) ?: 0
             if (existing < SCHEMA_VERSION) {
-                // v1 是首版：CREATE 语句已是最新形态，无增量语句。
-                // 后续版本在此按 existing+1..SCHEMA_VERSION 逐级追加 ALTER/回填。
                 for (version in (existing + 1)..SCHEMA_VERSION) {
                     for (statement in upgradeStatementsTo(version)) {
                         db.execSQL(statement)
@@ -157,16 +180,8 @@ object XStorageSchema {
     }
 
     /** 读元数据整数值；键不存在或非数字返回 null。 */
-    fun readInt(db: SupportSQLiteDatabase, key: String): Int? {
-        val cursor = db.query(
-            "SELECT ${XStorageTables.Meta.VALUE} FROM ${XStorageTables.META} " +
-                "WHERE ${XStorageTables.Meta.KEY} = ?",
-            arrayOf<Any?>(key),
-        )
-        return cursor.use {
-            if (it.moveToFirst()) it.getString(0)?.toIntOrNull() else null
-        }
-    }
+    fun readInt(db: SupportSQLiteDatabase, key: String): Int? =
+        readString(db, key)?.toIntOrNull()
 
     /** 读元数据字符串；键不存在返回 null。 */
     fun readString(db: SupportSQLiteDatabase, key: String): String? {
@@ -198,10 +213,47 @@ object XStorageSchema {
     /**
      * 升到 [version] 所需的增量语句。
      *
-     * 现无历史版本 → 返回空。将来加表/加列时在此登记，例如：
-     * ```
-     * 2 -> listOf("ALTER TABLE x_asset ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-     * ```
+     * `internal`（而非 private）是为了让同模块单测能直接校验升级链 ——
+     * 升级语句写错的代价是**旧库永远停在旧形态**，而这类错误在 CI 里
+     * 一跑构建就能暴露，不该等到真机。
+     *
+     * ── 1 → 2：精简真列 ────────────────────────────────────────────────
+     * `mime_type` / `origin` / `width` / `height` / `thumbnail_path` 从真列移入
+     * `extras_json`。用 SQLite 的标准重建流程（而不是 `ALTER TABLE DROP COLUMN`）：
+     * 前者在任何支持的版本上都能跑，且能顺带把「旧表 NOT NULL 列」的语义一并换掉。
+     *
+     * 重建后**必须重跑索引语句** —— 表被改名时索引跟着走，旧表一删索引也没了，
+     * 少了这步会留下「有表无索引」的隐患（唯一约束会静默消失）。
      */
-    private fun upgradeStatementsTo(version: Int): List<String> = emptyList()
+    internal fun upgradeStatementsTo(version: Int): List<String> = when (version) {
+        2 -> listOf(
+            "ALTER TABLE ${XStorageTables.ASSET} RENAME TO ${LEGACY_ASSET_TABLE_V1}",
+            ASSET_TABLE_DDL,
+            """
+            INSERT OR REPLACE INTO ${XStorageTables.ASSET} (
+                ${XStorageTables.Asset.ID},
+                ${XStorageTables.Asset.PATH},
+                ${XStorageTables.Asset.BYTE_SIZE},
+                ${XStorageTables.Asset.CREATED_AT},
+                ${XStorageTables.Asset.LAST_REFERENCED_AT},
+                ${XStorageTables.Asset.EXTRAS_JSON}
+            )
+            SELECT
+                ${XStorageTables.Asset.ID},
+                ${XStorageTables.Asset.PATH},
+                ${XStorageTables.Asset.BYTE_SIZE},
+                ${XStorageTables.Asset.CREATED_AT},
+                ${XStorageTables.Asset.LAST_REFERENCED_AT},
+                ${XStorageTables.Asset.EXTRAS_JSON}
+            FROM ${LEGACY_ASSET_TABLE_V1}
+            """.trimIndent(),
+            "DROP TABLE IF EXISTS ${LEGACY_ASSET_TABLE_V1}",
+            *ASSET_INDEX_STATEMENTS.toTypedArray(),
+        )
+
+        else -> emptyList()
+    }
+
+    /** v1 资产表在 v1→v2 重建期间的临时名。 */
+    private const val LEGACY_ASSET_TABLE_V1 = "x_asset_legacy_v1"
 }

@@ -32,26 +32,52 @@ object XStorageTables {
     /**
      * 资产表：内容哈希寻址（`id` 即 SHA-256 十六进制）。
      *
-     * 与 Kelivo 的差异（有意简化，已记入方案文档）：Kelivo 用「独立 id + contentHash UNIQUE」两列；
-     * 因 hash 已 UNIQUE，二者恒为 1:1，故本表只留一列（`id` 即哈希）。
-     * 若将来换哈希算法需保留旧 id，再加列即可（表结构可演进）。
+     * **真列只留「寻址 / 统计 / 排序」三类**（对齐 Kelivo 的「先免 schema，需要时再提升」）：
+     * - 寻址：`id`（哈希）、`path`（唯一）
+     * - 统计：`byte_size`
+     * - 排序 / 时间闸门：`created_at`、`last_referenced_at`
+     * - 扩展：`extras_json`（承载其余全部「只在读取时用」的字段）
+     *
+     * 其余字段（mime / origin / 宽高 / 缩略图路径 / 显示名…）**刻意不占列** ——
+     * 它们不参与任何 SQL 过滤或排序，占列只会白增一次迁移；
+     * 对 fork 而言每少加一版，同步上游时的冲突面就少一分。见 [AssetExtras]。
+     *
+     * 与 Kelivo 的另一处差异（有意简化，已记入方案文档）：Kelivo 用「独立 id +
+     * contentHash UNIQUE」两列；因 hash 已唯一，二者恒为 1:1，故只留一列。
      */
     object Asset {
         const val ID = "id"
         const val PATH = "path"
         const val BYTE_SIZE = "byte_size"
-        const val MIME_TYPE = "mime_type"
-        const val ORIGIN = "origin"
-        const val WIDTH = "width"
-        const val HEIGHT = "height"
-        const val THUMBNAIL_PATH = "thumbnail_path"
         const val CREATED_AT = "created_at"
         const val LAST_REFERENCED_AT = "last_referenced_at"
         const val EXTRAS_JSON = "extras_json"
 
         val COLUMNS: List<String> = listOf(
-            ID, PATH, BYTE_SIZE, MIME_TYPE, ORIGIN, WIDTH, HEIGHT,
-            THUMBNAIL_PATH, CREATED_AT, LAST_REFERENCED_AT, EXTRAS_JSON,
+            ID, PATH, BYTE_SIZE, CREATED_AT, LAST_REFERENCED_AT, EXTRAS_JSON,
+        )
+    }
+
+    /**
+     * `x_asset.extras_json` 的键。
+     *
+     * 键名带 `asset.` 前缀（Kelivo 的约定：Keys must be feature-prefixed），
+     * 避免不同用途的键在同一 JSON 里撞名。
+     *
+     * **提升为真列的判据**：一旦某个键需要索引 / 唯一约束 / CHECK / 排序，
+     * 就把它提升成真列（届时 `XStorageSchema` 加一版并写重建语句），
+     * 而不是让它"永久住在 JSON 里"。
+     */
+    object AssetExtras {
+        const val MIME_TYPE = "asset.mimeType"
+        const val ORIGIN = "asset.origin"
+        const val WIDTH = "asset.width"
+        const val HEIGHT = "asset.height"
+        const val THUMBNAIL_PATH = "asset.thumbnailPath"
+        const val DISPLAY_NAME = "asset.displayName"
+
+        val ALL: List<String> = listOf(
+            MIME_TYPE, ORIGIN, WIDTH, HEIGHT, THUMBNAIL_PATH, DISPLAY_NAME,
         )
     }
 
