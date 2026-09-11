@@ -82,6 +82,44 @@ object XDiagnostics {
     @Volatile
     private var enabledFlag = false
 
+    /**
+     * 把开关状态写出去的回调 —— 由 Android 侧在启动时接上（见 [attachPersistence]）。
+     *
+     * **可为 null**（JVM 单测里就是 null）：那时开关只在内存里翻转，与改造前行为一致。
+     * 做成可注入而不是直接依赖 `SharedPreferences`，是为了让这一层**保持纯 Kotlin、可单测** ——
+     * 否则「开关会不会被持久化」这件事只能靠装机去试。
+     */
+    private var persist: ((Boolean) -> Unit)? = null
+
+    /**
+     * 启动期接上持久化，并把**上次的开关状态**读回来。
+     *
+     * ## 为什么必须持久化（2026-09-11 用户指出，实测确认）
+     *
+     * 原实现只是个内存变量：**进程一重启，开关就回到「关」**。这条看着像小不便，实际是硬缺陷 ——
+     * **本项目最需要取证的恰恰是「启动期」的事**：
+     *
+     * | 场景 | 开关必须活着的原因 |
+     * |---|---|
+     * | 存量回填（P1） | 它在**开机时**跑；开关若在重启后归零，那批日志永远不会被记录 |
+     * | 启动健壮性（P3） | 它要查的就是「打不开 App」这类**启动期**故障 —— 开关自己都活不过启动，就永远查不到 |
+     *
+     * 即：**要取证的事发生在启动期，而开关却活不过启动期** —— 逻辑上自相矛盾。
+     *
+     * ## 为什么要「同步读」
+     *
+     * 回填与建库都在 `Application.onCreate` 里启动，**早于任何异步设置加载**。
+     * 故这里由调用方传**已经读好的初值**，而不是让它自己去异步取 ——
+     * 否则第一波日志会跑在开关生效之前。
+     *
+     * @param initial 上次的开关状态（同步读到的）。
+     * @param write 之后每次翻转时调用，用于落盘。
+     */
+    fun attachPersistence(initial: Boolean, write: (Boolean) -> Unit) {
+        enabledFlag = initial
+        persist = write
+    }
+
     private val rings: Map<XDomain, XLogRing> =
         XDomain.entries.associateWith { XLogRing(MAX_ENTRIES_PER_DOMAIN) }
 
@@ -95,7 +133,33 @@ object XDiagnostics {
      */
     fun setEnabled(enabled: Boolean) {
         enabledFlag = enabled
+        // 落盘失败不该影响本次会话的开关（内存里的值已经是新的），但也不能静默 ——
+        // 写不进去意味着「下次启动开关又归零」，那是需要知道的现象。
+        //
+        // ⚠️ 记进**内存缓冲**而不是写系统日志，两个理由：
+        // ① 用户本来就在诊断页看记录，记在这里他才看得到；
+        // ② `android.util.Log` 在 JVM 单测里未 mock，会在**这条异常处理路径上**再抛一次。
+        persist?.let { write ->
+            runCatching { write(enabled) }.onFailure { error ->
+                record(
+                    domain = XDomain.CORE,
+                    level = XLogRing.Level.WARN,
+                    event = PERSIST_FAIL_EVENT,
+                    message = "诊断开关落盘失败，下次启动将回到默认：" + error,
+                    error = error,
+                )
+            }
+        }
     }
+
+    /**
+     * 开关落盘失败的事件名。
+     *
+     * 单列一条的理由：它的**后果与其它失败不同** —— 其它失败是「这次少记了一条」，
+     * 而它是「**下次启动开关会归零**」。用户看到它就知道：要么手动再开一次，
+     * 要么去查存储权限/空间。
+     */
+    const val PERSIST_FAIL_EVENT = "diag.persist_fail"
 
     /** 记录一条。**调用方一般用 [XLog] 而不是直接调这里**。 */
     fun record(domain: XDomain, level: Level, event: String, message: String, error: Throwable? = null) {

@@ -32,6 +32,7 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLog
 import me.rerere.rikkahub.x.storage.AssetBackfill
@@ -61,6 +62,15 @@ const val COMPRESS_RESULT_NOTIFICATION_CHANNEL_ID = "compress_result"
 class RikkaHubApp : Application() {
     override fun onCreate() {
         super.onCreate()
+
+        // [X-custom] **必须最先做**：把上次的诊断开关状态读回来。
+        //
+        // 顺序是有理由的 —— 后面几步（还原备份、建库、存量回填）都跑在启动期，
+        // 而它们正是最需要留下证据的地方。开关若等到别处再恢复，那批日志就已经过去了；
+        // 而开关若根本不持久化（改造前就是这样），进程一重启就归零，
+        // 「启动期发生了什么」将永远无法取证。故这里用**同步读**，且放在第一行。
+        DiagnosticSwitchStore.install(this)
+
         // Restore files and settings before eager Koin singletons or workers can access them.
         try {
             val restored = runBlocking(Dispatchers.IO) {
