@@ -56,6 +56,14 @@ on:
       # 那种情况下 App 仍能启动（Koin 只在**用到时**才解析），故障延后到第一次
       # 保存附件/清点存储时才出现，且现场离改动很远。故纳入守卫。
       - 'app/src/main/java/me/rerere/rikkahub/di/RepositoryModule.kt'
+
+      # X 存储层接线点（2026-09-11，P1）：资产引用登记的三个调用点都在这里
+      # （insertConversation / updateConversation / deleteConversation 各一处）。
+      # 本文件另有 X 的会话级模型覆盖定制，此前**整体不在守护范围内** ——
+      # 上游合并若冲掉这里的调用，引用表会停止更新，而 App 行为**看不出异常**：
+      # 附件照常存、照常显示，只是「谁在用这个文件」的账本不再准。
+      # 那种错误只能在回收误删时才暴露，代价不可逆 —— 故纳入守卫。
+      - 'app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt'
   workflow_dispatch:
 
 permissions:

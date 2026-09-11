@@ -100,24 +100,70 @@ class AssetRepository(
         conversationId: String,
         nowMillis: Long,
     ): Int = withContext(Dispatchers.IO) {
-        var registered = 0
-        transaction {
-            for (ref in refs) {
-                val relativePath =
-                    AssetRefExtractor.toRelativePath(ref.url, filesDir.absolutePath) ?: continue
-                val assetId = AssetRefExtractor.assetIdOf(relativePath) ?: continue
-                exec(AssetSql.insertRef(ref.messageId, assetId, ref.kind, conversationId, nowMillis))
-                exec(AssetSql.touchLastReferenced(assetId, nowMillis))
-                exec(AssetSql.deleteGcCandidate(assetId))
-                registered++
-            }
-        }
-        registered
+        transaction { insertRefs(refs, conversationId, nowMillis) }
     }
 
     /** 撤销某会话的全部引用（会话被删除时调用）。 */
     suspend fun removeRefsOfConversation(conversationId: String) = withContext(Dispatchers.IO) {
         exec(AssetSql.deleteRefsOfConversation(conversationId))
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 事务内变体：供**调用方已有事务**时使用
+    // ────────────────────────────────────────────────────────────────
+    //
+    // ⚠️ **为什么不直接复用上面的挂起版本**：那些方法内部会 `withContext(Dispatchers.IO)`，
+    // 而 SQLite 的事务是**绑定线程**的 —— 在 Room 的 `withTransaction { }` 块里再切线程，
+    // 新线程上没有活动事务，语句会落到事务之外（或者直接报错）。
+    // 本项目的既有代码里没有「事务内再 withContext」的先例，说明这是尚未被踩过的组合。
+    //
+    // 下面这组方法**不切换调度器、不开启嵌套事务**：原子性已由调用方的事务保证，
+    // 它们只负责在当前线程上把语句发出去。
+
+    /**
+     * 在调用方已有的事务内，**重建**某会话的全部引用。
+     *
+     * 「先全删、再全插」与上游 `updateConversation` 的做法一致（那里也是删光节点再插新节点，
+     * 见 `messageNodeDAO.deleteByConversation`）—— 因为消息节点的 id 可能保留而内容已变
+     * （编辑、重新生成），逐条比对并不比整删整插更可靠。
+     *
+     * @return 登记成功的引用条数。
+     */
+    fun replaceRefsOfConversationWithinTransaction(
+        conversationId: String,
+        refs: List<ExtractedAssetRef>,
+        nowMillis: Long,
+    ): Int {
+        exec(AssetSql.deleteRefsOfConversation(conversationId))
+        return insertRefs(refs, conversationId, nowMillis)
+    }
+
+    /** 在调用方已有的事务内撤销某会话的全部引用。 */
+    fun removeRefsOfConversationWithinTransaction(conversationId: String) {
+        exec(AssetSql.deleteRefsOfConversation(conversationId))
+    }
+
+    /** 引用插入的公共实现 —— 挂起版与事务内版共用，避免两处逻辑漂移。 */
+    private fun insertRefs(
+        refs: List<ExtractedAssetRef>,
+        conversationId: String,
+        nowMillis: Long,
+    ): Int {
+        var registered = 0
+        for (ref in refs) {
+            // 路径还原与哈希反解任一失败即跳过：非内容寻址路径（存量老文件）、
+            // 或 filesDir 之外的文件（缓存/外部存储）都不该进引用表
+            val relativePath =
+                AssetRefExtractor.toRelativePath(ref.url, filesDir.absolutePath) ?: continue
+            val assetId = AssetRefExtractor.assetIdOf(relativePath) ?: continue
+
+            exec(AssetSql.insertRef(ref.messageId, assetId, ref.kind, conversationId, nowMillis))
+            exec(AssetSql.touchLastReferenced(assetId, nowMillis))
+            // 资产又活了 → 撤销回收候选（与登记同生同死，见方法注释）
+            exec(AssetSql.deleteGcCandidate(assetId))
+            registered++
+        }
+        return registered
     }
 
     /** 撤销某条消息的全部引用（消息被删除或编辑时调用）。 */

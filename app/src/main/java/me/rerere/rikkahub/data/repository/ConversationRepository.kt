@@ -2,6 +2,7 @@
 package me.rerere.rikkahub.data.repository
 
 import android.database.sqlite.SQLiteBlobTooBigException
+import android.util.Log
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -24,6 +25,8 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.x.storage.AssetRefExtractor
+import me.rerere.rikkahub.x.storage.AssetRepository
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -34,10 +37,15 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    // [X-custom] X 存储层:资产引用登记(X 存储重构 P1)
+    private val assetRepository: AssetRepository,
 ) {
     companion object {
         private const val PAGE_SIZE = 20
         private const val INITIAL_LOAD_SIZE = 40
+
+        /** [X-custom] X 存储层引用登记的日志标签。 */
+        private const val TAG = "XStorage"
     }
 
     suspend fun hasFileReference(fileUrl: String): Boolean =
@@ -293,6 +301,7 @@ class ConversationRepository(
                 conversationToConversationEntity(conversation)
             )
             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            syncAssetRefs(conversation)
         }
         messageFtsManager.indexConversation(conversation)
     }
@@ -305,6 +314,7 @@ class ConversationRepository(
             // 删除旧的节点，插入新的节点
             messageNodeDAO.deleteByConversation(conversation.id.toString())
             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            syncAssetRefs(conversation)
         }
         messageFtsManager.indexConversation(conversation)
     }
@@ -322,8 +332,52 @@ class ConversationRepository(
             conversationDAO.delete(
                 conversationToConversationEntity(conversation)
             )
+            // [X-custom] X 引用表没有外键指向会话,不会 CASCADE → 必须显式撤销。
+            // 漏了这步的后果:会话已删,但引用还在 → 那些附件永远「有人用」→ 永远清不掉。
+            // 失败只记录不抛出:会话删除不该因为账本问题而失败
+            // (残留引用的方向是保守的 —— 文件留着,而不是被误删)。
+            runCatching {
+                assetRepository.removeRefsOfConversationWithinTransaction(conversation.id.toString())
+            }.onFailure {
+                Log.w(TAG, "撤销会话引用失败,附件可能暂时清不掉:${conversation.id}", it)
+            }
         }
         filesManager.deleteChatFiles(fullConversation.files)
+    }
+
+    /**
+     * [X-custom] 在**已有事务内**重建该会话的资产引用（X 存储重构 P1）。
+     *
+     * 与上游「删光节点再插新节点」的做法保持一致 —— 消息节点的 id 可能保留而内容已变
+     * （编辑、重新生成、切换分支），逐条比对并不比整删整插更可靠。
+     *
+     * **口径与 `Conversation.files` 一致：登记全部候选分支的引用，不只看 `selectIndex`。**
+     * 理由：用户切换分支后，被切走那一支的附件**仍在消息里**（切回来还要用）；
+     * 若只登记选中分支，那些附件会被判为无引用而进入回收候选 —— 切回去就是坏图。
+     * 代价是被切走分支的附件不会因弃用而释放，那是可接受的：**宁可留着**。
+     *
+     * **已知代价（P1 明知不做，P4 再优化）**：每次保存都会重扫会话全部消息。
+     * 长会话下这是可感知的额外开销，但 P1 的首要目标是**正确**而非快 ——
+     * 增量维护需要先有「哪些节点变了」的可靠判据，那要等引用关系稳定后再做。
+     */
+    private fun syncAssetRefs(conversation: Conversation) {
+        val messages = conversation.messageNodes.flatMap { it.messages }
+        if (messages.isEmpty()) return
+        // ⚠️ **失败只记录，绝不抛出**：本方法跑在会话保存的事务内，
+        // 一旦异常逃出去就会**回滚整个事务 → 用户的会话保存失败 → 丢消息**。
+        // 引用登记是辅助能力，不该有能力破坏核心路径。
+        //
+        // 降级后果可控：本次引用没登记，下次保存会重新整删整插（幂等），
+        // 因此只是账本短暂滞后，而不是数据错误。
+        runCatching {
+            assetRepository.replaceRefsOfConversationWithinTransaction(
+                conversationId = conversation.id.toString(),
+                refs = AssetRefExtractor.extract(messages),
+                nowMillis = System.currentTimeMillis(),
+            )
+        }.onFailure {
+            Log.w(TAG, "资产引用登记失败,回收判定将暂时失真:${conversation.id}", it)
+        }
     }
 
     suspend fun searchMessages(

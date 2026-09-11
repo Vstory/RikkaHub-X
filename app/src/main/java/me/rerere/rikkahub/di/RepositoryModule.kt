@@ -21,7 +21,8 @@ import java.io.File
 
 val repositoryModule = module {
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get())
+        // [X-custom] 末位 assetRepository 为 X 存储层引用登记(X 存储重构 P1)
+        ConversationRepository(get(), get(), get(), get(), get(), get(), get())
     }
 
     single {
