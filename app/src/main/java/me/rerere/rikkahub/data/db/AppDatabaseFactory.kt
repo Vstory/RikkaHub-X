@@ -10,6 +10,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_11_12
 import me.rerere.rikkahub.data.db.migrations.Migration_13_14
 import me.rerere.rikkahub.data.db.migrations.Migration_14_15
 import me.rerere.rikkahub.data.db.migrations.Migration_15_16
+import me.rerere.rikkahub.x.storage.XStorageSchema
 
 /** Shared schema, migrations and extensions for the app and staged backup validation. */
 internal object AppDatabaseFactory {
@@ -46,6 +47,20 @@ internal object AppDatabaseFactory {
                         )
                         """.trimIndent()
                     )
+
+                    // [X-custom] RikkaHub-X 存储层表(内容寻址的资产/引用/回收/墓碑/元数据)。
+                    // 建在这里而非 Room 迁移里,是为了不动本文件的 entities/version/autoMigrations
+                    // —— 上游每次加表都会改那几行,改它必然反复冲突(本仓库是 fork)。
+                    // 语句全部 IF NOT EXISTS,可重复执行;结构定义见 x/storage/XStorageSchema.kt。
+                    // 失败时只记录不抛出:存储层不可用应当降级,而不是让 App 打不开数据库。
+                    runCatching { XStorageSchema.ensure(db) }
+                        .onFailure {
+                            android.util.Log.e(
+                                "XStorage",
+                                "X 存储层表建立失败,内容寻址与回收功能将不可用",
+                                it,
+                            )
+                        }
                 }
             })
             .openHelperFactory(SQLiteConfiguration.openHelperFactory(context))
