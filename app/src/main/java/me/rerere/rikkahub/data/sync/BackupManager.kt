@@ -17,6 +17,7 @@ import me.rerere.rikkahub.data.db.AppDatabaseFactory
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.SQLiteConfiguration
 import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.rikkahub.x.storage.AssetHash
 import me.rerere.rikkahub.x.sync.OfficialBackupCompat
 import java.io.File
 import java.io.FileOutputStream
@@ -52,9 +53,14 @@ class BackupManager(
                     addFile(zip, snapshot, DatabaseBackup.ARCHIVE_DATABASE)
                 }
                 if (includeFiles) {
-                    for (folder in listOf(FileFolders.UPLOAD, FileFolders.SKILLS, FileFolders.FONTS)) {
+                    // [X-custom] `assets` 是 X 存储层的内容寻址根（X 存储重构 P1）。
+                    // 聊天附件自 P1 起落在那里，**漏了它就会「备份成功但换机后图片全丢」** ——
+                    // 这是接线引入的回归，故与接线一并处理。
+                    for (folder in BACKED_UP_FOLDERS) {
                         val directory = File(context.filesDir, folder)
-                        val files = if (folder == FileFolders.SKILLS) directory.walkTopDown().asSequence()
+                        // 多级目录必须递归：`assets` 是两级分片（`ab/cd/<hash>.ext`）。
+                        // 早先只在 `skills` 上递归，`listFiles()` 对 assets 只会看见分片目录、看不见文件。
+                        val files = if (folder in NESTED_FOLDERS) directory.walkTopDown().asSequence()
                         else directory.listFiles().orEmpty().asSequence()
                         for (file in files.filter { it.isFile }) {
                             currentCoroutineContext().ensureActive()
@@ -145,10 +151,12 @@ class BackupManager(
 
     private fun isAttachment(name: String): Boolean {
         val folder = name.substringBefore('/')
-        if (folder !in listOf(FileFolders.UPLOAD, FileFolders.SKILLS, FileFolders.FONTS) || '/' !in name) return false
+        if (folder !in BACKED_UP_FOLDERS || '/' !in name) return false
         val relative = name.substringAfter('/')
         require(relative.isNotBlank()) { "Invalid backup attachment: $name" }
-        require(folder == FileFolders.SKILLS || '/' !in relative) { "Invalid backup attachment: $name" }
+        // 只有本来就是多级目录的才允许相对路径里还有子目录；
+        // `upload` / `fonts` 是平的，出现子目录说明这个备份包不可信 → 拒绝。
+        require(folder in NESTED_FOLDERS || '/' !in relative) { "Invalid backup attachment: $name" }
         return true
     }
 
@@ -159,6 +167,22 @@ class BackupManager(
     }
 
     companion object {
+        /**
+         * [X-custom] 参与备份的目录（X 存储重构 P1 加入 `assets`）。
+         *
+         * 备份与恢复**共用这一份清单**：两侧各写一份时，加了目录却忘了改另一侧，
+         * 表现是「备份里有、恢复时被静默丢掉」—— 比彻底不备份更难发现。
+         */
+        private val BACKED_UP_FOLDERS = listOf(
+            FileFolders.UPLOAD,
+            FileFolders.SKILLS,
+            FileFolders.FONTS,
+            AssetHash.ROOT,
+        )
+
+        /** 里面有子目录的目录，只有这些需要递归遍历。 */
+        private val NESTED_FOLDERS = listOf(FileFolders.SKILLS, AssetHash.ROOT)
+
         private fun pendingRestore(context: Context) = PendingRestore(
             root = File(context.noBackupFilesDir, "backup-restore"),
             databaseFile = context.getDatabasePath(SQLiteConfiguration.DATABASE_NAME),
