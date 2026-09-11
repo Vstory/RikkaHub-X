@@ -202,6 +202,141 @@ jobs:
           done
           ls -l
 
+      # 决定本次产物发到哪个 Release。两者**必须是不同的 Release**：共用同一个 tag 时，
+      # 后一次构建的说明会整段覆盖前一次 —— 实测正式包的说明把 nightly 页面的免责声明刷掉了。
+      #   nightly → 固定 tag `nightly`（下载入口稳定），预发布
+      #   release → 独立 tag `v<基础版本>-x<序号>`，正式发布（非预发布）
+      - name: Resolve release target
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'nightly' }}"
+          if [ "$BUILD_TYPE" != "release" ]; then
+            {
+              echo "tag=nightly"
+              echo "name=Nightly Build"
+              echo "prerelease=true"
+              echo "make_latest=false"
+              echo "is_nightly=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "nightly → 发布到固定 tag nightly（预发布）"
+            exit 0
+          fi
+
+          # 从**构建产物**读 versionName（权威），去掉 `+<日期>.<短号>` 构建元数据得到基础版本号。
+          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk | head -1)"
+          AAPT2="$(command -v aapt2 || true)"
+          for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
+            [ -n "$home" ] || continue
+            [ -n "$AAPT2" ] && break
+            AAPT2="$(ls -d "$home"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)"
+          done
+          FULL=""
+          if [ -n "$AAPT2" ]; then
+            FULL="$("$AAPT2" dump badging "$APK" 2>/dev/null \
+              | sed -nE "s/^package:.*versionName='([^']+)'.*/\1/p" | head -1)"
+          fi
+          if [ -z "$FULL" ]; then
+            # 兜底：aapt2 不可用时读构建脚本的默认 versionName（X 定制把它拼成 <默认>+<日期>.<短号>）
+            FULL="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts | head -1)"
+            echo "⚠️ aapt2 不可用，versionName 改从 app/build.gradle.kts 读取: ${FULL}"
+          fi
+          BASE="${FULL%%+*}"
+          [ -n "$BASE" ] || { echo "❌ 读不到 versionName，无法生成正式版 tag"; exit 1; }
+
+          # 序号取已有同基础版本的正式 tag 的最大值 +1（首个正式版 → x1）
+          MAX=0
+          while read -r existing; do
+            seq="${existing##*-x}"
+            case "$seq" in ''|*[!0-9]*) continue ;; esac
+            [ "$seq" -gt "$MAX" ] && MAX="$seq"
+          done < <(gh api --paginate "repos/${{ github.repository }}/releases" \
+              --jq '.[].tag_name' 2>/dev/null | grep -E "^v${BASE}-x[0-9]+$" || true)
+
+          TAG="v${BASE}-x$((MAX + 1))"
+          echo "正式版 → tag ${TAG}（基础版本 ${BASE}，已有正式 tag 最大序号 ${MAX}）"
+          {
+            echo "tag=${TAG}"
+            echo "name=RikkaHub X ${TAG}"
+            echo "prerelease=false"
+            echo "make_latest=true"
+            echo "is_nightly=false"
+          } >> "$GITHUB_OUTPUT"
+
+      # 断言产物确实由**固定密钥**签名，并把证书指纹传给发布说明。
+      #
+      # 为什么必须断言：AGP 在 signingConfig 为空时**不报错**，而是产出 app-release-unsigned.apk；
+      # 而重命名用 `*.apk` 通配 → unsigned 包会连同正式包一起被发布，产物外观一切正常，
+      # 装到手机上才发现升不了级。签名这种事一旦错了只在用户侧暴露，必须在构建期拦住。
+      - name: Verify signing certificate
+        if: success()
+        env:
+          EXPECTED_SHA256: EE96008F1B4C668D23463B8482C33ED6D429C7F76546FE433C7B3C6D27EA1A08
+        run: |
+          # ① 任何构建类型都不许出现未签名产物
+          if ls app/build/outputs/apk/release/*unsigned*.apk >/dev/null 2>&1; then
+            echo "❌ 出现未签名产物，拒绝发布："
+            ls -l app/build/outputs/apk/release/*unsigned*.apk
+            exit 1
+          fi
+
+          if [ "${{ steps.target.outputs.is_nightly }}" = "true" ]; then
+            echo "nightly → 按设计使用随机临时签名，跳过固定签名断言"
+            echo "CERT_SHA256=（nightly 随机临时签名，无固定指纹）" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          APKSIGNER="$(command -v apksigner || true)"
+          for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
+            [ -n "$home" ] || continue
+            [ -n "$APKSIGNER" ] && break
+            APKSIGNER="$(ls -d "$home"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+          done
+          if [ -z "$APKSIGNER" ]; then
+            echo "❌ 找不到 apksigner，无法断言签名 —— 拒绝发布。"
+            echo "   已查：PATH、\$ANDROID_HOME、\$ANDROID_SDK_ROOT、/usr/local/lib/android/sdk"
+            exit 1
+          fi
+          echo "使用 apksigner: ${APKSIGNER}"
+
+          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk 2>/dev/null | head -1)"
+          [ -n "$APK" ] || { echo "❌ 找不到 arm64-v8a 产物，无法验证签名"; exit 1; }
+
+          # 指纹一律归一化成「去掉冒号的大写十六进制」再比对 —— 期望值不论写成
+          # `EE:96:...` 还是 `ee96...` 都能对上，避免比对手工维护的字符串格式。
+          norm() { tr -d ':\r\n' | tr 'a-f' 'A-F'; }
+
+          ACTUAL="$("$APKSIGNER" verify --print-certs "$APK" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | norm)"
+          EXPECTED="$(printf '%s' "$EXPECTED_SHA256" | norm)"
+
+          echo "产物签名证书 SHA-256: ${ACTUAL:-（读不到）}"
+          echo "固定密钥期望指纹  : ${EXPECTED}"
+
+          # ⚠️ 先确认**真的读到了**指纹。否则「apksigner 解析失败 → ACTUAL 为空」会与
+          #    「期望值为空」误判为相等 → 检查静默通过。读不到就必须拦住，不能算通过。
+          case "$ACTUAL" in
+            [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]*) ;;
+            *) echo "❌ 读不到签名证书指纹（apksigner 未能解析产物）—— 拒绝发布。"; exit 1 ;;
+          esac
+          if [ "${#ACTUAL}" -ne 64 ]; then
+            echo "❌ 签名证书指纹长度异常（${#ACTUAL}，应为 64）—— 拒绝发布。"
+            exit 1
+          fi
+          case "$EXPECTED" in
+            ????????????????????????????????????????????????????????????????) ;;
+            *) echo "❌ 期望指纹未配置或长度异常（${#EXPECTED}）—— 拒绝发布。"; exit 1 ;;
+          esac
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "❌ 签名证书与固定密钥不一致 —— 产物不是用正式密钥签的，"
+            echo "   发出去用户将无法覆盖升级。"
+            exit 1
+          fi
+          echo "✅ 签名一致：产物由固定正式密钥签名"
+          echo "CERT_SHA256=${ACTUAL}" >> "$GITHUB_ENV"
+
       # 生成 release 说明(新 → 旧)。
       # 为什么要有这一步：GitHub 的 release 资产列表**固定按上传顺序(旧→新)**显示，
       # 且没有 API/设置可以调整(见 Rename 步骤注释)。而说明(body)渲染在资产列表**上方**，
@@ -211,10 +346,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          IS_NIGHTLY: ${{ steps.target.outputs.is_nightly }}
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
         run: |
           TS="${{ steps.ts.outputs.ts }}"
           SHA="${{ steps.sha.outputs.short }}"
-          BASE="https://github.com/${REPO}/releases/download/nightly"
+          BASE="https://github.com/${REPO}/releases/download/${TARGET_TAG}"
           # 时间戳 20260910-0925 → 可读 2026-09-10 09:25
           PRETTY="${TS:0:4}-${TS:4:2}-${TS:6:2} ${TS:9:2}:${TS:11:2}"
 
@@ -230,9 +367,24 @@ jobs:
           cd app/build/outputs/apk/release
 
           {
-            echo "自动构建 · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
-            echo
-            echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
+            if [ "$IS_NIGHTLY" = "true" ]; then
+              # 免责声明：nightly 页面会被搜到/被直接下载，必须在最顶部劝退非开发者。
+              # 用 CAUTION 而非 WARNING —— GitHub 把 WARNING 渲染成橙色、CAUTION 渲染成红色(更醒目)。
+              echo "> [!CAUTION]"
+              echo "> **本页面为自动构建的开发测试版,功能不稳定,仅供开发者测试功能使用,请勿下载。**"
+              echo
+              echo "自动构建 · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
+              echo
+              echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
+            else
+              # 正式版页面：说明这是一个可以直接覆盖升级的固定签名包。
+              echo "> [!IMPORTANT]"
+              echo "> **正式版** —— 由固定密钥签名，可直接覆盖安装升级，无需卸载旧版。"
+              echo
+              echo "正式版 · \`${TARGET_TAG}\` · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
+              echo
+              echo "## 📥 下载 · ${PRETTY}(北京时间)"
+            fi
             echo
             echo "| 架构 | 适用 | 下载 |"
             echo "|---|---|---|"
@@ -244,7 +396,13 @@ jobs:
               fi
             done
             echo
-            echo "> ⚠️ nightly 为**随机临时签名**,每次构建签名不同 → 安装前请先**卸载旧版**(不能覆盖升级)。"
+            if [ "$IS_NIGHTLY" = "true" ]; then
+              echo "> ⚠️ nightly 为**随机临时签名**,每次构建签名不同 → 安装前请先**卸载旧版**(不能覆盖升级)。"
+            else
+              echo "> 🔒 签名证书 SHA-256：\`${CERT_SHA256}\`"
+              echo ">"
+              echo "> 与本仓库历史正式版一致，可直接覆盖升级；装前可用它与本地包的签名比对。"
+            fi
             echo
           } > "$BODY"
 
@@ -290,13 +448,15 @@ jobs:
       # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压。
       # tag 固定 nightly 只保留一条「最新构建」入口；文件名带短提交号所以 asset 不断追加、不覆盖。
       # 说明用 body_path 传入（动态生成、最新在前），见上一步。
-      - name: Publish nightly prerelease
+      # tag / 名称 / 是否预发布全部取自 Resolve release target —— 正式版不再写进 nightly 入口。
+      - name: Publish release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         if: success()
         with:
-          tag_name: nightly            # 固定 tag 保持下载入口稳定
-          name: Nightly Build
-          prerelease: true
+          tag_name: ${{ steps.target.outputs.tag }}
+          name: ${{ steps.target.outputs.name }}
+          prerelease: ${{ steps.target.outputs.prerelease }}
+          make_latest: ${{ steps.target.outputs.make_latest }}
           body_path: release_body.md
           files: app/build/outputs/apk/release/*.apk
 
@@ -312,16 +472,18 @@ jobs:
       #        ② **最新构建必然落在保留集内 → 永不删到更新的产物**（计数法无此保证）；
       #        ③ 重复删除按 404 容忍，不再导致步骤失败。
       - name: Cleanup old nightly assets (keep latest 6 builds)
-        if: success()
+        # 只清理 nightly —— 正式版的 tag 各自独立，产物必须长期保留。
+        if: success() && steps.target.outputs.is_nightly == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
         run: |
           sleep 30   # 等本次上传的 asset 在 API 中可见
 
           # 一次性取出全部 asset 的 (id, name)：只取一次，避免两次请求快照不一致
           mapfile -t ASSETS < <(gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            repos/${{ github.repository }}/releases/tags/nightly \
+            "repos/${{ github.repository }}/releases/tags/${TARGET_TAG}" \
             --jq '.assets[] | select(.name | test("-[0-9a-f]{8}\\.apk$")) | [.id, .name] | @tsv')
           echo "匹配命名规则的 asset 共 ${#ASSETS[@]} 个"
 
