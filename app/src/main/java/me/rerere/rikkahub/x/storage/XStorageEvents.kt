@@ -10,7 +10,7 @@ package me.rerere.rikkahub.x.storage
  * `assetWriteNew` 三种写法并存，日志再也搜不干净。
  *
  * **命名规则**：`域.动作.结果`，全小写点分。加新事件时照此续写，
- * 并在单测 [XStorageLogBufferTest] 的清单里登记 —— 那份清单同时是「有哪些可观测点」的答案。
+ * 并在单测 [XStorageEventsTest] 的清单里登记 —— 那份清单同时是「有哪些可观测点」的答案。
  */
 object XStorageEvents {
 
