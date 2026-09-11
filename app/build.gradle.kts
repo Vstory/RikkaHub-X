@@ -182,6 +182,15 @@ android {
     }
     sourceSets {
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
+        // [X-custom] Room 的 MigrationTestHelper 要从 assets 读 schema json
+        // (Migration25To26Test 需要 25.json 建旧库、并与 26.json 校验结果)
+        getByName("test").assets.srcDirs("$projectDir/schemas")
+    }
+    testOptions {
+        unitTests {
+            // Robolectric 需要读到合并后的资源与 manifest,否则测试里拿不到 Context 资源
+            isIncludeAndroidResources = true
+        }
     }
     androidResources {
         generateLocaleConfig = true
@@ -407,6 +416,12 @@ dependencies {
 
     // tests
     testImplementation(libs.junit)
+    // JVM 侧 Android 环境:迁移要在真的 SQLite 上跑一遍,并由 Room 校验结果
+    // (见 x/storage/Migration25To26Test;纯 JVM 单测只能断言字符串)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    // 迁移测试:MigrationTestHelper 用 25.json 建旧库、跑迁移、再由 Room 校验结果
+    testImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
