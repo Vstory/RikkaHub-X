@@ -22,6 +22,8 @@ import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.repository.FilesRepository
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.storage.AssetLedger
+import me.rerere.rikkahub.x.storage.AssetRefExtractor
 import me.rerere.rikkahub.x.storage.AssetWriteKind
 import me.rerere.rikkahub.x.storage.AssetWritePath
 import me.rerere.rikkahub.x.storage.WrittenAsset
@@ -44,6 +46,11 @@ class FilesManager(
      * 贴图是用户的即时动作，不能因为账本问题而存不下来。
      */
     private val assetWritePath: AssetWritePath,
+    /**
+     * [X-custom] 资产引用计数（X 存储重构 P1），只在 [deleteChatFiles] 里用来判断
+     * 「这个文件还有没有别人在用」。见那里的注释。
+     */
+    private val assetLedger: AssetLedger,
 ) {
     companion object {
         private const val TAG = "FilesManager"
@@ -210,7 +217,21 @@ class FilesManager(
         val relativePaths = mutableSetOf<String>()
         uris.filter { it.toString().startsWith("file:") }.forEach { uri ->
             val file = uri.toFile()
-            getRelativePathInFilesDir(file)?.let { relativePaths.add(it) }
+            val relativePath = getRelativePathInFilesDir(file)
+            // [X-custom] 删盘之前先数引用（X 存储重构 P1）。
+            //
+            // 内容寻址之后**一份内容只有一个文件**：同一张图被贴到两个会话、或同一份文件
+            // 转发多次，指向的都是同一个文件。于是「这条消息不再用它」**不等于**「可以删」——
+            // 直接删会让正在用它的另一个会话变成坏图。这在旧的「每次存一份随机文件名」下
+            // 不会发生，是去重**引入**的新条件，故必须一并处理。
+            //
+            // 判断放在删除之前，且引用仍在时**宁可留着**：留着只占磁盘，删错就是坏图。
+            if (relativePath != null && isStillReferenced(relativePath)) {
+                return@forEach
+            }
+            if (relativePath != null) {
+                relativePaths.add(relativePath)
+            }
             if (file.exists()) {
                 file.delete()
             }
@@ -222,6 +243,20 @@ class FilesManager(
                 }
             }
         }
+    }
+
+    /**
+     * 这个相对路径是否仍是**别处**在用的资产。
+     *
+     * 只对内容寻址路径有效（路径本身带内容哈希，能反解出资产 id）。旧式
+     * `upload/<uuid>` 没有内容指纹，无从查引用 → 照旧删除，行为与改动前一致。
+     *
+     * 查询失败时**返回 true（当作还在用）**：拿不准就不删，方向与回收策略一致 ——
+     * 多留一个的代价是磁盘，少留一个的代价是坏图。
+     */
+    private fun isStillReferenced(relativePath: String): Boolean {
+        val assetId = AssetRefExtractor.assetIdOf(relativePath) ?: return false
+        return runCatching { assetLedger.referenceCountOf(assetId) > 0 }.getOrDefault(true)
     }
 
     suspend fun countChatFiles(): Pair<Int, Long> = withContext(Dispatchers.IO) {

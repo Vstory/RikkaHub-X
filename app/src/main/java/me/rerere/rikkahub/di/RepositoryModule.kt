@@ -80,7 +80,7 @@ val repositoryModule = module {
     }
 
     single {
-        FilesManager(get(), get(), get(), get())
+        FilesManager(get(), get(), get(), get(), get())
     }
 
     // [X-custom] X 存储层(X 存储重构 P1):资产 / 引用 / 回收候选的读写。
