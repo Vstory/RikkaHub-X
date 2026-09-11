@@ -16,6 +16,7 @@ import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -34,7 +35,6 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
@@ -52,6 +52,7 @@ import me.rerere.rikkahub.utils.UpdateChecker
 import me.rerere.rikkahub.x.chat.ChatDraftStore
 import me.rerere.rikkahub.x.chat.ConversationModelPickStore
 import me.rerere.rikkahub.x.chat.XChatEvents
+import me.rerere.rikkahub.x.chat.getConversationChatModel
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLog
 import java.util.Locale
@@ -168,8 +169,12 @@ class ChatVM(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 当前模型
-    val currentChatModel = settings.map { settings ->
-        settings.getCurrentChatModel()
+    // [X-custom] 与生成侧同源:会话级覆盖 → 会话绑定助手 → 全局默认。
+    // 原先读 getCurrentChatModel()(只看助手级/全局),只选了会话级模型时此处判为 null,
+    // 而 ChatService 与模型选择器都已认得它 —— 发送按钮的闸门正基于此处,
+    // 表现为「明明选了模型,点发送却说请先选择模型」。口径见 ConversationAssistantScope.kt。
+    val currentChatModel = combine(settings, conversation) { current, conv ->
+        current.getConversationChatModel(conv)
     }.stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     // 错误状态
