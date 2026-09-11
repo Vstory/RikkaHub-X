@@ -7,7 +7,7 @@ package me.rerere.rikkahub.x.storage
  * **为什么不用 Room 实体**（决策依据见知识库 `存储重构方案.md`「P0 架构决策」）：
  * 注册实体会改 `AppDatabase.kt` 的 `entities` / `version` / `autoMigrations` ——
  * 上游每次加表都动这几行，改它等于**保证反复冲突**（本仓库是 fork）；
- * 且 Room 迁移依赖编译期生成的 `app/schemas/*.json`，而本项目本地不跑构建。
+ * 且 Room 迁移依赖编译期生成的 schema json（位于 `app/schemas` 目录），而本项目本地不跑构建。
  * 故表由**幂等 DDL** 建立（先例：同库的 `message_fts` 虚拟表就是这样建的，
  * 见 `AppDatabaseFactory` 的 `onOpen` 回调），列名以常量集中维护，
  * 并由 `XStorageSchemaTest` 断言「常量 ↔ DDL」一致，防迁移期漂移。
