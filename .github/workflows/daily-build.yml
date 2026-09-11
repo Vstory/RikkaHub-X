@@ -206,6 +206,12 @@ jobs:
       # 后一次构建的说明会整段覆盖前一次 —— 实测正式包的说明把 nightly 页面的免责声明刷掉了。
       #   nightly → 固定 tag `nightly`（下载入口稳定），预发布
       #   release → 独立 tag `v<基础版本>-x<序号>`，正式发布（非预发布）
+      # 决定本次产物发到哪个 Release。两类构建各用**一个固定 tag**，下载入口长期稳定。
+      # 两者必须是不同的 Release：共用同一个 tag 时，后一次构建的说明会整段覆盖前一次 ——
+      # 实测正式包的说明把 nightly 页面的免责声明刷掉了。
+      #   nightly → tag `nightly`，随机临时签名（装前须卸载）
+      #   release → tag `release`，固定密钥签名（可直接覆盖升级）
+      # 两者都标记为预发布：本仓库是自用派生版本，不对外声称稳定正式版。
       - name: Resolve release target
         id: target
         env:
@@ -219,13 +225,14 @@ jobs:
               echo "prerelease=true"
               echo "make_latest=false"
               echo "is_nightly=true"
+              echo "version="
             } >> "$GITHUB_OUTPUT"
-            echo "nightly → 发布到固定 tag nightly（预发布）"
+            echo "nightly → 固定 tag nightly（预发布，随机临时签名）"
             exit 0
           fi
 
-          # 从**构建产物**读 versionName（权威），去掉 `+<日期>.<短号>` 构建元数据得到基础版本号。
-          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk | head -1)"
+          # tag 固定，但页面要显示当前版本，故仍从**构建产物**读 versionName（权威）。
+          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk 2>/dev/null | head -1)"
           AAPT2="$(command -v aapt2 || true)"
           for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
             [ -n "$home" ] || continue
@@ -233,36 +240,26 @@ jobs:
             AAPT2="$(ls -d "$home"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)"
           done
           FULL=""
-          if [ -n "$AAPT2" ]; then
+          if [ -n "$APK" ] && [ -n "$AAPT2" ]; then
             FULL="$("$AAPT2" dump badging "$APK" 2>/dev/null \
               | sed -nE "s/^package:.*versionName='([^']+)'.*/\1/p" | head -1)"
           fi
           if [ -z "$FULL" ]; then
             # 兜底：aapt2 不可用时读构建脚本的默认 versionName（X 定制把它拼成 <默认>+<日期>.<短号>）
             FULL="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts | head -1)"
-            echo "⚠️ aapt2 不可用，versionName 改从 app/build.gradle.kts 读取: ${FULL}"
+            echo "⚠️ aapt2 不可用或找不到产物，versionName 改从 app/build.gradle.kts 读取: ${FULL}"
           fi
-          BASE="${FULL%%+*}"
-          [ -n "$BASE" ] || { echo "❌ 读不到 versionName，无法生成正式版 tag"; exit 1; }
+          echo "版本: ${FULL:-（读不到）}"
 
-          # 序号取已有同基础版本的正式 tag 的最大值 +1（首个正式版 → x1）
-          MAX=0
-          while read -r existing; do
-            seq="${existing##*-x}"
-            case "$seq" in ''|*[!0-9]*) continue ;; esac
-            [ "$seq" -gt "$MAX" ] && MAX="$seq"
-          done < <(gh api --paginate "repos/${{ github.repository }}/releases" \
-              --jq '.[].tag_name' 2>/dev/null | grep -E "^v${BASE}-x[0-9]+$" || true)
-
-          TAG="v${BASE}-x$((MAX + 1))"
-          echo "正式版 → tag ${TAG}（基础版本 ${BASE}，已有正式 tag 最大序号 ${MAX}）"
           {
-            echo "tag=${TAG}"
-            echo "name=RikkaHub X ${TAG}"
-            echo "prerelease=false"
-            echo "make_latest=true"
+            echo "tag=release"
+            echo "name=RikkaHub X 尝鲜版"
+            echo "prerelease=true"
+            echo "make_latest=false"
             echo "is_nightly=false"
+            echo "version=${FULL}"
           } >> "$GITHUB_OUTPUT"
+          echo "release → 固定 tag release（预发布，固定密钥签名）"
 
       # 断言产物确实由**固定密钥**签名，并把证书指纹传给发布说明。
       #
@@ -348,6 +345,7 @@ jobs:
           REPO: ${{ github.repository }}
           IS_NIGHTLY: ${{ steps.target.outputs.is_nightly }}
           TARGET_TAG: ${{ steps.target.outputs.tag }}
+          VERSION: ${{ steps.target.outputs.version }}
         run: |
           TS="${{ steps.ts.outputs.ts }}"
           SHA="${{ steps.sha.outputs.short }}"
@@ -367,9 +365,9 @@ jobs:
           cd app/build/outputs/apk/release
 
           {
+            # 两个页面都在最顶部放声明框，风格一致（CAUTION 在 GitHub 上是红色，最醒目）。
             if [ "$IS_NIGHTLY" = "true" ]; then
               # 免责声明：nightly 页面会被搜到/被直接下载，必须在最顶部劝退非开发者。
-              # 用 CAUTION 而非 WARNING —— GitHub 把 WARNING 渲染成橙色、CAUTION 渲染成红色(更醒目)。
               echo "> [!CAUTION]"
               echo "> **本页面为自动构建的开发测试版,功能不稳定,仅供开发者测试功能使用,请勿下载。**"
               echo
@@ -377,11 +375,11 @@ jobs:
               echo
               echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             else
-              # 正式版页面：说明这是一个可以直接覆盖升级的固定签名包。
-              echo "> [!IMPORTANT]"
-              echo "> **正式版** —— 由固定密钥签名，可直接覆盖安装升级，无需卸载旧版。"
+              # 尝鲜版：签名固定、可覆盖升级，但仍是派生自用版本，不声称稳定。
+              echo "> [!CAUTION]"
+              echo "> **本页面为尝鲜版,由固定密钥签名、可直接覆盖升级;功能仍在迭代,仅供尝鲜使用,请勿用于重要场景。**"
               echo
-              echo "正式版 · \`${TARGET_TAG}\` · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
+              echo "版本 \`${VERSION}\` · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
               echo
               echo "## 📥 下载 · ${PRETTY}(北京时间)"
             fi
@@ -398,10 +396,12 @@ jobs:
             echo
             if [ "$IS_NIGHTLY" = "true" ]; then
               echo "> ⚠️ nightly 为**随机临时签名**,每次构建签名不同 → 安装前请先**卸载旧版**(不能覆盖升级)。"
+              echo ">"
+              echo "> 需要能直接覆盖升级的包,请用 [尝鲜版](https://github.com/${REPO}/releases/tag/release)。"
             else
               echo "> 🔒 签名证书 SHA-256：\`${CERT_SHA256}\`"
               echo ">"
-              echo "> 与本仓库历史正式版一致，可直接覆盖升级；装前可用它与本地包的签名比对。"
+              echo "> 与本页面历史构建的签名一致 → 可直接覆盖升级,无需卸载。装前可用它与本地包的签名比对。"
             fi
             echo
           } > "$BODY"
@@ -471,9 +471,9 @@ jobs:
       #   性质：① 无论并发如何交错，都收敛到同一稳态（跑第二遍不会再多删）；
       #        ② **最新构建必然落在保留集内 → 永不删到更新的产物**（计数法无此保证）；
       #        ③ 重复删除按 404 容忍，不再导致步骤失败。
-      - name: Cleanup old nightly assets (keep latest 6 builds)
-        # 只清理 nightly —— 正式版的 tag 各自独立，产物必须长期保留。
-        if: success() && steps.target.outputs.is_nightly == 'true'
+      - name: Cleanup old assets (keep latest 6 builds)
+        # nightly 与尝鲜版各自一个固定 tag，两边都按「保留最新 6 组」清理。
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_TAG: ${{ steps.target.outputs.tag }}
