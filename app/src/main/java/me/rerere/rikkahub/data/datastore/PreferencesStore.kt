@@ -634,8 +634,13 @@ data class DisplaySetting(
     val enableContextUsageRing: Boolean = false,
     // 圆环点击后的弹窗样式(X 定制二选一,默认 classic 保持既有外观)
     val contextUsageDialogStyle: ContextUsageDialogStyle = ContextUsageDialogStyle.CLASSIC,
-    // 生成过程自动保存(默认开:数据保护类定制,与外观类默认关的取舍不同)
-    val enableGenerationAutosave: Boolean = true,
+    // 生成过程自动保存(默认【关】,2026-09-11 改)。
+    // 原因:每次保存都会重写整个会话 —— 删除并重插全部消息节点,再重建该会话的全文索引,
+    // 成本随会话长度线性增长。故长会话 / 长输出期间会周期性卡顿(实测上游流式期间不落库,
+    // 是本次周期性落库放大了这个成本)。
+    // 关闭的代价:长任务被系统中断时,丢掉上一个保存点之后的进度(见待开发清单 F2)。
+    // 根治方向:检索改增量(P4)+ 消息层改造(存储重构 ⑩),届时可评估改回默认开。
+    val enableGenerationAutosave: Boolean = false,
     // 自动保存间隔(秒)。默认 10;长任务期间若感觉卡顿可调大(越大越省,丢的进度也越多)。
     // 消费端会再钳到 GenerationAutosave.MIN/MAX_INTERVAL_SECONDS,防配置被改成 0 或负数导致死循环写库。
     val generationAutosaveIntervalSeconds: Int = 10,

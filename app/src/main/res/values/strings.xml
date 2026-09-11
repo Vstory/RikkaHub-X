@@ -985,7 +985,7 @@
   <!-- [X-custom] 生成过程自动保存 -->
   <string name="setting_page_generation_autosave">Long Task Protection</string>
   <string name="setting_generation_autosave_title">Autosave During Generation</string>
-  <string name="setting_generation_autosave_desc">Save periodically while generating, so a long-running task interrupted by the system does not lose completed work</string>
+  <string name="setting_generation_autosave_desc">Off by default: each save rewrites the whole conversation and rebuilds its search index, so longer sessions and longer outputs feel laggier. On: completed work survives an interruption by the system. Off: progress since the last save point is lost</string>
   <string name="setting_generation_autosave_interval_title">Autosave interval</string>
   <string name="setting_generation_autosave_interval_desc">In seconds. Default 10. If long tasks feel laggy, raise it — a larger value saves less often but loses more progress when interrupted. Range %1$s</string>
   <string name="setting_generation_autosave_interval_unit">seconds</string>

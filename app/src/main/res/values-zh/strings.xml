@@ -905,7 +905,7 @@
   <!-- [X-custom] 生成过程自动保存 -->
   <string name="setting_page_generation_autosave">长任务保护</string>
   <string name="setting_generation_autosave_title">生成过程自动保存</string>
-  <string name="setting_generation_autosave_desc">长任务执行期间定期保存，中途被系统中断也不会丢掉已完成的部分</string>
+  <string name="setting_generation_autosave_desc">默认关闭：每次保存都会重写整个会话并重建检索索引，会话越长、输出越长越容易周期性卡顿。开启后，长任务被系统中断时已生成的内容不会丢失；关闭时，中断会丢掉上一个保存点之后的进度</string>
   <string name="setting_generation_autosave_interval_title">自动保存间隔</string>
   <string name="setting_generation_autosave_interval_desc">单位秒，默认 10。若长任务期间感觉卡顿可调大——越大写库越少，但中断时丢的进度也越多。范围 %1$s</string>
   <string name="setting_generation_autosave_interval_unit">秒</string>
