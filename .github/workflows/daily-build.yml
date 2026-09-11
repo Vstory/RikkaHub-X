@@ -204,9 +204,10 @@ jobs:
           cd app/build/outputs/apk/release
 
           {
-            # 免责声明：nightly 页面会被搜到/被直接下载，必须在最顶部劝退非开发者
-            echo "> [!WARNING]"
-            echo "> **本页面的 APK 仅供开发者测试功能使用。功能不稳定,请不要下载。**"
+            # 免责声明：nightly 页面会被搜到/被直接下载，必须在最顶部劝退非开发者。
+            # 用 CAUTION 而非 WARNING —— GitHub 把 WARNING 渲染成橙色、CAUTION 渲染成红色(更醒目)。
+            echo "> [!CAUTION]"
+            echo "> **本页面为自动构建的开发测试版,功能不稳定,仅供开发者测试功能使用,请勿下载。**"
             echo
             echo "自动构建 · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
             echo
