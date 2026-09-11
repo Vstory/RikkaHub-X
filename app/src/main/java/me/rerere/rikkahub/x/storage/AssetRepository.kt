@@ -1,12 +1,14 @@
 // [X-custom] RikkaHub-X 存储管理重构(P1)：资产/引用/回收候选的读写（IO 层）
 package me.rerere.rikkahub.x.storage
 
-import me.rerere.rikkahub.x.diag.XLog
-import me.rerere.rikkahub.x.diag.XDomain
+import androidx.room.withTransaction
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
 
 /** 一条回收候选（供界面展示「闲置 N 天 / 可清理 N 字节」）。 */
 data class GcCandidate(
@@ -19,29 +21,48 @@ data class GcCandidate(
 /**
  * X 存储层的读写入口。
  *
- * **这一层是「纯 SQL 构造」（[AssetSql]）与「执行」之间的薄包装**：本类只负责
- * 取数据库句柄、开事务、按固定列顺序读游标，不掺业务判断 —— 判断都在
+ * **语句全部经 [XAssetDao]**（Room 在编译期解析列名与类型）。本类只负责
+ * 取 DAO、开事务、把查询结果翻译成领域模型，不掺业务判断 —— 判断都在
  * [AssetStorePolicy] / [AssetGcPolicy] 里，那些是纯函数、可在 JVM 单测中穷举。
  *
- * 表不注册为 Room 实体，故 DAO 不可用，走 `openHelper.writableDatabase`
- * （先例：同库的 `MessageFtsManager` 就是这样访问 `message_fts`）。
+ * ## 为什么有一个「同步桥」（[awaitDb]）
+ *
+ * [AssetLedger] 的契约是**同步**的：调用点在 Compose 回调（`ReceiveContentListener`、
+ * `ActivityResult`、AttachmentChips 的删除回调），改成挂起会波及 27 处调用点，
+ * 且会把「附件添加」变成异步（UI 时序变化）。那是一次独立的 UI/线程改造，不该混在
+ * 「存储层搬家」里做。
+ *
+ * 但 Room 的生成代码会断言「非主线程才可访问数据库」（除非开
+ * `allowMainThreadQueries` —— 那会让这个检查对**所有** DAO 失效，代价太大）。
+ * 于是这里把 Room 调用放到 IO 线程执行、调用方同步等待：
+ *
+ * | | 主线程是否阻塞 | Room 断言 | 全局安全网 |
+ * |---|---|---|---|
+ * | 改造前（裸 SQLite） | 是（裸 SQLite 无此断言） | — | — |
+ * | 改造后（本类） | **是（与改造前一致）** | 不触发（调用在 IO） | **保留** |
+ *
+ * 即：**行为与改造前逐字一致，而去掉的是「手写 SQL」这个根因**。
+ * 主线程阻塞要根治，得把那 27 处调用改成协程 —— 已单独登记为后续任务。
+ *
+ * ⚠️ **事务内变体不走同步桥**：`replaceRefsOfConversationWithinTransaction` /
+ * `removeRefsOfConversationWithinTransaction` 由调用方在 Room 的 `withTransaction`
+ * 里调用，那时当前线程已是事务线程（非主线程），直接发 DAO 语句即可 ——
+ * 若走 [awaitDb] 会切到另一个线程，语句就落到了事务之外。
  */
 class AssetRepository(
     private val database: AppDatabase,
     /** 应用私有文件根目录（`context.filesDir`）。用于把 URL 还原成相对路径、以及判断文件是否在盘上。 */
     private val filesDir: File,
 ) : AssetLedger {
-    private companion object {
-    }
+
+    private val dao get() = database.xAssetDao()
 
     /**
-     * 数据库句柄。**顺带兜底建 X 表**：`onOpen` 那一路失败不该让 X 存储永久退化
-     * —— 首次真正访问时换一个上下文再试一次（[XStorageSchema.ensureOnce]）。
+     * 在 IO 线程执行一次 Room 调用，调用方同步等待结果。
      *
-     * 背景：实测 2026-09-11 装机后 `x_asset` 不存在，所有写入静默回落旧路径，
-     * 而建表失败被吞在启动回调里。兜底让「静默失效」变成「最多晚一次访问生效」。
+     * 用法限于**同步契约**的方法（见类注释）。不要在已有 Room 事务的线程上调用。
      */
-    private val db get() = database.openHelper.writableDatabase.also { XStorageSchema.ensureOnce(it) }
+    private fun <T> awaitDb(block: () -> T): T = runBlocking(Dispatchers.IO) { block() }
 
     // ────────────────────────────────────────────────────────────────
     // 资产
@@ -57,14 +78,8 @@ class AssetRepository(
 
     /** @see AssetLedger.findKnown */
     override fun findKnown(hash: String): KnownAsset? {
-        val cursor = db.query(AssetSql.selectAssetByHash(hash).sql, arrayOf<Any?>(hash))
-        cursor.use { c ->
-            if (!c.moveToFirst()) {
-                return null
-            }
-            val relativePath = c.getString(0) ?: return null
-            return KnownAsset(relativePath = relativePath, fileExists = isFilePresent(relativePath))
-        }
+        val relativePath = awaitDb { dao.selectPathByHash(hash) } ?: return null
+        return KnownAsset(relativePath = relativePath, fileExists = isFilePresent(relativePath))
     }
 
     /** 登记（或覆盖）一条资产。调用方**只在内容首次落盘时**调用。 */
@@ -84,16 +99,18 @@ class AssetRepository(
         nowMillis: Long,
         extrasJson: String,
     ) {
-        exec(
-            AssetSql.upsertAsset(
-                hash = hash,
-                relativePath = relativePath,
-                byteSize = byteSize,
-                createdAt = nowMillis,
-                lastReferencedAt = nowMillis,
-                extrasJson = extrasJson,
+        awaitDb {
+            dao.upsertAsset(
+                XAssetEntity(
+                    id = hash,
+                    path = relativePath,
+                    byteSize = byteSize,
+                    createdAt = nowMillis,
+                    lastReferencedAt = nowMillis,
+                    extrasJson = extrasJson,
+                )
             )
-        )
+        }
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -116,13 +133,11 @@ class AssetRepository(
         refs: List<ExtractedAssetRef>,
         conversationId: String,
         nowMillis: Long,
-    ): Int = withContext(Dispatchers.IO) {
-        transaction { insertRefs(refs, conversationId, nowMillis) }
-    }
+    ): Int = database.withTransaction { insertRefs(refs, conversationId, nowMillis) }
 
     /** 撤销某会话的全部引用（会话被删除时调用）。 */
     suspend fun removeRefsOfConversation(conversationId: String) = withContext(Dispatchers.IO) {
-        exec(AssetSql.deleteRefsOfConversation(conversationId))
+        dao.deleteRefsOfConversation(conversationId)
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -135,7 +150,7 @@ class AssetRepository(
     // 本项目的既有代码里没有「事务内再 withContext」的先例，说明这是尚未被踩过的组合。
     //
     // 下面这组方法**不切换调度器、不开启嵌套事务**：原子性已由调用方的事务保证，
-    // 它们只负责在当前线程上把语句发出去。
+    // 它们只负责在当前线程上把语句发出去（直接调 DAO —— Room 认同一连接上的活动事务）。
 
     /**
      * 在调用方已有的事务内，**重建**某会话的全部引用。
@@ -151,13 +166,13 @@ class AssetRepository(
         refs: List<ExtractedAssetRef>,
         nowMillis: Long,
     ): Int {
-        exec(AssetSql.deleteRefsOfConversation(conversationId))
+        dao.deleteRefsOfConversation(conversationId)
         return insertRefs(refs, conversationId, nowMillis)
     }
 
     /** 在调用方已有的事务内撤销某会话的全部引用。 */
     fun removeRefsOfConversationWithinTransaction(conversationId: String) {
-        exec(AssetSql.deleteRefsOfConversation(conversationId))
+        dao.deleteRefsOfConversation(conversationId)
     }
 
     /** 引用插入的公共实现 —— 挂起版与事务内版共用，避免两处逻辑漂移。 */
@@ -174,10 +189,18 @@ class AssetRepository(
                 AssetRefExtractor.toRelativePath(ref.url, filesDir.absolutePath) ?: continue
             val assetId = AssetRefExtractor.assetIdOf(relativePath) ?: continue
 
-            exec(AssetSql.insertRef(ref.messageId, assetId, ref.kind, conversationId, nowMillis))
-            exec(AssetSql.touchLastReferenced(assetId, nowMillis))
+            dao.insertRef(
+                XAssetRefEntity(
+                    messageId = ref.messageId,
+                    assetId = assetId,
+                    kind = ref.kind,
+                    conversationId = conversationId,
+                    createdAt = nowMillis,
+                )
+            )
+            dao.touchLastReferenced(assetId, nowMillis)
             // 资产又活了 → 撤销回收候选（与登记同生同死，见方法注释）
-            exec(AssetSql.deleteGcCandidate(assetId))
+            dao.deleteGcCandidate(assetId)
             registered++
         }
         return registered
@@ -185,29 +208,21 @@ class AssetRepository(
 
     /** 撤销某条消息的全部引用（消息被删除或编辑时调用）。 */
     suspend fun removeRefsOfMessage(messageId: String) = withContext(Dispatchers.IO) {
-        exec(AssetSql.deleteRefsOfMessage(messageId))
+        dao.deleteRefsOfMessage(messageId)
     }
 
     /** 某资产当前还有多少条引用。 */
     suspend fun refCountOf(assetId: String): Int = withContext(Dispatchers.IO) { referenceCountOf(assetId) }
 
     /** @see AssetLedger.referenceCountOf */
-    override fun referenceCountOf(assetId: String): Int {
-        db.query(AssetSql.countRefsOfAsset(assetId).sql, arrayOf<Any?>(assetId)).use { cursor ->
-            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
-        }
-    }
+    override fun referenceCountOf(assetId: String): Int = awaitDb { dao.countRefsOfAsset(assetId) }
 
     // ────────────────────────────────────────────────────────────────
     // 回收候选（只登记,不自动删）
     // ────────────────────────────────────────────────────────────────
 
     /** 界面上的「可清理 N 字节」：当前**无任何引用**的资产总大小。 */
-    suspend fun unreferencedBytes(): Long = withContext(Dispatchers.IO) {
-        db.query(AssetSql.sumUnreferencedBytes().sql).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-        }
-    }
+    suspend fun unreferencedBytes(): Long = withContext(Dispatchers.IO) { dao.sumUnreferencedBytes() }
 
     /**
      * 回收候选清单：无引用、且首次无引用时刻已早于观察门槛。
@@ -220,20 +235,14 @@ class AssetRepository(
         observationMillis: Long = AssetGcPolicy.DEFAULT_OBSERVATION_MILLIS,
     ): List<GcCandidate> = withContext(Dispatchers.IO) {
         val cutoff = nowMillis - observationMillis
-        val out = mutableListOf<GcCandidate>()
-        db.query(AssetSql.selectGcCandidates(cutoff).sql, arrayOf<Any?>(cutoff)).use { cursor ->
-            while (cursor.moveToNext()) {
-                out.add(
-                    GcCandidate(
-                        assetId = cursor.getString(0),
-                        relativePath = cursor.getString(1),
-                        byteSize = cursor.getLong(2),
-                        firstUnreferencedAt = cursor.getLong(3),
-                    )
-                )
-            }
+        dao.selectGcCandidates(cutoff).map { row ->
+            GcCandidate(
+                assetId = row.assetId,
+                relativePath = row.relativePath,
+                byteSize = row.byteSize,
+                firstUnreferencedAt = row.firstUnreferencedAt,
+            )
         }
-        out
     }
 
     /**
@@ -246,7 +255,14 @@ class AssetRepository(
         firstUnreferencedAt: Long,
         reason: String = "",
     ) = withContext(Dispatchers.IO) {
-        exec(AssetSql.insertGcCandidate(assetId, firstUnreferencedAt, generation = 0L, reason = reason))
+        dao.insertGcCandidate(
+            XAssetGcEntity(
+                assetId = assetId,
+                firstUnreferencedAt = firstUnreferencedAt,
+                generation = 0L,
+                reason = reason,
+            )
+        )
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -271,17 +287,14 @@ class AssetRepository(
         byteSize: Long?,
         nowMillis: Long,
         reason: String = "",
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean {
         var purged = false
-        transaction {
-            val stillReferenced = db
-                .query(AssetSql.countRefsOfAsset(assetId).sql, arrayOf<Any?>(assetId))
-                .use { if (it.moveToFirst()) it.getInt(0) > 0 else false }
-            if (!stillReferenced) {
-                exec(AssetSql.deleteGcCandidate(assetId))
-                exec(AssetSql.deleteAsset(assetId))
-                exec(
-                    AssetSql.insertAudit(
+        database.withTransaction {
+            if (dao.countRefsOfAsset(assetId) == 0) {
+                dao.deleteGcCandidate(assetId)
+                dao.deleteAsset(assetId)
+                dao.insertAudit(
+                    XGcAuditEntity(
                         kind = XStorageTables.AuditKinds.ASSET_DELETED,
                         entityId = assetId,
                         byteSize = byteSize,
@@ -295,35 +308,14 @@ class AssetRepository(
         if (!purged) {
             XLog.warn(XDomain.STORAGE, XStorageEvents.GC_REFUSE) { "拒绝删除仍被引用的资产:" + assetId }
         }
-        purged
+        return purged
     }
 
     // ────────────────────────────────────────────────────────────────
     // 内部
     // ────────────────────────────────────────────────────────────────
 
-    /** 文件是否真的在盘上。路径先过 [AssetStorePolicy.isManagedPath] 之外的存在性检查即可。 */
+    /** 文件是否真的在盘上 —— 路径来自库，判存在与否只能问文件系统。 */
     private fun isFilePresent(relativePath: String): Boolean =
         runCatching { File(filesDir, relativePath).isFile }.getOrDefault(false)
-
-    private fun exec(statement: SqlStatement) {
-        db.execSQL(statement.sql, statement.args.toTypedArray())
-    }
-
-    /**
-     * 事务包装。
-     *
-     * `beginTransaction` 是可重入的（同一线程内嵌套调用只会让最外层提交时生效），
-     * 故本方法可安全地被嵌套调用。
-     */
-    private inline fun <T> transaction(block: () -> T): T {
-        db.beginTransaction()
-        return try {
-            val result = block()
-            db.setTransactionSuccessful()
-            result
-        } finally {
-            db.endTransaction()
-        }
-    }
 }

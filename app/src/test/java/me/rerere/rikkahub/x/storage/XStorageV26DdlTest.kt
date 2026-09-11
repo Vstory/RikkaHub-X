@@ -7,20 +7,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * X 表结构自检（X 存储重构 P0）。
+ * X 表建表语句自检（X 存储重构 P1 → Room 改造）。
  *
- * 这组用例守的是**「无编译期类型安全」这一代价**：
- * 表不是 Room 实体，列名靠手写 SQL 与手写映射对齐 ——
- * 一旦有人改了 DDL 却忘了改映射常量（或反之），
- * 编译不会报错、运行时只在特定路径上静默取错列。
- * 故用单测把两侧钉在一起。
+ * 这组用例守的是**「DDL 与列名常量两处手写」这一代价**：
+ * Room 的编译期校验能挡住「实体 ↔ DDL」不一致，但挡不住「`XStorageTables` 常量 ↔ DDL」
+ * 不一致 —— 而 DDL 仍必须是手写的（Room 只解析实体，不替迁移生成语句）。
  *
- * 另外钉住几条**幂等性与无害性**（这些是 P0 敢直接跑在既有库上的前提）：
- * 语句必须全部 `IF NOT EXISTS`、不得含破坏性操作。
+ * 故这里把两侧钉在一起，外加几条**设计纪律**的机器化守护：
+ *
+ * | 纪律 | 断言 |
+ * |---|---|
+ * | 迁移语句必须幂等 | 全部 `IF NOT EXISTS`（早期构建可能已建过表） |
+ * | 迁移语句不得动数据 | 不含 `DROP` / `DELETE`（回滚应手工执行） |
+ * | 免 schema 纪律 | 只用于读取/展示的字段不得占真列，必须待在 `extras_json` |
+ * | 「手动确认」不得退化成「到点自动删」 | 回收候选表不得重现重试次数与宽限截止列 |
+ * | **不得写 `CHECK`** | 见下 |
+ *
+ * ## 为什么反过来断言「不得含 CHECK」
+ *
+ * 手写 DDL 早期版本带 `CHECK (byte_size >= 0)` 之类的约束。改用 Room 后这条路走不通：
+ * Room 的 `@Entity` **表达不出 `CHECK`**，它生成的建表语句里没有 ——
+ * 若迁移里写了 CHECK，则「升级上来的库」与「全新安装的库」结构不同。
+ * Room 不比对 CHECK，所以这种不一致**不会报错**，会长期潜伏。
+ *
+ * 故本次统一放弃 CHECK，校验移到 Kotlin 侧（写入前断言 + 单测）。
+ * 这条断言就是防止它被无意间加回来。
  */
-class XStorageSchemaTest {
+class XStorageV26DdlTest {
 
-    private val ddl: String = XStorageSchema.CREATE_STATEMENTS.joinToString("\n")
+    private val ddl: String = XStorageV26.creates.joinToString("\n")
 
     private val tableNameRegex = Regex("CREATE TABLE IF NOT EXISTS (\\w+) \\(")
 
@@ -28,9 +43,9 @@ class XStorageSchemaTest {
 
     @Test
     fun `every statement is idempotent`() {
-        XStorageSchema.CREATE_STATEMENTS.forEach { statement ->
+        XStorageV26.creates.forEach { statement ->
             assertTrue(
-                "语句必须是 IF NOT EXISTS（否则重复打开库会失败）:$statement",
+                "语句必须是 IF NOT EXISTS（早期构建可能已建过这些表，重复执行不能失败）:$statement",
                 statement.contains("IF NOT EXISTS"),
             )
         }
@@ -39,8 +54,8 @@ class XStorageSchemaTest {
     @Test
     fun `no statement is destructive`() {
         val upper = ddl.uppercase()
-        assertFalse("不得含 DROP（回滚应手工执行）", upper.contains("DROP "))
-        assertFalse("不得含 DELETE（建表阶段不该动数据）", upper.contains("DELETE "))
+        assertFalse("建表语句不得含 DROP（清临时表那一步在重建流程里，不属于此处）", upper.contains("DROP "))
+        assertFalse("建表阶段不得动数据", upper.contains("DELETE "))
         assertFalse("不得含 TRUNCATE", upper.contains("TRUNCATE"))
     }
 
@@ -48,8 +63,8 @@ class XStorageSchemaTest {
     fun `statements are unique`() {
         assertEquals(
             "重复语句说明复制粘贴出错",
-            XStorageSchema.CREATE_STATEMENTS.size,
-            XStorageSchema.CREATE_STATEMENTS.toSet().size,
+            XStorageV26.creates.size,
+            XStorageV26.creates.toSet().size,
         )
     }
 
@@ -57,7 +72,7 @@ class XStorageSchemaTest {
 
     @Test
     fun `ddl table set matches declared constants exactly`() {
-        val declared = XStorageSchema.CREATE_STATEMENTS
+        val declared = XStorageV26.creates
             .flatMap { statement -> tableNameRegex.findAll(statement).map { it.groupValues[1] } }
             .toSet()
 
@@ -110,12 +125,18 @@ class XStorageSchemaTest {
     // ---- 关键约束 ----
 
     @Test
+    fun `ddl carries no check constraints`() {
+        // 见类注释:「升级上来的库」与「全新安装的库」必须形态一致,而 Room 表达不出 CHECK
+        assertFalse(
+            "建表语句不得含 CHECK —— Room 的 @Entity 表达不出它,写了会让新装与升级的库结构不一致",
+            ddl.uppercase().contains("CHECK ("),
+        )
+    }
+
+    @Test
     fun `content addressing invariants hold`() {
-        val asset = ddlOf(XStorageTables.ASSET)
-        assertTrue("资产 id 非空", asset.contains("CHECK (${XStorageTables.Asset.ID} <> '')"))
-        assertTrue("字节数非负", asset.contains("CHECK (${XStorageTables.Asset.BYTE_SIZE} >= 0)"))
         assertTrue(
-            "同一路径只应有一个资产行",
+            "同一路径只应有一个资产行（去重的前提）",
             ddl.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_x_asset_path"),
         )
     }
@@ -177,16 +198,14 @@ class XStorageSchemaTest {
                     "${XStorageTables.AssetRef.ASSET_ID}, ${XStorageTables.AssetRef.KIND})",
             ),
         )
-        // 热查询索引:按资产反查引用(回收判定) 与 按消息查资产(渲染)
+        // 热查询索引:按资产反查引用(回收判定) 与 按消息查资产(渲染) 与会话删除
         assertTrue(ddl.contains("idx_x_asset_ref_asset"))
         assertTrue(ddl.contains("idx_x_asset_ref_message"))
         assertTrue(ddl.contains("idx_x_asset_ref_conversation"))
     }
 
     @Test
-    fun `gc table enforces non negative generation and indexes the reuse gate`() {
-        val gc = ddlOf(XStorageTables.ASSET_GC)
-        assertTrue(gc.contains("CHECK (${XStorageTables.AssetGc.GENERATION} >= 0)"))
+    fun `gc table indexes the reuse gate`() {
         assertTrue(
             "首次无引用时刻是候选排序与「闲置 N 天」的依据,必须有索引",
             ddl.contains("idx_x_asset_gc_first_unreferenced"),
@@ -212,98 +231,16 @@ class XStorageSchemaTest {
         )
     }
 
-    // ---- 元数据键 ----
-
     @Test
-    fun `meta keys are namespaced and unique`() {
-        val keys = listOf(
-            XStorageSchema.META_SCHEMA_VERSION,
-            XStorageSchema.META_LAST_GC_AT,
-            XStorageSchema.META_BACKFILL_STATE,
-            XStorageSchema.META_BACKFILL_CURSOR,
-        )
-        assertEquals("元数据键重复会互相覆盖", keys.size, keys.toSet().size)
-        keys.forEach { key ->
-            assertTrue("元数据键需带命名空间,避免与将来其它用途撞键:$key", key.startsWith("x.storage."))
-        }
-    }
-
-    @Test
-    fun `schema version starts at one`() {
-        assertTrue("结构版本应从 1 起", XStorageSchema.SCHEMA_VERSION >= 1)
-    }
-
-    /**
-     * 升级链的守护：v1→v2 的重建流程必须完整。
-     *
-     * 缺任何一步的后果都是**静默的**：
-     * - 缺重建语句 → 旧库永远停在旧形态（mime_type 等 NOT NULL 列还在，后续写入会失败）
-     * - 缺索引重建 → 唯一约束静默消失，去重不再成立
-     * - 缺临时表清理 → 库里留下幽灵表
-     */
-    @Test
-    fun `upgrade to v2 rebuilds asset table and restores indexes`() {
-        val upgrades = XStorageSchema.upgradeStatementsTo(2)
-        assertTrue("v1→v2 应有升级语句", upgrades.isNotEmpty())
+    fun `gc audit primary key is non null`() {
+        // SQLite 对 `INTEGER PRIMARY KEY AUTOINCREMENT` 的 PRAGMA notnull 报 0,
+        // 而 Room 对自增主键期望 NOT NULL —— 少了这三个字,升级后结构校验不过、库打不开,
+        // 且报错信息不会指向这里。故在此钉住。
+        val audit = ddlOf(XStorageTables.GC_AUDIT)
         assertTrue(
-            "重建表后必须重跑索引语句（表改名时索引会跟着走,删旧表即丢索引）",
-            upgrades.any { it.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_x_asset_path") },
+            "审计表的自增主键必须显式写 NOT NULL（SQLite 不会自动补这个标记位）:$audit",
+            audit.contains("${XStorageTables.GcAudit.ID} INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL"),
         )
-        assertTrue(
-            "重建流程需搬移旧数据",
-            upgrades.any { it.contains("INSERT OR REPLACE INTO ${XStorageTables.ASSET}") },
-        )
-        assertTrue(
-            "重建后需清理临时表",
-            upgrades.any { it.contains("DROP TABLE IF EXISTS") },
-        )
-    }
-
-    /**
-     * 升级链的守护：v2→v3 同样必须完整。
-     *
-     * 少了重建的后果尤其隐蔽 —— 跑过 P0 版本构建的机器上 `x_asset_gc` 仍是旧形态，
-     * 而 `CREATE TABLE IF NOT EXISTS` **不会改已存在的表**，新代码写入
-     * `first_unreferenced_at` 会直接报「无此列」。
-     */
-    @Test
-    fun `upgrade to v3 rebuilds gc table and restores indexes`() {
-        val upgrades = XStorageSchema.upgradeStatementsTo(3)
-        assertTrue("v2→v3 应有升级语句", upgrades.isNotEmpty())
-        assertTrue(
-            "重建表后必须重跑索引语句（表改名时索引会跟着走,删旧表即丢索引）",
-            upgrades.any { it.contains("idx_x_asset_gc_first_unreferenced") },
-        )
-        assertTrue(
-            "重建流程需搬移旧数据",
-            upgrades.any { it.contains("INSERT OR REPLACE INTO ${XStorageTables.ASSET_GC}") },
-        )
-        assertTrue(
-            "重建后需清理临时表",
-            upgrades.any { it.contains("DROP TABLE IF EXISTS") },
-        )
-    }
-
-    /**
-     * 每一版都要有升级语句。
-     *
-     * 这条挡的是「加了版本号却忘了写语句」—— 后果是旧库**静默**停在旧形态，
-     * 直到某条读路径撞上不存在的列才炸，而那时已离改动很远。
-     */
-    @Test
-    fun `every version up to current has upgrade statements`() {
-        for (version in 2..XStorageSchema.SCHEMA_VERSION) {
-            assertTrue(
-                "缺少到 v$version 的升级语句",
-                XStorageSchema.upgradeStatementsTo(version).isNotEmpty(),
-            )
-        }
-    }
-
-    @Test
-    fun `upgrade statements are not needed for versions below current`() {
-        // 无历史版本的档位应为空 —— 否则会在每次打开库时重复执行无用语句
-        assertTrue("v1 是首版,不该有增量语句", XStorageSchema.upgradeStatementsTo(1).isEmpty())
     }
 
     // ---- 取值常量 ----
@@ -321,7 +258,7 @@ class XStorageSchemaTest {
     // ---- helpers ----
 
     private fun ddlOf(table: String): String {
-        val found = XStorageSchema.CREATE_STATEMENTS.firstOrNull {
+        val found = XStorageV26.creates.firstOrNull {
             it.contains("CREATE TABLE IF NOT EXISTS $table (")
         }
         assertNotNull("找不到 $table 的建表语句", found)

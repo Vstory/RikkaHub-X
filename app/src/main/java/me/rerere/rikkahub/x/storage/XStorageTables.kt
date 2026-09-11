@@ -10,7 +10,8 @@ package me.rerere.rikkahub.x.storage
  * 且 Room 迁移依赖编译期生成的 schema json（位于 `app/schemas` 目录），而本项目本地不跑构建。
  * 故表由**幂等 DDL** 建立（先例：同库的 `message_fts` 虚拟表就是这样建的，
  * 见 `AppDatabaseFactory` 的 `onOpen` 回调），列名以常量集中维护，
- * 并由 `XStorageSchemaTest` 断言「常量 ↔ DDL」一致，防迁移期漂移。
+ * 并由 `XStorageV26DdlTest` 与 `scripts/check_x_room_alignment.py` 两处断言
+ * 「常量 ↔ DDL / 实体 / DAO」一致，防迁移期漂移。
  *
  * **为什么不另建 DB 文件**：DB 是单文件 `rikka_hub`，备份/同步/恢复
  * （`BackupManager` / `DatabaseBackup` / `S3Sync` / `WebDavSync` / `OfficialBackupCompat`）
@@ -65,7 +66,8 @@ object XStorageTables {
      * 避免不同用途的键在同一 JSON 里撞名。
      *
      * **提升为真列的判据**：一旦某个键需要索引 / 唯一约束 / CHECK / 排序，
-     * 就把它提升成真列（届时 `XStorageSchema` 加一版并写重建语句），
+     * 就把它提升成真列（届时改 `XStorageEntities` 的实体 + `AppDatabase` 的 version
+     * 加一版 + 写对应迁移语句），
      * 而不是让它"永久住在 JSON 里"。
      */
     object AssetExtras {

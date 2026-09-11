@@ -17,7 +17,8 @@ import androidx.room.Query
  * 这一列。改到这里之后，Room 在**编译期**解析每条语句：列名写错、类型不匹配、
  * 返回类型与列数不符，都在编译时失败。
  *
- * 故本 DAO 落地后，`AssetSqlTest` 的 15 条存在理由消失（它守的事 Room 守得更严）。
+ * 故本 DAO 落地后，`AssetSql`（234 行）与 `AssetSqlTest`（15 条断言）**已一并删除**
+ * （2026-09-11）—— 它们守的事 Room 守得更严，留着只是两处真源。
  *
  * ## 三条从手写版本继承下来的语义（改写时不能丢）
  *
@@ -29,8 +30,9 @@ import androidx.room.Query
  *
  * ## 尚未覆盖的表
  *
- * `x_tombstone` 与 `x_storage_meta` 的读写目前仍在 `XStorageSchema`（`readInt` /
- * `putMeta` 等）。本步只搬资产侧 15 条 —— 与方案的任务分解一致，一次只动一层。
+ * `x_tombstone` 与 `x_storage_meta` 目前**没有任何读写方**（墓碑待同步功能接入，
+ * 元数据表待回填功能接入），故没有对应 DAO —— 表由 Room 建出来即可。
+ * 需要时再加 `XTombstoneDao` / `XStorageMetaDao`，同样走实体注解，不写裸 SQL。
  */
 @Dao
 interface XAssetDao {

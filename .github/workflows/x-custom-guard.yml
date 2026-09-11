@@ -50,6 +50,10 @@ on:
       # X 表不注册为 Room 实体，而由该文件的 onOpen 回调调用 XStorageSchema.ensure 建立；
       # 上游若在此处重构/替换回调，X 表会静默建不出来 —— 故纳入守卫。
       - 'app/src/main/java/me/rerere/rikkahub/data/db/AppDatabaseFactory.kt'
+      # 2026-09-11 补登:AppDatabase.kt 承载 X 的 Room 接线(6 张 X 表进 entities、
+      # xAssetDao 入口、version 25 → 26)。它此前不在清单里 —— 改它不会触发本工作流,
+      # 而这些改动一旦被同步上游时覆盖,表现是 X 表整体消失、内容寻址静默退化。
+      - 'app/src/main/java/me/rerere/rikkahub/data/db/AppDatabase.kt'
 
       # X 存储层接缝（2026-09-11，P1）：AssetRepository 的 Koin 注册在这里。
       # 上游重构 repositoryModule 时，X 的注册行可能被连带移除或改坏 ——

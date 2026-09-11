@@ -74,6 +74,20 @@ object XStorageEvents {
     /** X 存储层建表失败（`onOpen` 回调里 `ensure` 抛错）—— 存储层不可用，功能降级。 */
     const val SCHEMA_ENSURE_FAIL = "asset.schema.ensure_fail"
 
+    /** X 表纳入 Room 的迁移开始 / 结束。 */
+    const val MIGRATION_RUN = "asset.migration.run"
+
+    /**
+     * 早期形态的表被重建（v1 资产表 / v2 回收候选表）。
+     *
+     * 单列一条事件的理由：重建是**改结构**的动作，出问题时需要能一眼看出
+     * 「这台设备走了重建分支」—— 与「走的是全新建表」是两条完全不同的路径。
+     */
+    const val MIGRATION_LEGACY_REBUILD = "asset.migration.legacy_rebuild"
+
+    /** 审计表主键补 `NOT NULL`（Room 对自增主键的要求，SQLite 不会自动补这个标记位）。 */
+    const val MIGRATION_PK_FIX = "asset.migration.pk_fix"
+
     /** 撤销会话引用失败 —— 会话已删但引用残留，附件将暂时清不掉。 */
     const val REF_DROP_FAIL = "asset.ref.drop_fail"
 
