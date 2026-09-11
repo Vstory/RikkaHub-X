@@ -71,19 +71,40 @@ REGISTRATION_OPEN = re.compile(r"\b(single|factory)\s*(?:<([\w.]+)>)?\s*(?:\([^)
 
 # ── 从注册体推出「登记了什么类型」的几种形态 ──
 #
-# 实测过三种，**只认第一种会报出成片误报**（15 处假阳性），故都要覆盖：
+# 实测过四种，**每一种都是真实存在的写法，少覆盖一种就报成片误报**：
 #
 #   single { ConversationRepository(get(), ...) }            → X(       构造调用
 #   single { get<AppDatabase>().conversationDao() }          → 取访问器的**返回类型**
 #   single { AppDatabaseFactory.create(context) }            → 取工厂方法的**返回类型**
+#   single { PebbleEngine.Builder()...build() }              → Builder 链，登记的是**前导类型**
 #   single { val x = get(); WorkspaceManager(...) }          → 构造调用不在首行
 CTOR_ANY = re.compile(r"\b([A-Z]\w*)\s*\(")
 CALL_ON_TYPE = re.compile(r"\b([A-Z]\w*)\s*\.\s*(\w+)\s*\(")
 CALL_ON_GET = re.compile(r"\bget\s*<\s*[\w.]+\s*>\s*\(\s*\)\s*\.\s*(\w+)\s*\(")
 BARE_CALL = re.compile(r"(?<![\w.])(\w+)\s*\(")
 
+# `Type.Builder()...build()` —— 表达式整体是 Type，不是 Builder
+BUILDER_CHAIN = re.compile(r"^\s*([A-Z]\w*)\s*\.\s*Builder\s*\(")
+
 # `fun name(...): ReturnType` —— 用来把「调用了某个访问器/工厂」换算成「登记了哪个类型」
 FUNC_RET = re.compile(r"\bfun\s+(?:<[^>(]*>\s*)?(\w+)\s*\([^)]*\)\s*(?::\s*([^={\n]+))?")
+
+# 类型来自**依赖库**、我们自己的源码里推不出静态类型的登记。
+# 每个都要写清理由 —— 这是唯一一类「靠清单」的判定，必须能一眼看出为什么在这里。
+LIBRARY_REGISTRATIONS = {
+    # `Firebase.analytics` 是 Firebase SDK 的扩展属性，返回 FirebaseAnalytics。
+    # 表达式类型来自库，本地推不出，故显式登记。
+    "Firebase.analytics": "FirebaseAnalytics",
+    "Firebase.crashlytics": "FirebaseCrashlytics",
+}
+
+# `androidContext(...)` 连带提供的类型。
+#
+# 实证依据：`ChatService(context = get())` / `ChatVM(context = get())` 的参数类型是
+# `Application`，而项目里只有 `androidContext(this@RikkaHubApp)` 一行 —— 既然每个版本
+# 都能正常启动（ChatService 是 createdAtStart 之外的普通单例，但首屏就会建），
+# 说明 koin-android 的 androidContext 不是只登记 `Context`。故一并视为已提供。
+ANDROID_CONTEXT_TYPES = ("Context", "Application")
 
 # 视图模型登记
 VIEWMODEL_OPEN = re.compile(r"\bviewModel\s*<\s*([\w.]+)\s*>\s*\{")
@@ -172,9 +193,14 @@ def base_type(type_text: str) -> str | None:
     return text.split(".")[-1]
 
 
-def constructor_params(sources: list[str]) -> dict[str, list[str]]:
-    """类名 → 主构造参数的类型名列表（顺序保持，无法解析的记为 `?`）。"""
-    result: dict[str, list[str]] = {}
+def constructor_params(sources: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """
+    类名 → 主构造参数列表 `[(参数名, 类型名), ...]`（顺序保持，无法解析的记为 `?`）。
+
+    **同时保留参数名**：`viewModel<X> { X(a = get(), b = get()) }` 用的是具名参数，
+    位置对应在那里不成立，必须按名字查。
+    """
+    result: dict[str, list[tuple[str, str]]] = {}
     for path in sources:
         try:
             text = strip_comments(pathlib.Path(path).read_text(encoding="utf-8"))
@@ -185,19 +211,19 @@ def constructor_params(sources: list[str]) -> dict[str, list[str]]:
             close_index = match_pair(text, open_index, "(", ")")
             if close_index < 0:
                 continue
-            types: list[str] = []
+            params: list[tuple[str, str]] = []
             for part in split_top_level(text[open_index + 1:close_index]):
                 piece = part.strip()
                 if not piece:
                     continue
                 piece = re.sub(r"^(?:private |internal |protected )*(?:val |var )?", "", piece)
                 if ":" not in piece:
-                    types.append("?")
+                    params.append(("?", "?"))
                     continue
-                _, type_text = piece.split(":", 1)
+                name, type_text = piece.split(":", 1)
                 type_text = split_top_level(type_text, "=")[0]
-                types.append(base_type(type_text) or "?")
-            result[match.group(1)] = types
+                params.append((name.strip(), base_type(type_text) or "?"))
+            result[match.group(1)] = params
     return result
 
 
@@ -268,6 +294,16 @@ def registered_types(di_files: list[str], sources: list[str]) -> set[str]:
             for call in BARE_CALL.finditer(body):
                 by_call(call.group(1))
 
+            # ⑤ Builder 链：`PebbleEngine.Builder()...build()` → 登记 PebbleEngine
+            builder = BUILDER_CHAIN.match(body)
+            if builder:
+                types.add(builder.group(1))
+
+            # ⑥ 类型来自依赖库的登记：`Firebase.analytics`
+            bare = body.strip()
+            if bare in LIBRARY_REGISTRATIONS:
+                types.add(LIBRARY_REGISTRATIONS[bare])
+
         for match in VIEWMODEL_OPEN.finditer(text):
             types.add(match.group(1).split(".")[-1])
         for match in VIEWMODEL_OF.finditer(text):
@@ -275,18 +311,82 @@ def registered_types(di_files: list[str], sources: list[str]) -> set[str]:
         for match in re.finditer(r"\bbind\s+(\w+)::class", text):
             types.add(match.group(1))
 
-    # `Context` 由启动器 `androidContext(...)` 提供
+    # `Context` / `Application` 由启动器 `androidContext(...)` 连带提供
     for path in sources:
         try:
             if ANDROID_CONTEXT.search(pathlib.Path(path).read_text(encoding="utf-8")):
-                types.add("Context")
+                types.update(ANDROID_CONTEXT_TYPES)
                 break
         except OSError:
             continue
     return types
 
 
-def injected_positions(path: str, constructors: dict[str, list[str]]) -> list[tuple[int, str, str]]:
+# 具名参数：`name = value`
+NAMED_ARG = re.compile(r"^(\w+)\s*=\s*(.+)$", re.S)
+
+# 视图模型参数：`params.get()`
+PARAMS_GET = re.compile(r"params\s*\.\s*get\s*\(\s*\)")
+
+
+def resolve_ctor_args(
+    body: str,
+    ctor_open_index: int,
+    params: list[tuple[str, str]],
+    line: int,
+    ctor_name: str,
+) -> list[tuple[int, str, str]]:
+    """
+    解析一次构造调用的实参，返回 [(行号, 注册类型, 注入类型)]。
+
+    支持两种传参风格（项目里两种都有）：
+
+    - **位置**：`FilesManager(get(), get(), ...)` —— 按**序号**对应构造参数；
+    - **具名**：`ChatVM(context = get(), ...)` —— 按**参数名**对应。
+
+    只处理取值恰好是 `get()` / `get<T>()` 的实参；其它形态（`get<Context>().filesDir`、
+    字面量）一律跳过 —— 它们要么不是依赖，要么解析不可靠，报出来就是误报。
+    """
+    out: list[tuple[int, str, str]] = []
+
+    open_index = ctor_open_index
+    close_index = match_pair(body, open_index, "(", ")")
+    if close_index < 0:
+        return out
+
+    by_name = {name: type_name for name, type_name in params}
+
+    for index, arg in enumerate(split_top_level(body[open_index + 1:close_index])):
+        piece = arg.strip().replace("\n", " ")
+        if not piece:
+            continue
+        if PARAMS_GET.search(piece):
+            continue  # viewModel 的 params → 不是容器依赖
+
+        named = NAMED_ARG.match(piece)
+        if named:
+            arg_name, value = named.group(1), named.group(2).strip()
+            wanted_from_name = by_name.get(arg_name)
+        else:
+            arg_name, value = None, piece
+            wanted_from_name = params[index][1] if index < len(params) else None
+
+        if wanted_from_name in (None, "?"):
+            continue  # 参数类型解析不出来 → 不判定（宁可漏报）
+
+        typed = GET_TYPED.fullmatch(value)
+        if typed:
+            wanted = typed.group(1).split(".")[-1]
+        elif GET_PLAIN.fullmatch(value):
+            wanted = wanted_from_name
+        else:
+            continue  # 不是纯粹的 get() → 跳过
+
+        out.append((line, ctor_name, wanted))
+    return out
+
+
+def injected_positions(path: str, constructors: dict[str, list[tuple[str, str]]]) -> list[tuple[int, str, str]]:
     """返回 [(行号, 注册类型, 注入类型)]。"""
     try:
         clean = strip_comments(pathlib.Path(path).read_text(encoding="utf-8"))
@@ -295,6 +395,7 @@ def injected_positions(path: str, constructors: dict[str, list[str]]) -> list[tu
 
     out: list[tuple[int, str, str]] = []
 
+    # ① single / factory 注册体
     for match in REGISTRATION_OPEN.finditer(clean):
         end = match_pair(clean, match.end() - 1, "{", "}")
         if end < 0:
@@ -302,34 +403,34 @@ def injected_positions(path: str, constructors: dict[str, list[str]]) -> list[tu
         body = clean[match.end():end]
         ctor = re.match(r"\s*([A-Z]\w*)\s*\(", body)
         if not ctor:
-            continue  # 不是直接构造的注册 → 跳过
+            continue
         ctor_name = ctor.group(1)
         params = constructors.get(ctor_name)
         if params is None:
             continue
+        line = clean[:match.start()].count("\n") + 1
+        out.extend(resolve_ctor_args(body, ctor.end() - 1, params, line, ctor_name))
 
-        open_index = ctor.end() - 1
-        close_index = match_pair(body, open_index, "(", ")")
-        if close_index < 0:
+    # ② viewModel<X> { ... X(...) } 注册体
+    #
+    # ⚠️ 这一段曾被我漏掉，而**正在出问题的 ChatVM 恰恰登记在这里** ——
+    # 它的 8 个依赖全在 `viewModel<ChatVM> { params -> ChatVM(...) }` 体内。
+    # 漏了它，检查器对「ChatVM 建不出来」这类崩溃完全无感。
+    for match in VIEWMODEL_OPEN.finditer(clean):
+        ctor_name = match.group(1).split(".")[-1]
+        params = constructors.get(ctor_name)
+        if params is None:
             continue
+        end = match_pair(clean, match.end() - 1, "{", "}")
+        if end < 0:
+            continue
+        body = clean[match.end():end]
+        ctor = re.search(rf"\b{re.escape(ctor_name)}\s*\(", body)
+        if not ctor:
+            continue
+        line = clean[:match.start()].count("\n") + 1
+        out.extend(resolve_ctor_args(body, ctor.end() - 1, params, line, ctor_name))
 
-        for index, arg in enumerate(split_top_level(body[open_index + 1:close_index])):
-            piece = arg.strip()
-            if not piece:
-                continue
-            typed = GET_TYPED.fullmatch(piece)
-            if typed:
-                wanted = typed.group(1).split(".")[-1]
-            elif GET_PLAIN.fullmatch(piece):
-                if index >= len(params):
-                    continue
-                wanted = params[index]
-                if wanted == "?":
-                    continue
-            else:
-                continue  # 不是纯粹的 get()（如 get<Context>().filesDir）→ 跳过
-            line = clean[:match.start()].count("\n") + 1
-            out.append((line, ctor_name, wanted))
     return out
 
 
