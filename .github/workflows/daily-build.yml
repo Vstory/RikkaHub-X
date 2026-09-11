@@ -210,7 +210,7 @@ jobs:
       # 两者必须是不同的 Release：共用同一个 tag 时，后一次构建的说明会整段覆盖前一次 ——
       # 实测正式包的说明把 nightly 页面的免责声明刷掉了。
       #   nightly → tag `nightly`，随机临时签名（装前须卸载）
-      #   release → tag `release`，固定密钥签名（可直接覆盖升级）
+      #   release → tag `release`（页面名 `Release Build`），固定密钥签名（可直接覆盖升级）
       # 两者都标记为预发布：本仓库是自用派生版本，不对外声称稳定正式版。
       - name: Resolve release target
         id: target
@@ -253,7 +253,7 @@ jobs:
 
           {
             echo "tag=release"
-            echo "name=RikkaHub X 尝鲜版"
+            echo "name=Release Build"
             echo "prerelease=true"
             echo "make_latest=false"
             echo "is_nightly=false"
@@ -375,13 +375,13 @@ jobs:
               echo
               echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             else
-              # 尝鲜版：签名固定、可覆盖升级，但仍是派生自用版本，不声称稳定。
+              # Release Build：签名固定、可覆盖升级，但仍是派生自用版本，不声称稳定。
               echo "> [!CAUTION]"
-              echo "> **本页面为尝鲜版,由固定密钥签名、可直接覆盖升级;功能仍在迭代,仅供尝鲜使用,请勿用于重要场景。**"
+              echo "> **本页面为 Release Build,由固定密钥签名、可直接覆盖升级;功能仍在迭代,仅供尝鲜使用,请勿用于重要场景。**"
               echo
-              echo "版本 \`${VERSION}\` · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
+              echo "自动构建 · \`${VERSION}\` · commit \`${{ github.sha }}\`(短号 \`${SHA}\`)"
               echo
-              echo "## 📥 下载 · ${PRETTY}(北京时间)"
+              echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             fi
             echo
             echo "| 架构 | 适用 | 下载 |"
@@ -397,7 +397,7 @@ jobs:
             if [ "$IS_NIGHTLY" = "true" ]; then
               echo "> ⚠️ nightly 为**随机临时签名**,每次构建签名不同 → 安装前请先**卸载旧版**(不能覆盖升级)。"
               echo ">"
-              echo "> 需要能直接覆盖升级的包,请用 [尝鲜版](https://github.com/${REPO}/releases/tag/release)。"
+              echo "> 需要能直接覆盖升级的包,请用 [Release Build](https://github.com/${REPO}/releases/tag/release)。"
             else
               echo "> 🔒 签名证书 SHA-256：\`${CERT_SHA256}\`"
               echo ">"
