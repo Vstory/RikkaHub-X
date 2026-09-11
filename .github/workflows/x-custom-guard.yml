@@ -64,6 +64,25 @@ on:
       # 附件照常存、照常显示，只是「谁在用这个文件」的账本不再准。
       # 那种错误只能在回收误删时才暴露，代价不可逆 —— 故纳入守卫。
       - 'app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt'
+
+      # X 存储层接线点（2026-09-11，P1-2 补登）：聊天附件的写入路径与删除判据都在这里。
+      # 实测教训:接线用的这两个提交(写入路径、备份目录)推送后**本工作流根本没触发** ——
+      # 因为清单没覆盖它们,而 Compile Check 照常是绿的,看板上像是「CI 过了」,
+      # 实际一份守护测试都没跑。逐条登记后由 `scripts/check_guard_paths.py` 机械把关,
+      # 避免再出现「有回归网」被当成「以为有回归网」。
+      - 'app/src/main/java/me/rerere/rikkahub/data/files/FilesManager.kt'
+      # 扩展名判定:内容寻址与旧式文件名共用它,两处不一致会让去重失效
+      - 'app/src/main/java/me/rerere/rikkahub/data/files/FileUtils.kt'
+      # 备份与恢复的目录清单:漏了 assets 会「备份成功但换机丢附件」
+      - 'app/src/main/java/me/rerere/rikkahub/data/sync/BackupManager.kt'
+
+      # 上述检查器规则覆盖不到的登记项(它们不 import x 包,却承载 X 的行为):
+      # X 的页面挂载点与 X 定制页面 —— 上游重写路由会让这些页面变成不可达
+      - 'app/src/main/java/me/rerere/rikkahub/RouteActivity.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic/DiagnosticPage.kt'
+      # 会话页与它的 VM:X 在这里有会话级定制(模型覆盖 / 消息保持 / 输入态)
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt'
   workflow_dispatch:
 
 permissions:
