@@ -302,11 +302,28 @@ STOPLIST = {
     "init", "main", "test", "tag", "level", "entry", "entries", "clear",
     "record", "recent", "warn", "info", "dump", "snapshot", "lines", "levels",
     "timeText", "initialValue", "tearDown", "setUp", "capability",
+    # 常见英文词偶尔会被写成标识符（尤其测试里的局部变量），一并挡掉
+    "before", "after", "while", "when", "first", "second", "third", "last",
+    "next", "prev", "left", "right", "start", "begin", "done", "case",
+    "given", "then", "expect", "actual", "expected", "found", "input", "output",
 }
 
 
 def removed_and_gone(base: str) -> dict[str, list[str]]:
-    """规则 B：被删除、且**当前全仓库已无声明**、却仍被引用的符号。"""
+    """规则 B：被删除、且**当前全仓库已无声明**、却仍被引用的符号。
+
+    ⚠️ **只认顶格（第 0 列）的声明**。这一条是实测补上的：早先不限缩进，
+    于是函数体内的局部变量也算进来 —— 我某个提交删掉了测试里的
+    `val before = …`，而 `before` 是个常见英文词，全仓库出现三十多次，
+    直接误报一片。
+
+    为什么这个限制是合理的：**裸名引用**能造成的编译错误，基本只发生在
+    **顶层声明**（函数/类/属性）上。成员被删的情形由规则 A 按 `类型.成员` 覆盖；
+    而「成员在所属类型内部被裸名引用」这种情况，词法上无法可靠判断，本就不该硬报。
+
+    **这条规则弱于规则 A**：它依赖 `git diff` 的基准，且仍可能被常见词干扰。
+    它的输出适合当作**提示**看一眼，而不是当作硬结论。
+    """
     proc = subprocess.run(
         ["git", "diff", "--unified=0", base, "--", "*.kt"],
         capture_output=True, text=True, errors="replace",
@@ -319,10 +336,14 @@ def removed_and_gone(base: str) -> dict[str, list[str]]:
     for line in proc.stdout.splitlines():
         if not line.startswith("-") or line.startswith("---"):
             continue
-        stripped = line[1:].strip()
+        content = line[1:]
+        # 顶格声明才认；缩进的是函数体局部变量，不参与裸名判定
+        if not content[:1] or content[0] in " \t":
+            continue
+        stripped = content.strip()
         if stripped.startswith(("//", "*", "/*")):
             continue
-        for match in DECLARATION.finditer(line):
+        for match in DECLARATION.finditer(content):
             name = match.group(1)
             if name in STOPLIST or len(name) < 4:
                 continue
