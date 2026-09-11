@@ -64,12 +64,19 @@ class FilesManager(
     ): ManagedFileEntity = withContext(Dispatchers.IO) {
         val resolvedName = displayName ?: getFileNameFromUri(uri) ?: "file"
         val resolvedMime = mimeType ?: getFileMimeType(uri) ?: "application/octet-stream"
-        val target = createTargetFile(folder, resolvedName, resolvedMime)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
+        // [X-custom] 内容寻址（X 存储重构 P1）：与贴图入口同一套判据，失败回落旧路径
+        val target = storeAsset(
+            displayName = resolvedName,
+            mimeType = resolvedMime,
+            assetWrite = {
+                assetWritePath.writeStream(FileUtils.extensionOf(resolvedName, resolvedMime), openSource(uri))
+            },
+            legacyWrite = { file ->
+                openSource(uri).use { input ->
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+            },
+        )
         createManagedFileEntity(
             folder = folder,
             file = target,
@@ -84,8 +91,13 @@ class FilesManager(
         displayName: String,
         mimeType: String = "application/octet-stream",
     ): ManagedFileEntity = withContext(Dispatchers.IO) {
-        val target = createTargetFile(folder, displayName, mimeType)
-        target.writeBytes(bytes)
+        // [X-custom] 内容寻址（X 存储重构 P1）
+        val target = storeAsset(
+            displayName = displayName,
+            mimeType = mimeType,
+            assetWrite = { assetWritePath.writeBytes(FileUtils.extensionOf(displayName, mimeType), bytes) },
+            legacyWrite = { file -> file.writeBytes(bytes) },
+        )
         createManagedFileEntity(
             folder = folder,
             file = target,
@@ -100,8 +112,13 @@ class FilesManager(
         displayName: String = "pasted_text.txt",
         mimeType: String = "text/plain",
     ): ManagedFileEntity = withContext(Dispatchers.IO) {
-        val target = createTargetFile(folder, displayName, mimeType)
-        target.writeText(text)
+        // [X-custom] 内容寻址（X 存储重构 P1）
+        val target = storeAsset(
+            displayName = displayName,
+            mimeType = mimeType,
+            assetWrite = { assetWritePath.writeText(FileUtils.extensionOf(displayName, mimeType), text) },
+            legacyWrite = { file -> file.writeText(text) },
+        )
         createManagedFileEntity(
             folder = folder,
             file = target,
@@ -271,13 +288,13 @@ class FilesManager(
     }
 
     fun createChatTextFile(text: String): UIMessagePart.Document {
-        val dir = context.filesDir.resolve(FileFolders.UPLOAD)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
-        val fileName = buildUuidFileName(displayName = "pasted_text.txt", mimeType = "text/plain")
-        val file = dir.resolve(fileName)
-        file.writeText(text)
+        // [X-custom] 内容寻址（X 存储重构 P1）：粘贴同一段文本两次不会存两份
+        val file = storeAsset(
+            displayName = "pasted_text.txt",
+            mimeType = "text/plain",
+            assetWrite = { assetWritePath.writeText("txt", text) },
+            legacyWrite = { target -> target.writeText(text) },
+        )
         trackManagedFile(
             folder = FileFolders.UPLOAD,
             file = file,
@@ -425,23 +442,33 @@ class FilesManager(
         }
 
         var allDeletedFromDisk = true
+        var keptReferenced = false
         entries.orEmpty().forEach { entry ->
+            // [X-custom] 被引用的资产保留（X 存储重构 P1，决策 2a/2c）。
+            // 「全部清理」是最容易误伤的动作：这些文件正被聊天消息引用着，删掉就是坏图。
+            val relativePath = getRelativePathInFilesDir(entry)
+            if (relativePath != null && isStillReferenced(relativePath)) {
+                keptReferenced = true
+                return@forEach
+            }
             if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
                 allDeletedFromDisk = false
             }
         }
 
-        if (allDeletedFromDisk) {
+        if (allDeletedFromDisk && !keptReferenced) {
             repository.deleteByFolder(folder)
             return@withContext true
         }
 
+        // 有保留文件（或部分删除失败）时**不能**整批删库里的行 ——
+        // 那会把保留文件的记录一并抹掉。只清理「文件确实已不在」的那些。
         repository.listByFolder(folder).first().forEach { entity ->
             if (!getFile(entity).exists()) {
                 repository.deleteById(entity.id)
             }
         }
-        false
+        allDeletedFromDisk
     }
 
     suspend fun deleteOlderThan(
@@ -452,6 +479,12 @@ class FilesManager(
         repository.listByFolder(folder).first()
             .filter { it.createdAt < cutoffMillis }
             .forEach { entity ->
+                // [X-custom] 引用型文件不参与按时间批量清理（X 存储重构 P1，决策 2a/2c）。
+                // 判据交给引用表，而不是「看起来很久没动」—— 被聊天消息引用的文件删掉就是坏图。
+                // 跳过**不算失败**：这是设计上的保留，不是清理出错。
+                if (isStillReferenced(entity.relativePath)) {
+                    return@forEach
+                }
                 val file = getFile(entity)
                 val deletedFromDisk = !file.exists() || runCatching {
                     file.deleteRecursively()
