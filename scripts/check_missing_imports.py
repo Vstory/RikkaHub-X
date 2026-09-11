@@ -183,16 +183,6 @@ def imports_of(text: str) -> tuple[set[str], set[str]]:
     return simple, full
 
 
-def sibling_declarations(path: str) -> set[str]:
-    """同包（同目录）内其他文件定义的**顶层类型** —— 同包不需要 import。"""
-    names: set[str] = set()
-    for other in glob.glob(os.path.join(os.path.dirname(path), "*.kt")):
-        if os.path.abspath(other) == os.path.abspath(path):
-            continue
-        names.update(collect_top_level_types(read(other)))
-    return names
-
-
 def check_file(path: str, index: dict[str, set[str]]) -> list[str]:
     problems: list[str] = []
     raw = read(path)
@@ -202,7 +192,6 @@ def check_file(path: str, index: dict[str, set[str]]) -> list[str]:
 
     imported_simple, imported_full = imports_of(raw)
     own_declarations = collect_local_names(raw)
-    same_package = sibling_declarations(path) | own_declarations
 
     rel = os.path.relpath(path)
     for match in TYPE_USE_PATTERN.finditer(text):
@@ -210,7 +199,7 @@ def check_file(path: str, index: dict[str, set[str]]) -> list[str]:
         # 全大写常量不算类型（SHA256 / UTF8 / MAX_VALUE 之类）
         if name.isupper():
             continue
-        if name in imported_simple or name in same_package:
+        if name in imported_simple or name in own_declarations:
             continue
         # 使用处写了全限定名（前面紧跟 '.'）→ 视为已解析
         start = match.start()
@@ -221,6 +210,10 @@ def check_file(path: str, index: dict[str, set[str]]) -> list[str]:
             # 项目里找不到声明 → 标准库/第三方/Android，本脚本不判
             continue
         if any(full.endswith("." + name) for full in imported_full):
+            continue
+        # **同包不需要 import。判据是「包名相同」而非「目录相同」** ——
+        # 主源码集与测试源码集目录不同却共用包名，按目录判会产生整片误报。
+        if own_package and own_package in packages:
             continue
         problems.append(
             f"{rel}: 用到项目内的类型 {name}(声明于 {', '.join(sorted(packages))})"
