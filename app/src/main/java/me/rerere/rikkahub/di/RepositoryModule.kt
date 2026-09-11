@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.repository.GenMediaRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.x.storage.AssetRepository
+import me.rerere.rikkahub.x.storage.AssetWritePath
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -79,7 +80,7 @@ val repositoryModule = module {
     }
 
     single {
-        FilesManager(get(), get(), get())
+        FilesManager(get(), get(), get(), get())
     }
 
     // [X-custom] X 存储层(X 存储重构 P1):资产 / 引用 / 回收候选的读写。
@@ -87,6 +88,12 @@ val repositoryModule = module {
     // filesDir 用于把 file:// 还原成相对路径,并判断资产文件是否真的还在盘上。
     single {
         AssetRepository(get(), get<Context>().filesDir)
+    }
+
+    // [X-custom] 内容寻址的落盘执行体(X 存储重构 P1):算哈希 → 查账本 → 落盘或复用 → 登记。
+    // 放在 DI 里而不是 FilesManager 内部构造,是为了让「哪些地方在写资产」在装配处一眼可见。
+    single {
+        AssetWritePath(get<Context>().filesDir, get())
     }
 
     single {

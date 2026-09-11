@@ -20,6 +20,12 @@ import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.repository.FilesRepository
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.storage.AssetWriteKind
+import me.rerere.rikkahub.x.storage.AssetWritePath
+import me.rerere.rikkahub.x.storage.WrittenAsset
+import me.rerere.rikkahub.x.storage.XStorageEvents
 import me.rerere.rikkahub.utils.exportImage
 import me.rerere.rikkahub.utils.exportImageFile
 import me.rerere.rikkahub.utils.getActivity
@@ -30,6 +36,14 @@ class FilesManager(
     private val context: Context,
     private val repository: FilesRepository,
     private val appScope: AppScope,
+    /**
+     * [X-custom] 内容寻址的落盘执行体（X 存储重构 P1）。
+     *
+     * 聊天附件改走它：同一份内容只落一份（去重），并登记进资产表。
+     * 上游的旧式「随机 UUID 文件名」路径仍保留，作为写入失败时的回落 ——
+     * 贴图是用户的即时动作，不能因为账本问题而存不下来。
+     */
+    private val assetWritePath: AssetWritePath,
 ) {
     companion object {
         private const val TAG = "FilesManager"
@@ -104,26 +118,23 @@ class FilesManager(
 
     fun createChatFilesByContents(uris: List<Uri>): List<Uri> {
         val newUris = mutableListOf<Uri>()
-        val dir = context.filesDir.resolve(FileFolders.UPLOAD)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
         uris.forEach { uri ->
             runCatching {
                 val sourceName = getFileNameFromUri(uri) ?: uri.lastPathSegment ?: "file"
                 val sourceMime = getFileMimeType(uri)
-                val fileName = buildUuidFileName(displayName = sourceName, mimeType = sourceMime)
-                val file = dir.resolve(fileName)
-                if (!file.exists()) {
-                    file.createNewFile()
-                }
-                val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: error("Failed to open input stream for $uri")
-                inputStream.use { input ->
-                    file.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
+                val extension = FileUtils.extensionOf(sourceName, sourceMime)
+                // [X-custom] 内容寻址（X 存储重构 P1）：同一份内容只落一份，并登记进资产表。
+                // 流只能读一遍，故取哈希与落盘在一次读取里完成；失败回落旧路径（见 storeAsset）。
+                val file = storeAsset(
+                    displayName = sourceName,
+                    mimeType = sourceMime ?: "application/octet-stream",
+                    assetWrite = { assetWritePath.writeStream(extension, openSource(uri)) },
+                    legacyWrite = { target ->
+                        openSource(uri).use { input ->
+                            target.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    },
+                )
                 val guessedMime = sourceMime ?: guessMimeType(file, sourceName)
                 trackManagedFile(
                     folder = FileFolders.UPLOAD,
@@ -146,27 +157,21 @@ class FilesManager(
 
     fun createChatFilesByByteArrays(byteArrays: List<ByteArray>): List<Uri> {
         val newUris = mutableListOf<Uri>()
-        val dir = context.filesDir.resolve(FileFolders.UPLOAD)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
         byteArrays.forEach { byteArray ->
-            val fileName = buildUuidFileName(displayName = "image.png", mimeType = "image/png")
-            val file = dir.resolve(fileName)
-            if (!file.exists()) {
-                file.createNewFile()
-            }
-            val newUri = file.toUri()
-            file.outputStream().use { outputStream ->
-                outputStream.write(byteArray)
-            }
+            // [X-custom] 内容寻址（X 存储重构 P1）：字节形态已知内容，命中去重时连临时文件都不产生。
+            val file = storeAsset(
+                displayName = "image.png",
+                mimeType = "image/png",
+                assetWrite = { assetWritePath.writeBytes("png", byteArray) },
+                legacyWrite = { target -> target.writeBytes(byteArray) },
+            )
             trackManagedFile(
                 folder = FileFolders.UPLOAD,
                 file = file,
                 displayName = "image.png",
                 mimeType = "image/png"
             )
-            newUris.add(newUri)
+            newUris.add(file.toUri())
         }
         return newUris
     }
@@ -436,6 +441,60 @@ class FilesManager(
         return File(dir, FileUtils.buildUuidFileName(displayName = displayName, mimeType = mimeType))
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // [X-custom] 资产写入（X 存储重构 P1）
+    // ────────────────────────────────────────────────────────────────
+
+    /**
+     * 存成资产（内容寻址）；**失败时回落旧路径**。
+     *
+     * 回落是刻意的：贴图、拍照、拖文件都是用户的即时动作，账本或文件系统出问题时
+     * 应当**照旧把文件存下来**（只是不进资产表、暂时享受不到去重），而不是让用户
+     * 「什么都存不下来」。回落事件进诊断，便于事后发现这类降级。
+     *
+     * @param assetWrite 内容寻址写入。**只在需要时调用一次**。
+     * @param legacyWrite 回落写入：把内容写进给定的旧式目标文件。
+     */
+    private fun storeAsset(
+        displayName: String,
+        mimeType: String,
+        assetWrite: () -> WrittenAsset,
+        legacyWrite: (File) -> Unit,
+    ): File {
+        val outcome = runCatching(assetWrite)
+        outcome.getOrNull()?.let { written ->
+            logAssetWrite(written)
+            return written.file
+        }
+
+        XLog.warn(XDomain.STORAGE, XStorageEvents.WRITE_FALLBACK, outcome.exceptionOrNull()) {
+            "内容寻址写入失败,回落旧路径"
+        }
+        return createTargetFile(FileFolders.UPLOAD, displayName, mimeType).also(legacyWrite)
+    }
+
+    /**
+     * 记录一次资产写入的走向。
+     *
+     * 事件名按实际分支区分（新建 / 复用 / 补写），**复用的比例**就是去重是否真的生效的
+     * 直接证据 —— 这正是 T1 检查点要看的东西。
+     *
+     * 只记路径与哈希，不记文件名与内容：路径是哈希 + 后缀，本身不含用户信息。
+     */
+    private fun logAssetWrite(written: WrittenAsset) {
+        val event = when (written.kind) {
+            AssetWriteKind.NEW -> XStorageEvents.WRITE_NEW
+            AssetWriteKind.REUSED -> XStorageEvents.WRITE_REUSE
+            AssetWriteKind.REWRITTEN -> XStorageEvents.WRITE_REWRITE
+        }
+        XLog.info(XDomain.STORAGE, event) { written.relativePath }
+    }
+
+    /** 打开来源流；拿不到就抛（与旧实现一致，由调用方的 runCatching 处理）。 */
+    private fun openSource(uri: Uri): java.io.InputStream =
+        context.contentResolver.openInputStream(uri)
+            ?: error("Failed to open input stream for $uri")
+
     private fun buildUuidFileName(displayName: String?, mimeType: String?): String =
         FileUtils.buildUuidFileName(displayName, mimeType)
 
@@ -489,8 +548,19 @@ class FilesManager(
         }
     }
 
+    /**
+     * 记录用的相对路径。
+     *
+     * [X-custom] **必须用文件在 `filesDir` 下的真实相对路径**，不能用 `folder + 文件名` 拼：
+     * 内容寻址把文件落在 `assets/ab/cd/<hash>.ext`，而 `folder` 仍是 `upload` ——
+     * 拼出来的 `upload/<hash>.ext` 在盘上**并不存在**，而读取侧
+     * （`getFile`）是 `File(filesDir, relativePath)`，照它去找就是「附件读不回来」。
+     *
+     * 文件确实不在 `filesDir` 内时（调用方传了外部文件），退回旧行为 ——
+     * 那种记录本来就解析不到，行为与改动前一致。
+     */
     private fun buildRelativePath(folder: String, file: File): String =
-        FileUtils.buildRelativePath(folder, file)
+        getRelativePathInFilesDir(file) ?: FileUtils.buildRelativePath(folder, file)
 
     private fun getRelativePathInFilesDir(file: File): String? =
         FileUtils.getRelativePathInFilesDir(context.filesDir, file)

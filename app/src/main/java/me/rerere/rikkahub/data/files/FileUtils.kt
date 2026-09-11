@@ -15,7 +15,17 @@ import kotlin.uuid.Uuid
 object FileUtils {
     private const val TAG = "FileUtils"
 
-    fun buildUuidFileName(displayName: String?, mimeType: String?): String {
+    fun buildUuidFileName(displayName: String?, mimeType: String?): String =
+        "${Uuid.random()}.${extensionOf(displayName, mimeType)}"
+
+    /**
+     * 展示名 + MIME → 扩展名（不含点）。名字后缀优先，其次 MIME，最后 `bin`。
+     *
+     * 单独抽出来是为了让**内容寻址路径**与**旧式文件名**用同一套判定：两处各写一份时，
+     * 同一张图会在两条路径下拿到不同后缀，而内容寻址要求「一份内容一个文件」——
+     * 后缀不一致会让去重失效（同一份内容算出两个路径）。
+     */
+    fun extensionOf(displayName: String?, mimeType: String?): String {
         val extFromName = displayName
             ?.substringAfterLast('.', "")
             ?.takeIf { it.isNotBlank() && it != displayName }
@@ -24,8 +34,7 @@ object FileUtils {
             ?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it.lowercase()) }
             ?.takeIf { it.isNotBlank() }
             ?.lowercase()
-        val ext = extFromName ?: extFromMime ?: "bin"
-        return "${Uuid.random()}.$ext"
+        return extFromName ?: extFromMime ?: "bin"
     }
 
     fun buildRelativePath(folder: String, file: File): String =
