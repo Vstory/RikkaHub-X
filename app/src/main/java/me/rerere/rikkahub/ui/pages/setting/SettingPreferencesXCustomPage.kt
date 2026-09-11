@@ -34,10 +34,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.Select
+import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.chat.GenerationAutosave
@@ -53,6 +55,7 @@ import org.koin.androidx.compose.koinViewModel
 fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
+    val navController = LocalNavController.current
 
     fun updateDisplaySetting(setting: DisplaySetting) {
         displaySetting = setting
@@ -362,6 +365,20 @@ fun SettingPreferencesXCustomPage(vm: SettingVM = koinViewModel()) {
                 }
             }
 
+            // 诊断入口。放在最后一组:它平时不用,出问题时才来,
+            // 而 X 定制的其它开关是日常设置 —— 混在一起会让人误以为它也是常设项。
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.diagnostic_page_title)) },
+                ) {
+                    item(
+                        headlineContent = { Text(stringResource(R.string.diagnostic_page_title)) },
+                        supportingContent = { Text(stringResource(R.string.diagnostic_entry_desc)) },
+                        onClick = { navController.navigate(Screen.Diagnostic) },
+                    )
+                }
+            }
         }
     }
 }

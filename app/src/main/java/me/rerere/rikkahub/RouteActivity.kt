@@ -107,6 +107,7 @@ import me.rerere.rikkahub.ui.pages.log.LogPage
 import me.rerere.rikkahub.ui.pages.search.SearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAboutPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesPage
+import me.rerere.rikkahub.ui.pages.diagnostic.DiagnosticPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesThemePage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNotificationPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
@@ -435,6 +436,10 @@ class RouteActivity : ComponentActivity() {
                                 SettingPreferencesXCustomPage()
                             }
 
+                            entry<Screen.Diagnostic> {
+                                DiagnosticPage()
+                            }
+
                             entry<Screen.SettingProvider> {
                                 SettingProviderPage()
                             }
@@ -668,6 +673,8 @@ sealed interface Screen : NavKey {
     data object SettingPreferencesNetwork : Screen
     @Serializable
     data object SettingPreferencesXCustom : Screen
+    @Serializable
+    data object Diagnostic : Screen
 
     @Serializable
     data object SettingProvider : Screen
