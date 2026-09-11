@@ -45,7 +45,7 @@ class XDiagnosticsTest {
     @Test
     fun `defaults to disabled`() {
         assertFalse("诊断默认必须是关的", XDiagnostics.isEnabled())
-        assertNull("未开启过则无窗口起点", XDiagnostics.windowStartAt())
+        assertNull("没有记录则无起点", XDiagnostics.windowStartMillis())
     }
 
     @Test
@@ -72,42 +72,39 @@ class XDiagnosticsTest {
         assertEquals("关闭后内容应保留", 1, XDiagnostics.countOf(XDomain.STORAGE))
     }
 
+    // ---- 记录起点(推导值) ----
+
     @Test
-    fun `window start is stamped when enabled`() {
-        assertNull(XDiagnostics.windowStartAt())
-        XDiagnostics.setEnabled(true)
-        val first = XDiagnostics.windowStartAt()
-        assertTrue("开启时应记录窗口起点", first != null && first > 0L)
+    fun `window start equals the earliest record`() {
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "第一条")
+        val first = XDiagnostics.entries(XDomain.STORAGE).first().at
+        XDiagnostics.record(XDomain.COMPRESS, Level.INFO, "e", "第二条")
+        assertEquals("应取全域里最早一条的时刻", first, XDiagnostics.windowStartMillis())
     }
 
     @Test
-    fun `re enabling refreshes the window start`() {
+    fun `window start is null when there is nothing recorded`() {
+        assertNull(XDiagnostics.windowStartMillis())
+    }
+
+    @Test
+    fun `clearing removes the window start too`() {
+        // 这是把起点做成推导值而非存储字段的直接收益:
+        // 若存字段,清空后会出现「有记录却显示从未开启」或「没记录却显示起点」这类自相矛盾
         XDiagnostics.setEnabled(true)
-        val first = XDiagnostics.windowStartAt()!!
-        Thread.sleep(5)
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
+        assertTrue(XDiagnostics.windowStartMillis() != null)
+        XDiagnostics.clearAll()
+        assertNull("清空后不该再有起点", XDiagnostics.windowStartMillis())
+    }
+
+    @Test
+    fun `window start survives turning the switch off`() {
+        // 关闭保留内容 → 起点也必须还在,否则导出时表头说「无记录」而正文有内容
+        XDiagnostics.setEnabled(true)
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
         XDiagnostics.setEnabled(false)
-        XDiagnostics.setEnabled(true)
-        val second = XDiagnostics.windowStartAt()!!
-        assertTrue("重新开启应刷新窗口起点", second >= first)
-    }
-
-    @Test
-    fun `session count tracks how many times diagnostics was turned on`() {
-        val before = XDiagnostics.sessionCount()
-        XDiagnostics.setEnabled(true)
-        assertEquals(before + 1, XDiagnostics.sessionCount())
-        XDiagnostics.setEnabled(false)
-        XDiagnostics.setEnabled(true)
-        assertEquals(before + 2, XDiagnostics.sessionCount())
-    }
-
-    @Test
-    fun `setting the same value twice does not count as a new session`() {
-        XDiagnostics.setEnabled(true)
-        XDiagnostics.setEnabled(true)
-        val count = XDiagnostics.sessionCount()
-        XDiagnostics.setEnabled(true)
-        assertEquals("重复开启不应刷新窗口", count, XDiagnostics.sessionCount())
+        assertTrue(XDiagnostics.windowStartMillis() != null)
     }
 
     // ---- 分域隔离 ----
@@ -178,6 +175,8 @@ class XDiagnosticsTest {
         assertTrue("表头应含域 key(导出文件名用)", text.contains("storage"))
         assertTrue("表头应含条数", text.contains("# 条数: 1"))
         assertTrue("表头应说明脱敏状态", text.contains("# 脱敏: 是"))
+        assertTrue("表头应含记录起点", text.contains("# 记录起点: "))
+        assertFalse("有记录时不该说无记录", text.contains("(无记录)"))
         assertTrue("正文应含事件名", text.contains("asset.write.new"))
     }
 
@@ -226,10 +225,14 @@ class XDiagnosticsTest {
 
     @Test
     fun `dump of a domain with no window start says so`() {
-        // 未开启过就手动塞了内容(理论上不会发生),表头不该显示 0 或空白
+        // 起点由最早记录推导,所以「有内容却无起点」在实现上不可能出现;
+        // 这里守住的是表头对「无记录」的兜底文案 —— 若哪天改成存字段,本用例会红
         XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
+        XDiagnostics.clearAll()
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "y")
         val text = XDiagnostics.dump().getValue(XDomain.STORAGE)
-        assertTrue(text.contains("(未开启过)"))
+        assertFalse("有记录时表头不该说无记录", text.contains("(无记录)"))
+        assertTrue(text.contains("# 记录起点: "))
     }
 
     // ---- 清空 ----
@@ -246,23 +249,15 @@ class XDiagnosticsTest {
     }
 
     @Test
-    fun `restart clears and refreshes the window while enabled`() {
-        XDiagnostics.setEnabled(true)
-        val first = XDiagnostics.windowStartAt()!!
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "a")
-        Thread.sleep(5)
-        XDiagnostics.restart()
+    fun `clearAll is enough to start a fresh round`() {
+        // 「重新开始一轮记录」不需要单独的 API:起点是推导的,清空即回到初始状态
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "上一轮")
+        XDiagnostics.clearAll()
+        assertNull(XDiagnostics.windowStartMillis())
 
-        assertEquals("应清空", 0, XDiagnostics.totalCount())
-        assertTrue("应刷新窗口起点", XDiagnostics.windowStartAt()!! > first)
-    }
-
-    @Test
-    fun `restart while disabled does not fabricate a window`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "a")
-        XDiagnostics.restart()
-        assertEquals(0, XDiagnostics.totalCount())
-        assertNull("关闭状态下 restart 不应伪造窗口起点", XDiagnostics.windowStartAt())
+        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "新一轮")
+        assertEquals(1, XDiagnostics.totalCount())
+        assertTrue(XDiagnostics.windowStartMillis() != null)
     }
 
     // ---- 域清单 ----

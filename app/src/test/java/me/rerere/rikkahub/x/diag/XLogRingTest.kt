@@ -187,12 +187,16 @@ class XLogRingTest {
 
     @Test
     fun `format leaves the event name untouched by redaction`() {
-        // 事件名是检索键,不能被脱敏规则改掉,否则按事件名搜不到
+        // 事件名是检索键,不能被脱敏规则改掉,否则按事件名搜不到。
+        // 判据要能区分「事件名没进脱敏」与「脱敏没生效」——故让脱敏函数把消息整体换成固定串:
+        // 事件名应原样保留,而消息应变成那个固定串。
         val r = ring()
-        r.record(Level.INFO, "asset.write.new", "x")
-        val out = r.format(redact = { "SHOULD_NOT_APPEAR" })
-        assertTrue(out.contains("asset.write.new"))
-        assertFalse(out.contains("SHOULD_NOT_APPEAR"))
+        r.record(Level.INFO, "asset.write.new", "原始消息")
+        val out = r.format(redact = { "REDACTED" })
+
+        assertTrue("事件名不应经过脱敏", out.contains("asset.write.new"))
+        assertFalse("原消息应已被替换", out.contains("原始消息"))
+        assertTrue("替换结果应在场", out.contains("REDACTED"))
     }
 
     @Test
