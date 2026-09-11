@@ -1,7 +1,8 @@
 package me.rerere.rikkahub.x.sync
 
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.diag.XDomain
 import android.content.Context
-import android.util.Log
 import io.requery.android.database.sqlite.SQLiteDatabase
 import io.requery.android.database.sqlite.SQLiteDatabaseConfiguration
 import me.rerere.rikkahub.data.db.SQLiteConfiguration
@@ -61,7 +62,7 @@ internal object OfficialBackupCompat {
                         db.execSQL(
                             "UPDATE room_master_table SET identity_hash = '$X_V25_HASH' WHERE id = $ROOM_MASTER_ID"
                         )
-                        Log.i(TAG, "官方 RikkaHub v25 备份库已适配为 RikkaHub-X v25 结构(补 model_id 列)")
+                        XLog.info(XDomain.SYNC, XSyncEvents.OFFICIAL_ADAPTED) { "官方 RikkaHub v25 备份库已适配为 RikkaHub-X v25 结构(补 model_id 列)" }
                         true
                     }
 
@@ -71,7 +72,7 @@ internal object OfficialBackupCompat {
             }
         } catch (e: Throwable) {
             // 打不开(非 SQLite / 损坏 / 缺 room_master)→ 不在此处理,交由后续步骤给出准确错误
-            Log.w(TAG, "adaptIfOfficial 跳过(非可识别官方 v25 库): ${e.message}")
+            XLog.warn(XDomain.SYNC, XSyncEvents.OFFICIAL_SKIP) { "adaptIfOfficial 跳过(非可识别官方 v25 库): ${e.message}" }
             false
         }
     }

@@ -20,10 +20,17 @@ class XLogRing(val capacity: Int = DEFAULT_CAPACITY) {
 
     companion object {
         /**
-         * logcat 的 tag。整个 X 定制共用一个 —— 过滤时一条命令看全：
-         * `adb logcat -s XStorage:*`。
+         * logcat 的 tag。**整个 X 定制共用一个** —— 过滤时一条命令看全：
+         * `adb logcat -s XCustom:*`。
+         *
+         * 为什么必须统一：X 的功能散在 `x/context`、`x/sync`、`x/storage` 等多个包，
+         * 此前各文件各写各的 tag（`ContextWindowRepo` / `OfficialBackupCompat` / `XStorage`），
+         * 想一次看全「X 到底干了什么」得拼接多个过滤条件 —— 实际结果是没人这么看，
+         * 排查时只好逐个文件猜。**统一 tag 是「可观测」这件事的前提**。
+         *
+         * ⚠️ 别改回 `XStorage`：那个名字只描述存储层，而现在它承载整个 X 定制的日志。
          */
-        const val TAG = "XStorage"
+        const val TAG = "XCustom"
 
         /**
          * 单域默认上限。

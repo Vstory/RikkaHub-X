@@ -13,8 +13,9 @@
 // 也不静默给出错值。
 package me.rerere.rikkahub.x.context
 
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.diag.XDomain
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -210,7 +211,7 @@ object ContextWindowRepository {
         when (val result = ContextWindowTable.parse(file.readText())) {
             is ParseResult.Ok -> result.table
             is ParseResult.Rejected -> {
-                Log.w(TAG, "本地缓存不可用(${result.reason}),将重新拉取")
+                XLog.warn(XDomain.CONTEXT, XContextEvents.CACHE_UNUSABLE) { "本地缓存不可用(${result.reason}),将重新拉取" }
                 null
             }
         }
@@ -319,7 +320,7 @@ object ContextWindowRepository {
         retryJob?.cancel()
         persistRetry(context, plan)
         _status.value = _status.value.copy(retry = plan)
-        Log.i(TAG, "自动重试已排定:第 1/${MAX_RETRY_ATTEMPTS} 次在 ${RETRY_INTERVAL_MINUTES} 分钟后")
+        XLog.info(XDomain.CONTEXT, XContextEvents.RETRY_SCHEDULED) { "自动重试已排定:第 1/${MAX_RETRY_ATTEMPTS} 次在 ${RETRY_INTERVAL_MINUTES} 分钟后" }
         retryJob = refreshScope.launch {
             var current = plan
             while (current.shouldContinue(System.currentTimeMillis())) {
@@ -337,16 +338,16 @@ object ContextWindowRepository {
                 persistRetry(context, current)
                 _status.value = _status.value.copy(retry = current)
                 if (current.isActive(System.currentTimeMillis())) {
-                    Log.i(TAG, "第 ${current.attemptNumber}/${MAX_RETRY_ATTEMPTS} 次重试已排定")
+                    XLog.info(XDomain.CONTEXT, XContextEvents.RETRY_RESCHEDULED) { "第 ${current.attemptNumber}/${MAX_RETRY_ATTEMPTS} 次重试已排定" }
                 }
             }
             if (current.isExhausted) {
                 // 额度用尽:状态**留着**,让「改由定时更新获取」看得见 —— 否则界面上只会剩一条失败原因,
                 // 用户无从知道后续还有人管。下一次成功更新会清掉它,故不会长期挂着。
-                Log.i(TAG, "重试 $MAX_RETRY_ATTEMPTS 次均未取到新内容,转交定时更新")
+                XLog.info(XDomain.CONTEXT, XContextEvents.RETRY_EXHAUSTED) { "重试 $MAX_RETRY_ATTEMPTS 次均未取到新内容,转交定时更新" }
             } else {
                 // 超出时限(App 长时间未运行):那次点击的链子已无意义
-                Log.i(TAG, "自动重试超出时限,丢弃该链")
+                XLog.info(XDomain.CONTEXT, XContextEvents.RETRY_TIMEOUT) { "自动重试超出时限,丢弃该链" }
                 clearRetryState(context)
             }
         }
@@ -370,7 +371,7 @@ object ContextWindowRepository {
             val file = retryFile(context)
             file.parentFile?.mkdirs()
             file.writeText(RefreshRetryPlan.encode(plan))
-        }.onFailure { Log.w(TAG, "重试状态写入失败", it) }
+        }.onFailure { XLog.warn(XDomain.CONTEXT, XContextEvents.RETRY_STATE_WRITE_FAIL, it) { "重试状态写入失败" } }
     }
 
     private fun readRetry(context: Context): RefreshRetryPlan? = runCatching {
@@ -386,7 +387,7 @@ object ContextWindowRepository {
      */
     private suspend fun fetchAndApply(context: Context): RefreshOutcome {
         val results = fetchAll()
-        Log.i(TAG, "拉取结果:" + results.joinToString(" | ") { it.describe() })
+        XLog.info(XDomain.CONTEXT, XContextEvents.FETCH_RESULT) { "拉取结果:" + results.joinToString(" | ") { it.describe() } }
 
         val candidates = results.filterIsInstance<SourceResult.Usable>().map { it.candidate }
         return when (val decision = selectTableSource(candidates, local = table)) {
@@ -398,7 +399,7 @@ object ContextWindowRepository {
 
             // 各源都不比本地新(CDN 滞后):保持本地表不动,但把"最后检查时刻"推前
             SelectionOutcome.KeepLocal -> {
-                Log.i(TAG, "各源均不比本地新,保持本地表:本地=${table?.updatedAt}")
+                XLog.info(XDomain.CONTEXT, XContextEvents.SOURCES_NOT_NEWER) { "各源均不比本地新,保持本地表:本地=${table?.updatedAt}" }
                 touchCache(context)
                 RefreshOutcome.UP_TO_DATE
             }
@@ -406,10 +407,10 @@ object ContextWindowRepository {
             // 区分"全不可达"与"有响应但都不可用":前者是网络问题,后者是数据/源问题,
             // 给用户的提示与排查方向都不同。
             SelectionOutcome.NoCandidate -> if (results.any { it is SourceResult.Unusable }) {
-                Log.w(TAG, "各源均未提供可用表,保留现有表")
+                XLog.warn(XDomain.CONTEXT, XContextEvents.NO_USABLE_TABLE) { "各源均未提供可用表,保留现有表" }
                 RefreshOutcome.REJECTED
             } else {
-                Log.w(TAG, "远端不可达,保留现有表(可能为空)")
+                XLog.warn(XDomain.CONTEXT, XContextEvents.REMOTE_UNREACHABLE) { "远端不可达,保留现有表(可能为空)" }
                 RefreshOutcome.UNREACHABLE
             }
         }
@@ -478,7 +479,7 @@ object ContextWindowRepository {
                 file.writeText(text)
                 tmp.delete()
             }
-        }.onFailure { Log.w(TAG, "缓存写入失败", it) }
+        }.onFailure { XLog.warn(XDomain.CONTEXT, XContextEvents.CACHE_WRITE_FAIL, it) { "缓存写入失败" } }
     }
 
     /**
@@ -489,6 +490,6 @@ object ContextWindowRepository {
      */
     private fun touchCache(context: Context) {
         runCatching { cacheFile(context).setLastModified(System.currentTimeMillis()) }
-            .onFailure { Log.w(TAG, "更新时间戳失败", it) }
+            .onFailure { XLog.warn(XDomain.CONTEXT, XContextEvents.TIMESTAMP_WRITE_FAIL, it) { "更新时间戳失败" } }
     }
 }

@@ -61,11 +61,18 @@ object XStorageEvents {
     /** **拒绝删除**：删前复查发现该资产又有引用了。 */
     const val GC_REFUSE = "asset.gc.refuse"
 
+    /** X 存储层建表失败（`onOpen` 回调里 `ensure` 抛错）—— 存储层不可用，功能降级。 */
+    const val SCHEMA_ENSURE_FAIL = "asset.schema.ensure_fail"
+
+    /** 撤销会话引用失败 —— 会话已删但引用残留，附件将暂时清不掉。 */
+    const val REF_DROP_FAIL = "asset.ref.drop_fail"
+
     /** 全部事件名，供单测核对（新增事件须登记到这里）。 */
     val ALL: List<String> = listOf(
         WRITE_NEW, WRITE_REUSE, WRITE_REWRITE, WRITE_FALLBACK,
-        REF_SYNC, REF_DROP, REF_SKIP, REF_FAIL,
+        REF_SYNC, REF_DROP, REF_DROP_FAIL, REF_SKIP, REF_FAIL,
         BACKFILL_SCAN, BACKFILL_DONE,
         GC_CANDIDATE, GC_PURGE, GC_REFUSE,
+        SCHEMA_ENSURE_FAIL,
     )
 }

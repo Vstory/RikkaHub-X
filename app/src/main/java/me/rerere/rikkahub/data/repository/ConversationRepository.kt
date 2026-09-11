@@ -1,8 +1,10 @@
 // [X-custom] RikkaHub-X 定制(merge 上游时保留): 会话级模型覆盖持久化/读取
 package me.rerere.rikkahub.data.repository
 
+import me.rerere.rikkahub.x.storage.XStorageEvents
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.diag.XDomain
 import android.database.sqlite.SQLiteBlobTooBigException
-import android.util.Log
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -45,7 +47,6 @@ class ConversationRepository(
         private const val INITIAL_LOAD_SIZE = 40
 
         /** [X-custom] X 存储层引用登记的日志标签。 */
-        private const val TAG = "XStorage"
     }
 
     suspend fun hasFileReference(fileUrl: String): Boolean =
@@ -339,7 +340,7 @@ class ConversationRepository(
             runCatching {
                 assetRepository.removeRefsOfConversationWithinTransaction(conversation.id.toString())
             }.onFailure {
-                Log.w(TAG, "撤销会话引用失败,附件可能暂时清不掉:${conversation.id}", it)
+                XLog.warn(XDomain.STORAGE, XStorageEvents.REF_DROP_FAIL, it) { "撤销会话引用失败,附件可能暂时清不掉:" + conversation.id }
             }
         }
         filesManager.deleteChatFiles(fullConversation.files)
@@ -376,7 +377,7 @@ class ConversationRepository(
                 nowMillis = System.currentTimeMillis(),
             )
         }.onFailure {
-            Log.w(TAG, "资产引用登记失败,回收判定将暂时失真:${conversation.id}", it)
+            XLog.warn(XDomain.STORAGE, XStorageEvents.REF_FAIL, it) { "资产引用登记失败,回收判定将暂时失真:" + conversation.id }
         }
     }
 

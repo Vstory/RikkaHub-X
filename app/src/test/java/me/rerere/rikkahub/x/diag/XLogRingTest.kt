@@ -197,6 +197,14 @@ class XLogRingTest {
 
     @Test
     fun `tag is shared across the whole X custom`() {
-        assertEquals("XStorage", XLogRing.TAG)
+        // 统一 tag 是「可观测」的前提:各写各的 tag 时,想一次看全「X 干了什么」
+        // 得拼接多个过滤条件,实际结果是没人这么看
+        assertEquals("XCustom", XLogRing.TAG)
+        assertEquals(XLogRing.TAG, XLog.TAG)
+    }
+
+    @Test
+    fun `logcat hint uses the unified tag`() {
+        assertEquals("adb logcat -s XCustom:*", XLogRing.logcatHint())
     }
 }

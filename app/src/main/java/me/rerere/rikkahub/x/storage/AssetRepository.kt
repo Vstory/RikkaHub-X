@@ -1,7 +1,8 @@
 // [X-custom] RikkaHub-X 存储管理重构(P1)：资产/引用/回收候选的读写（IO 层）
 package me.rerere.rikkahub.x.storage
 
-import android.util.Log
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.diag.XDomain
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -31,7 +32,6 @@ class AssetRepository(
     private val filesDir: File,
 ) {
     private companion object {
-        const val TAG = "XStorage"
     }
 
     private val db get() = database.openHelper.writableDatabase
@@ -273,7 +273,7 @@ class AssetRepository(
             }
         }
         if (!purged) {
-            Log.w(TAG, "拒绝删除仍被引用的资产:$assetId")
+            XLog.warn(XDomain.STORAGE, XStorageEvents.GC_REFUSE) { "拒绝删除仍被引用的资产:" + assetId }
         }
         purged
     }

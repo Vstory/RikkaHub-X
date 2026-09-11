@@ -1,5 +1,8 @@
 package me.rerere.rikkahub.data.db
 
+import me.rerere.rikkahub.x.storage.XStorageEvents
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.diag.XDomain
 import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -55,11 +58,9 @@ internal object AppDatabaseFactory {
                     // 失败时只记录不抛出:存储层不可用应当降级,而不是让 App 打不开数据库。
                     runCatching { XStorageSchema.ensure(db) }
                         .onFailure {
-                            android.util.Log.e(
-                                "XStorage",
-                                "X 存储层表建立失败,内容寻址与回收功能将不可用",
-                                it,
-                            )
+                            XLog.warn(XDomain.STORAGE, XStorageEvents.SCHEMA_ENSURE_FAIL, it) {
+                                "X 存储层表建立失败,内容寻址与回收功能将不可用"
+                            }
                         }
                 }
             })
