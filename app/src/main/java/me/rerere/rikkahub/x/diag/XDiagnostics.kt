@@ -2,6 +2,7 @@
 package me.rerere.rikkahub.x.diag
 
 import me.rerere.rikkahub.x.diag.XLogRing.Level
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * X 定制的诊断域。
@@ -119,6 +120,57 @@ object XDiagnostics {
      */
     fun clearAll() {
         rings.values.forEach { it.clear() }
+        clearStickyFailure()
+    }
+
+    // ────────────────────────────────────
+    // 关键失败留存（与开关无关）
+    // ────────────────────────────────────
+
+    /** 一条「会让功能静默失效」的失败。 */
+    data class StickyFailure(
+        val domain: XDomain,
+        val event: String,
+        val message: String,
+        val detail: String?,
+        val at: Long,
+    )
+
+    private val sticky = AtomicReference<StickyFailure?>(null)
+
+    /** 最近一次关键失败；没有则为 `null`。 */
+    fun stickyFailure(): StickyFailure? = sticky.get()
+
+    /**
+     * 记一条**关键失败**：会让某个 X 功能静默失效的那种（如建表失败）。
+     *
+     * **为什么要独立于开关**：开关管的是「正常流水」。而关键失败通常发生在**启动时**，
+     * 用户发现异常、打开开关时，失败早已过去 —— 记录被开关挡在门外，现场就此丢失。
+     * 实测 2026-09-11 的建表失败正是如此：诊断页里只剩后续的连锁失败，
+     * 真正原因只能靠猜。
+     *
+     * 故：**开关关着也记**，且**一直留着**直到用户清空。
+     */
+    fun recordStickyFailure(
+        domain: XDomain,
+        event: String,
+        message: String,
+        error: Throwable? = null,
+    ) {
+        sticky.set(
+            StickyFailure(
+                domain = domain,
+                event = event,
+                message = message,
+                detail = error?.stackTraceToString(),
+                at = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    /** 清掉关键失败留存。 */
+    fun clearStickyFailure() {
+        sticky.set(null)
     }
 
     /**

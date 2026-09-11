@@ -1405,6 +1405,9 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_cancel">取消</string>
   <string name="diagnostic_cleared">已清空</string>
   <string name="diagnostic_cli_hint">在电脑上的等价做法:</string>
+  <string name="diagnostic_sticky_title">上次运行有失败</string>
+  <string name="diagnostic_sticky_event">%1$s · %2$s</string>
+  <string name="diagnostic_sticky_copy">复制详情</string>
   <string name="setting_provider_page_test_non_streaming">非流式</string>
   <string name="setting_provider_page_test_streaming">流式</string>
   <string name="setting_provider_page_test_tool_call">工具调用</string>

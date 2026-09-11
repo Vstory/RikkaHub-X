@@ -897,6 +897,9 @@
   <string name="diagnostic_cancel">Cancel</string>
   <string name="diagnostic_cleared">Cleared</string>
   <string name="diagnostic_cli_hint">Equivalent from a computer:</string>
+  <string name="diagnostic_sticky_title">Failure detected</string>
+  <string name="diagnostic_sticky_event">%1$s · %2$s</string>
+  <string name="diagnostic_sticky_copy">Copy details</string>
   <string name="setting_page_documentation">Documentation</string>
   <string name="setting_page_documentation_desc">View app usage instructions and help documentation</string>
   <string name="setting_page_donate">Donate</string>

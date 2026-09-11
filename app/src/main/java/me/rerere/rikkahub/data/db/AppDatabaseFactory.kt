@@ -1,8 +1,5 @@
 package me.rerere.rikkahub.data.db
 
-import me.rerere.rikkahub.x.storage.XStorageEvents
-import me.rerere.rikkahub.x.diag.XLog
-import me.rerere.rikkahub.x.diag.XDomain
 import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -23,6 +20,22 @@ internal object AppDatabaseFactory {
             .addMigrations(Migration_6_7, Migration_11_12, Migration_13_14, Migration_14_15, Migration_15_16)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
+                    // [X-custom] X 存储层表(内容寻址的资产/引用/回收/墓碑/元数据)。
+                    // 建在这里而非 Room 迁移里,是为了不动本文件的 entities/version/autoMigrations
+                    // —— 上游每次加表都会改那几行,改它必然反复冲突(本仓库是 fork)。
+                    // 语句全部 IF NOT EXISTS,可重复执行;结构定义见 x/storage/XStorageSchema.kt。
+                    // 失败时只记录不抛出:存储层不可用应当降级,而不是让 App 打不开数据。
+                    //
+                    // ⚠️ 放在本回调**最前面**:原先排在 jieba 分词与 FTS 建表之后,那两处
+                    // 只要有一点问题(分词扩展没加载起来、FTS 语句不兼容…),X 表就永远建不上,
+                    // 且失败点与真正原因隔了两段无关代码。实测 2026-09-11 装机后 x_asset
+                    // 始终不存在、X 存储静默退化成旧路径 —— 挪到第一位以排除这个因素。
+                    //
+                    // 这条路径**不是唯一保障**:首次取库时还会兜底重试
+                    // (XStorageSchema.ensureOnce,由 AssetRepository 调用)。
+                    runCatching { XStorageSchema.ensure(db) }
+                        .onFailure { XStorageSchema.recordEnsureFailure(it, where = "库打开回调") }
+
                     val dictDir = SimpleDictManager.extractDict(context)
                     val cursor = db.query("SELECT jieba_dict(?)", arrayOf(dictDir.absolutePath))
                     cursor.use {
@@ -50,18 +63,6 @@ internal object AppDatabaseFactory {
                         )
                         """.trimIndent()
                     )
-
-                    // [X-custom] RikkaHub-X 存储层表(内容寻址的资产/引用/回收/墓碑/元数据)。
-                    // 建在这里而非 Room 迁移里,是为了不动本文件的 entities/version/autoMigrations
-                    // —— 上游每次加表都会改那几行,改它必然反复冲突(本仓库是 fork)。
-                    // 语句全部 IF NOT EXISTS,可重复执行;结构定义见 x/storage/XStorageSchema.kt。
-                    // 失败时只记录不抛出:存储层不可用应当降级,而不是让 App 打不开数据库。
-                    runCatching { XStorageSchema.ensure(db) }
-                        .onFailure {
-                            XLog.warn(XDomain.STORAGE, XStorageEvents.SCHEMA_ENSURE_FAIL, it) {
-                                "X 存储层表建立失败,内容寻址与回收功能将不可用"
-                            }
-                        }
                 }
             })
             .openHelperFactory(SQLiteConfiguration.openHelperFactory(context))

@@ -2,6 +2,10 @@
 package me.rerere.rikkahub.x.storage
 
 import androidx.sqlite.db.SupportSQLiteDatabase
+import java.util.concurrent.atomic.AtomicInteger
+import me.rerere.rikkahub.x.diag.XDiagnostics
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
 
 /**
  * X 存储层的表结构定义与建立入口。
@@ -174,28 +178,109 @@ object XStorageSchema {
      *
      * 版本**更高**时不动作 —— 那说明用户装过更新的版本，本版本无从降级，保持原样最安全。
      *
-     * 整个过程在一个事务内：任一语句失败则全部回滚，版本号也不会被写上，
-     * 下次打开会重新尝试（不会留下「半迁移」状态）。
+     * **事务容错**：本方法可能被从「已经在事务里」的上下文调用（Room 的 `onOpen`
+     * 在部分实现/路径下就处于事务中）。此时再 `beginTransaction()` 会抛
+     * 「cannot start a transaction within a transaction」—— 而调用方是 `runCatching`，
+     * **失败会被吞掉，功能静默失效**。
+     * 因建表语句全是 `IF NOT EXISTS`（幂等），已有事务时直接借用外层事务：不自开、不提交，
+     * 由外层决定成败；自开事务时仍保持「任一语句失败即整体回滚」，不留半迁移状态。
+     *
+     * **失败必须能定位**：语句失败时把**语句本身**带进异常 ——
+     * 否则只看到一句 `SQLiteException`，不知道是哪条建表语句出的问题。
      */
     fun ensure(db: SupportSQLiteDatabase) {
-        db.beginTransaction()
+        val ownsTransaction = !db.inTransaction()
+        if (ownsTransaction) db.beginTransaction()
         try {
             for (statement in CREATE_STATEMENTS) {
-                db.execSQL(statement)
+                execOrThrow(db, statement)
             }
             val existing = readInt(db, META_SCHEMA_VERSION) ?: 0
             if (existing < SCHEMA_VERSION) {
                 for (version in (existing + 1)..SCHEMA_VERSION) {
                     for (statement in upgradeStatementsTo(version)) {
-                        db.execSQL(statement)
+                        execOrThrow(db, statement)
                     }
                 }
                 putMeta(db, META_SCHEMA_VERSION, SCHEMA_VERSION.toString())
             }
-            db.setTransactionSuccessful()
+            if (ownsTransaction) db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            if (ownsTransaction) db.endTransaction()
         }
+    }
+
+    /** 执行一条 DDL；失败时把语句带进异常，便于一眼定位。 */
+    private fun execOrThrow(db: SupportSQLiteDatabase, statement: String) {
+        try {
+            db.execSQL(statement)
+        } catch (e: Exception) {
+            val head = statement.lineSequence().firstOrNull()?.trim().orEmpty()
+            throw IllegalStateException("X 表语句执行失败: $head", e)
+        }
+    }
+
+    // ────────────────────────────────────
+    // 首次访问兜底：建表失败不该是静默的
+    // ────────────────────────────────────
+
+    private const val ENSURE_PENDING = 0
+    private const val ENSURE_RUNNING = 1
+    private const val ENSURE_OK = 2
+    private const val ENSURE_FAILED = 3
+
+    private val ensureState = AtomicInteger(ENSURE_PENDING)
+
+    /**
+     * 在**第一次真正访问 X 表之前**兜底建表；返回 X 表是否可用。
+     *
+     * **为什么不能只靠 `onOpen`**：实测（2026-09-11）装机后 `x_asset` 始终不存在，
+     * 所有写入静默回落到旧路径 —— 失败被 `runCatching` 吞掉，只留一条会滚掉的 logcat。
+     * 而建表失败发生在启动时，用户往往是启动**之后**才打开诊断开关，现场就此丢失。
+     *
+     * 这里做三件事：
+     * ① **换一个上下文重试** —— 首次取库时不在 Room 的 `onOpen` 里，那里能成的事这里更能成；
+     * ② **失败进留存区**（[XDiagnostics.recordStickyFailure]），与诊断开关无关；
+     * ③ **记状态不做无谓重试** —— 失败过就不再每次访问都试，避免刷屏。
+     *
+     * 代价：每次取库多一次原子读（可忽略）。
+     */
+    fun ensureOnce(db: SupportSQLiteDatabase): Boolean {
+        when (ensureState.get()) {
+            ENSURE_OK -> return true
+            ENSURE_FAILED -> return false
+            ENSURE_RUNNING -> return false // 别的线程在建；本线程先照常走，最坏是这一条查询撞上缺表
+        }
+        // 只有一个线程去建：并发调用会同时开事务，那种失败信息纯粹是噪声
+        if (!ensureState.compareAndSet(ENSURE_PENDING, ENSURE_RUNNING)) return false
+        return try {
+            ensure(db)
+            ensureState.set(ENSURE_OK)
+            true
+        } catch (e: Exception) {
+            ensureState.set(ENSURE_FAILED)
+            recordEnsureFailure(e, where = "首次访问兜底")
+            false
+        }
+    }
+
+    /**
+     * 记录一次建表失败：一条 logcat 警告 + 一份与诊断开关无关的留存。
+     *
+     * **留存是关键**：`XLog.warn` 只保证写 logcat，而 logcat 会滚动 ——
+     * 用户来反馈时那条早没了（本次就是这样，只能靠猜）。留存让「上次建表失败了」
+     * 在诊断页**一直看得见**，直到用户自己清空。
+     */
+    fun recordEnsureFailure(error: Throwable, where: String) {
+        XLog.warn(XDomain.STORAGE, XStorageEvents.SCHEMA_ENSURE_FAIL, error) {
+            "X 存储层表建立失败($where),内容寻址与回收功能将不可用"
+        }
+        XDiagnostics.recordStickyFailure(
+            domain = XDomain.STORAGE,
+            event = XStorageEvents.SCHEMA_ENSURE_FAIL,
+            message = "X 存储层建表失败($where)：内容寻址已停用,新附件仍走旧路径落盘",
+            error = error,
+        )
     }
 
     /** 读元数据整数值；键不存在或非数字返回 null。 */

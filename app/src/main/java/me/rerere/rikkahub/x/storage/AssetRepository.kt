@@ -34,7 +34,14 @@ class AssetRepository(
     private companion object {
     }
 
-    private val db get() = database.openHelper.writableDatabase
+    /**
+     * 数据库句柄。**顺带兜底建 X 表**：`onOpen` 那一路失败不该让 X 存储永久退化
+     * —— 首次真正访问时换一个上下文再试一次（[XStorageSchema.ensureOnce]）。
+     *
+     * 背景：实测 2026-09-11 装机后 `x_asset` 不存在，所有写入静默回落旧路径，
+     * 而建表失败被吞在启动回调里。兜底让「静默失效」变成「最多晚一次访问生效」。
+     */
+    private val db get() = database.openHelper.writableDatabase.also { XStorageSchema.ensureOnce(it) }
 
     // ────────────────────────────────────────────────────────────────
     // 资产

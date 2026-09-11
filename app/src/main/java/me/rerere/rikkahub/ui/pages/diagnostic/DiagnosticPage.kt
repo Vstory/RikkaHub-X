@@ -80,6 +80,7 @@ fun DiagnosticPage() {
     }
     // 命令与 tag 都来自同一处常量，不会出现「照着敲却一条看不到」
     val logcatHint = remember { XDiagnostics.logcatHint() }
+    val sticky = remember(revision) { XDiagnostics.stickyFailure() }
 
     fun copy(text: String) {
         clipboard.setText(AnnotatedString(text))
@@ -104,6 +105,38 @@ fun DiagnosticPage() {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // ── 开关 ──
+            // ── 关键失败留存（与开关无关）──
+            //
+            // 放在最前：它意味着「某个功能已经不可用」，比任何计数都重要。
+            // 实测 2026-09-11：建表失败发生在启动时，用户启动后才打开开关 ——
+            // 缓冲里空无一物，现场丢失。留存区就是为了不再发生这件事。
+            sticky?.let { failure ->
+                item {
+                    CardGroup(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        title = { Text(stringResource(R.string.diagnostic_sticky_title)) },
+                    ) {
+                        item(
+                            headlineContent = { Text(failure.message) },
+                            supportingContent = {
+                                Text(
+                                    stringResource(
+                                        R.string.diagnostic_sticky_event,
+                                        failure.event,
+                                        XLogRing.timeText(failure.at),
+                                    )
+                                )
+                            },
+                            trailingContent = {
+                                TextButton(onClick = { copy(failure.detail ?: failure.message) }) {
+                                    Text(stringResource(R.string.diagnostic_sticky_copy))
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
             item {
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),
