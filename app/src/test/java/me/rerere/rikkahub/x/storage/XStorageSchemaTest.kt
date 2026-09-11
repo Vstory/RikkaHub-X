@@ -184,14 +184,22 @@ class XStorageSchemaTest {
     }
 
     @Test
-    fun `gc table enforces non negative counters`() {
+    fun `gc table enforces non negative generation and indexes the reuse gate`() {
         val gc = ddlOf(XStorageTables.ASSET_GC)
-        assertTrue(gc.contains("CHECK (${XStorageTables.AssetGc.ATTEMPTS} >= 0)"))
         assertTrue(gc.contains("CHECK (${XStorageTables.AssetGc.GENERATION} >= 0)"))
         assertTrue(
-            "宽限截止是回收的时间闸门,必须有索引",
-            ddl.contains("idx_x_asset_gc_not_before"),
+            "首次无引用时刻是候选排序与「闲置 N 天」的依据,必须有索引",
+            ddl.contains("idx_x_asset_gc_first_unreferenced"),
         )
+    }
+
+    @Test
+    fun `gc table carries no auto retry columns`() {
+        // 删除是用户显式触发的单次动作,没有后台自动重试 ——
+        // 这两个列若回归,说明「手动确认」这一产品决定被误读成了「到点自动删」
+        val gc = ddlOf(XStorageTables.ASSET_GC)
+        assertFalse("回收候选不应再有重试次数", gc.contains("attempt"))
+        assertFalse("回收候选不应再有宽限截止", gc.contains("not_before"))
     }
 
     @Test
@@ -249,6 +257,47 @@ class XStorageSchemaTest {
             "重建后需清理临时表",
             upgrades.any { it.contains("DROP TABLE IF EXISTS") },
         )
+    }
+
+    /**
+     * 升级链的守护：v2→v3 同样必须完整。
+     *
+     * 少了重建的后果尤其隐蔽 —— 跑过 P0 版本构建的机器上 `x_asset_gc` 仍是旧形态，
+     * 而 `CREATE TABLE IF NOT EXISTS` **不会改已存在的表**，新代码写入
+     * `first_unreferenced_at` 会直接报「无此列」。
+     */
+    @Test
+    fun `upgrade to v3 rebuilds gc table and restores indexes`() {
+        val upgrades = XStorageSchema.upgradeStatementsTo(3)
+        assertTrue("v2→v3 应有升级语句", upgrades.isNotEmpty())
+        assertTrue(
+            "重建表后必须重跑索引语句（表改名时索引会跟着走,删旧表即丢索引）",
+            upgrades.any { it.contains("idx_x_asset_gc_first_unreferenced") },
+        )
+        assertTrue(
+            "重建流程需搬移旧数据",
+            upgrades.any { it.contains("INSERT OR REPLACE INTO ${XStorageTables.ASSET_GC}") },
+        )
+        assertTrue(
+            "重建后需清理临时表",
+            upgrades.any { it.contains("DROP TABLE IF EXISTS") },
+        )
+    }
+
+    /**
+     * 每一版都要有升级语句。
+     *
+     * 这条挡的是「加了版本号却忘了写语句」—— 后果是旧库**静默**停在旧形态，
+     * 直到某条读路径撞上不存在的列才炸，而那时已离改动很远。
+     */
+    @Test
+    fun `every version up to current has upgrade statements`() {
+        for (version in 2..XStorageSchema.SCHEMA_VERSION) {
+            assertTrue(
+                "缺少到 v$version 的升级语句",
+                XStorageSchema.upgradeStatementsTo(version).isNotEmpty(),
+            )
+        }
     }
 
     @Test

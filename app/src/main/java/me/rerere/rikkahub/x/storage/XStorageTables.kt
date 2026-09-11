@@ -100,23 +100,26 @@ object XStorageTables {
     }
 
     /**
-     * 回收队列：**延迟删除**。
+     * 回收候选队列：**只登记「已无任何引用」的资产，不自动删除**。
      *
-     * `not_before` = 宽限截止；`attempts` = 失败重试次数；`generation` = 代数 ——
-     * 资产被重新引用时 `generation + 1`，使**旧计划失效**（`AssetGcPolicy.isPlanStale`），
-     * 避免「排队删除期间又被引用」导致的误删。
+     * 删除由用户在存储空间页显式确认（产品决定），故这里没有「宽限截止」——
+     * 只记 `first_unreferenced_at`（首次观察到无引用的时刻），供界面显示
+     * 「闲置 N 天」并据此排序。
+     *
+     * `generation` = 代数：资产被重新引用时 `generation + 1`，使**旧候选清单失效**
+     * （[AssetGcPolicy.isPlanStale]）。手动流程同样有这个竞态：用户看到清单 →
+     * 期间该资产又被某条消息引用 → 此时若仍按看到的那份清单删，就会删掉在用的文件。
+     *
+     * **刻意没有重试次数与退避时间戳**：删除是用户显式触发的单次动作，失败当场反馈，
+     * 不存在后台自动重试 —— 留着这两个字段只会让读者以为存在自动重试。
      */
     object AssetGc {
         const val ASSET_ID = "asset_id"
-        const val NOT_BEFORE = "not_before"
-        const val ATTEMPTS = "attempts"
-        const val LAST_ATTEMPT_AT = "last_attempt_at"
+        const val FIRST_UNREFERENCED_AT = "first_unreferenced_at"
         const val GENERATION = "generation"
         const val REASON = "reason"
 
-        val COLUMNS: List<String> = listOf(
-            ASSET_ID, NOT_BEFORE, ATTEMPTS, LAST_ATTEMPT_AT, GENERATION, REASON,
-        )
+        val COLUMNS: List<String> = listOf(ASSET_ID, FIRST_UNREFERENCED_AT, GENERATION, REASON)
     }
 
     /** 回收审计：每次回收/放弃都留痕（Kelivo `gc_audit_rows` 的对应物）。 */
@@ -179,7 +182,6 @@ object XStorageTables {
     /** `x_gc_audit.kind` 取值：审计条目类型。 */
     object AuditKinds {
         const val ASSET_DELETED = "asset_deleted"
-        const val ASSET_ABANDONED = "asset_abandoned"
         const val ORPHAN_SWEPT = "orphan_swept"
         const val BACKFILL_RUN = "backfill_run"
     }

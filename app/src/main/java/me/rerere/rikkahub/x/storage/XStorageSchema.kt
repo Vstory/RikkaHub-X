@@ -28,8 +28,16 @@ object XStorageSchema {
      * 1 → 初版。
      * 2 → **精简真列**：`mime_type` / `origin` / `width` / `height` / `thumbnail_path`
      * 移入 `extras_json`（它们只用于读取与展示，不参与任何 SQL 过滤或排序）。
+     * 3 → **回收候选改为「只登记、不自动删」**：`not_before` / `attempts` /
+     * `last_attempt_at` 三列由单个 `first_unreferenced_at` 取代。删除已改为用户显式确认，
+     * 没有自动重试，故不再需要重试次数与退避时间戳。
+     *
+     * 为何 v2→v3 仍写升级语句（P0 未发布、理论上可只改 v2 定义）：任何跑过 P0 版本
+     * 构建的机器上，`x_asset_gc` 已按旧形态建好 —— `CREATE TABLE IF NOT EXISTS`
+     * 不会改已存在的表，新代码写入 `first_unreferenced_at` 会直接报「无此列」。
+     * 升级语句约十行，换掉一整类「取决于对方是否装过旧构建」的不确定性。
      */
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
 
     /** 元数据键：X 表结构版本。 */
     const val META_SCHEMA_VERSION = "x.storage.schema_version"
@@ -75,6 +83,28 @@ object XStorageSchema {
         "CREATE INDEX IF NOT EXISTS idx_x_asset_last_referenced ON ${XStorageTables.ASSET} (${XStorageTables.Asset.LAST_REFERENCED_AT})",
     )
 
+    /**
+     * `x_asset_gc` 建表语句。
+     *
+     * 与资产表同理抽出成常量：v2→v3 升级要**按同一形态重建表**，共用一份 DDL
+     * 才不会有「升级后的形态与新建的形态不一致」这种隐蔽偏差。
+     */
+    private val ASSET_GC_TABLE_DDL: String = """
+        CREATE TABLE IF NOT EXISTS ${XStorageTables.ASSET_GC} (
+            ${XStorageTables.AssetGc.ASSET_ID} TEXT NOT NULL PRIMARY KEY,
+            ${XStorageTables.AssetGc.FIRST_UNREFERENCED_AT} INTEGER NOT NULL,
+            ${XStorageTables.AssetGc.GENERATION} INTEGER NOT NULL DEFAULT 0,
+            ${XStorageTables.AssetGc.REASON} TEXT NOT NULL DEFAULT '',
+            CHECK (${XStorageTables.AssetGc.GENERATION} >= 0)
+        )
+        """.trimIndent()
+
+    /** 回收候选表索引（重建表后需要重新建立）。 */
+    private val ASSET_GC_INDEX_STATEMENTS: List<String> = listOf(
+        "CREATE INDEX IF NOT EXISTS idx_x_asset_gc_first_unreferenced " +
+            "ON ${XStorageTables.ASSET_GC} (${XStorageTables.AssetGc.FIRST_UNREFERENCED_AT})",
+    )
+
     /** 建表语句（顺序无关，全部幂等）。单测会校验其与 [XStorageTables] 常量一致。 */
     val CREATE_STATEMENTS: List<String> = listOf(
         ASSET_TABLE_DDL,
@@ -98,19 +128,8 @@ object XStorageSchema {
         "CREATE INDEX IF NOT EXISTS idx_x_asset_ref_message ON ${XStorageTables.ASSET_REF} (${XStorageTables.AssetRef.MESSAGE_ID})",
         "CREATE INDEX IF NOT EXISTS idx_x_asset_ref_conversation ON ${XStorageTables.ASSET_REF} (${XStorageTables.AssetRef.CONVERSATION_ID})",
 
-        """
-        CREATE TABLE IF NOT EXISTS ${XStorageTables.ASSET_GC} (
-            ${XStorageTables.AssetGc.ASSET_ID} TEXT NOT NULL PRIMARY KEY,
-            ${XStorageTables.AssetGc.NOT_BEFORE} INTEGER NOT NULL,
-            ${XStorageTables.AssetGc.ATTEMPTS} INTEGER NOT NULL DEFAULT 0,
-            ${XStorageTables.AssetGc.LAST_ATTEMPT_AT} INTEGER,
-            ${XStorageTables.AssetGc.GENERATION} INTEGER NOT NULL DEFAULT 0,
-            ${XStorageTables.AssetGc.REASON} TEXT NOT NULL DEFAULT '',
-            CHECK (${XStorageTables.AssetGc.ATTEMPTS} >= 0),
-            CHECK (${XStorageTables.AssetGc.GENERATION} >= 0)
-        )
-        """.trimIndent(),
-        "CREATE INDEX IF NOT EXISTS idx_x_asset_gc_not_before ON ${XStorageTables.ASSET_GC} (${XStorageTables.AssetGc.NOT_BEFORE})",
+        ASSET_GC_TABLE_DDL,
+        *ASSET_GC_INDEX_STATEMENTS.toTypedArray(),
 
         """
         CREATE TABLE IF NOT EXISTS ${XStorageTables.GC_AUDIT} (
@@ -222,10 +241,16 @@ object XStorageSchema {
      * `extras_json`。用 SQLite 的标准重建流程（而不是 `ALTER TABLE DROP COLUMN`）：
      * 前者在任何支持的版本上都能跑，且能顺带把「旧表 NOT NULL 列」的语义一并换掉。
      *
+     * ── 2 → 3：回收候选表改形态 ─────────────────────────────────────────
+     * 三列（宽限截止 / 重试次数 / 上次尝试时刻）由 `first_unreferenced_at` 一列取代。
+     * 旧值语义可平移：原「宽限截止」记的就是**首次失去引用的时刻 + 宽限**，
+     * 故直接搬过来当作首次无引用时刻（略偏保守：实际闲置时间会被算得更久一点）。
+     * 同样走重建流程，**重建后必须重跑索引语句**。
+     *
      * 重建后**必须重跑索引语句** —— 表被改名时索引跟着走，旧表一删索引也没了，
      * 少了这步会留下「有表无索引」的隐患（唯一约束会静默消失）。
      */
-    internal fun upgradeStatementsTo(version: Int): List<String> = when (version) {
+internal fun upgradeStatementsTo(version: Int): List<String> = when (version) {
         2 -> listOf(
             "ALTER TABLE ${XStorageTables.ASSET} RENAME TO ${LEGACY_ASSET_TABLE_V1}",
             ASSET_TABLE_DDL,
@@ -251,9 +276,33 @@ object XStorageSchema {
             *ASSET_INDEX_STATEMENTS.toTypedArray(),
         )
 
+        /*
+         * v2 的列名在此按字面量书写：对应常量已随本次改动删除，而这段语句要读的是
+         * **旧表** —— 引用新常量会指向不存在的列。
+         */
+        3 -> listOf(
+            "ALTER TABLE ${XStorageTables.ASSET_GC} RENAME TO $LEGACY_ASSET_GC_TABLE_V2",
+            ASSET_GC_TABLE_DDL,
+            """
+            INSERT OR REPLACE INTO ${XStorageTables.ASSET_GC} (
+                ${XStorageTables.AssetGc.ASSET_ID},
+                ${XStorageTables.AssetGc.FIRST_UNREFERENCED_AT},
+                ${XStorageTables.AssetGc.GENERATION},
+                ${XStorageTables.AssetGc.REASON}
+            )
+            SELECT asset_id, not_before, generation, reason
+            FROM $LEGACY_ASSET_GC_TABLE_V2
+            """.trimIndent(),
+            "DROP TABLE IF EXISTS $LEGACY_ASSET_GC_TABLE_V2",
+            *ASSET_GC_INDEX_STATEMENTS.toTypedArray(),
+        )
+
         else -> emptyList()
     }
 
     /** v1 资产表在 v1→v2 重建期间的临时名。 */
     private const val LEGACY_ASSET_TABLE_V1 = "x_asset_legacy_v1"
+
+    /** v2 回收候选表在 v2→v3 重建期间的临时名。 */
+    private const val LEGACY_ASSET_GC_TABLE_V2 = "x_asset_gc_legacy_v2"
 }

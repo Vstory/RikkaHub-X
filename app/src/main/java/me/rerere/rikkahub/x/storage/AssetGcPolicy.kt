@@ -1,96 +1,86 @@
-// [X-custom] RikkaHub-X 存储管理重构(P0)：回收策略（纯函数,无 IO/无 Android 依赖）
+// [X-custom] RikkaHub-X 存储管理重构(P1)：回收候选判定（纯函数,无 IO/无 Android 依赖）
 package me.rerere.rikkahub.x.storage
 
-/** 单个资产的回收判定结果。 */
+/** 单个资产在「回收候选」这件事上的处境。 */
 enum class GcDecision {
-    /** 仍被引用 —— **绝不删**（这是回收安全的核心保证）。 */
+    /** 仍被引用 —— **绝不删**（回收安全的核心保证）。 */
     KEEP_REFERENCED,
 
-    /** 已无引用，但还在宽限期内 —— 等。 */
-    WAIT_GRACE,
+    /** 已无引用、且过了观察门槛 —— 可进候选清单，但**仍须用户显式确认**才会删。 */
+    CANDIDATE,
 
-    /** 已无引用且过宽限 —— 可删。 */
-    DELETE,
-
-    /** 重试次数用尽 —— 放弃（留在盘上并记审计，不再空转重试）。 */
-    ABANDON,
+    /** 已无引用，但还没过观察门槛（刚失去引用的那段时间）。 */
+    WAIT_OBSERVATION,
 }
 
 /**
- * 资产回收策略。
+ * 回收候选策略。
  *
- * 全部为**纯函数**：输入（是否有活引用 / 宽限截止 / 当前时刻 / 已试次数）→ 判定。
+ * **产品前提**：删除**不自动发生** —— 存储空间页只提示「可清理 N 字节」，
+ * 由用户确认后才删。故这里不做「到点即删」的判定，只回答两个问题：
+ * ① 这个资产现在还该不该留在盘上（[decide]）；
+ * ② 用户手上那份候选清单是不是已经过时（[isPlanStale]）。
+ *
+ * 全部为**纯函数**：输入（是否有活引用 / 候选门槛时刻 / 当前时刻）→ 判定。
  * 因此可在 JVM 单测里穷举决策表，无需 Android 环境或真实数据库。
  *
- * 为什么需要「延迟 + 重试 + 代数」三件套（对齐 Kelivo `asset_gc_rows`）：
- * - **延迟**：删除会话后立即删文件，用户撤销/导入备份时就永久丢了；宽限给反悔窗口
- * - **重试**：删除可能因文件被占用/IO 错误失败，一次性尝试会留下永远清不掉的残留
- * - **代数**：排队期间资产**又被引用**（如从回收站恢复、同步回灌）时，
- *   旧计划必须失效，否则会删掉刚被引用的文件
+ * 与 Kelivo 的差异（有意简化）：它的回收表还带宽限截止、重试次数与退避时间戳；
+ * 因删除改为手动确认，这三者失去对象，故只保留**代数**与观察门槛。
  */
 object AssetGcPolicy {
 
     /**
-     * 默认宽限期：**7 天**。
+     * 观察门槛：资产**刚失去最后一个引用**时不立刻算「可回收」，等一段时间再看。
      *
-     * 语义：资产已无任何引用（从 UI 上已经不可达）后，仍保留 7 天才真删。
-     * 选 7 天的理由：足够覆盖「删错会话后过几天想起来」与「备份导入前」的窗口，
-     * 又不至于让磁盘长期挂着无用文件。**这是产品判断，不是技术约束，可调**。
+     * 语义是「滤掉抖动」，不是「宽限期」—— 它不承诺到点会自动删，只是避免把
+     * 「删掉一条消息又立刻撤销」这类瞬时状态也列进候选清单，让用户看到一份噪声列表。
+     *
+     * 24 小时是产品判断，可调。
      */
-    val DEFAULT_GRACE_MILLIS: Long = 7L * 24 * 60 * 60 * 1000
+    val DEFAULT_OBSERVATION_MILLIS: Long = 24L * 60 * 60 * 1000
 
-    /** 单个资产最多重试次数，超过则 ABANDON（避免无限重试）。 */
-    const val DEFAULT_MAX_ATTEMPTS = 5
-
-    private const val BASE_BACKOFF_MILLIS = 5L * 60 * 1000
-    private const val MAX_BACKOFF_MILLIS = 6L * 60 * 60 * 1000
-    private const val MAX_BACKOFF_SHIFT = 20
-
-    /** 宽限截止时刻。 */
-    fun graceDeadline(nowMillis: Long, graceMillis: Long = DEFAULT_GRACE_MILLIS): Long {
-        require(graceMillis >= 0) { "宽限期不能为负:$graceMillis" }
-        return nowMillis + graceMillis
+    /**
+     * 候选门槛时刻 = 首次观察到无引用的时刻 + 观察期。
+     */
+    fun candidateAt(
+        firstUnreferencedAt: Long,
+        observationMillis: Long = DEFAULT_OBSERVATION_MILLIS,
+    ): Long {
+        require(observationMillis >= 0) { "观察期不能为负:$observationMillis" }
+        return firstUnreferencedAt + observationMillis
     }
 
     /**
-     * 第 [attempts] 次重试前的等待：指数退避（5min 起，每次翻倍，上限 6h）。
+     * 资产已闲置多久（毫秒）。界面据此显示「闲置 N 天」。
      *
-     * 上限存在的意义：失败往往来自环境问题（空间不足、文件被占用），
-     * 无限退避会让「明显失败」的条目长期占据队列。
+     * 下界夹到 0：设备改时间或时钟回拨时，「闲置 −3 天」这种说法没有意义。
      */
-    fun backoffMillis(attempts: Int): Long {
-        require(attempts >= 0) { "attempts 不能为负:$attempts" }
-        val shifted = BASE_BACKOFF_MILLIS shl attempts.coerceAtMost(MAX_BACKOFF_SHIFT)
-        return shifted.coerceAtMost(MAX_BACKOFF_MILLIS)
-    }
-
-    /** 下一次尝试时刻。 */
-    fun nextAttemptAt(nowMillis: Long, attempts: Int): Long = nowMillis + backoffMillis(attempts)
+    fun idleMillis(firstUnreferencedAt: Long, nowMillis: Long): Long =
+        (nowMillis - firstUnreferencedAt).coerceAtLeast(0)
 
     /**
-     * 决策。
+     * 判定。
      *
-     * 判定顺序**有意如此**：先看是否有活引用（安全优先，宁可留着），
-     * 再看时间闸门，最后才看重试次数。
+     * 判定顺序**有意如此**：先看是否有活引用（安全优先，宁可留着），再看观察门槛。
+     *
+     * [candidateAt] 缺省为 [Long.MAX_VALUE]，即「不设观察门槛」—— 刚失去引用的资产
+     * 立即成为候选。这样调用方只有真正关心门槛时才需要传值。
      */
     fun decide(
         hasLiveReferences: Boolean,
-        notBefore: Long,
         nowMillis: Long,
-        attempts: Int,
-        maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+        candidateAt: Long = Long.MAX_VALUE,
     ): GcDecision = when {
         hasLiveReferences -> GcDecision.KEEP_REFERENCED
-        nowMillis < notBefore -> GcDecision.WAIT_GRACE
-        attempts >= maxAttempts -> GcDecision.ABANDON
-        else -> GcDecision.DELETE
+        nowMillis < candidateAt -> GcDecision.WAIT_OBSERVATION
+        else -> GcDecision.CANDIDATE
     }
 
     /**
-     * 计划是否已过期。
+     * 候选清单是否已过期。
      *
-     * 资产在排队期间被重新引用时会 `generation + 1`；
-     * 持有旧代数的计划据此判定失效，**不得执行删除**。
+     * 资产在用户查看清单期间被重新引用时会 `generation + 1`；
+     * 持有旧代数的清单据此判定失效，**不得据此执行删除**。
      */
     fun isPlanStale(plannedGeneration: Long, currentGeneration: Long): Boolean =
         plannedGeneration < currentGeneration
