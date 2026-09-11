@@ -30,6 +30,8 @@ on:
       - 'model-contexts/context-windows.json'
       - 'workspace/src/main/java/me/rerere/workspace/**'
       - 'workspace/src/test/java/me/rerere/workspace/**'
+      # 版本号定制(versionCode 时间基数 / versionName 构建元数据)在此文件,改动需重跑守卫
+      - 'app/build.gradle.kts'
       - 'app/src/main/java/me/rerere/rikkahub/x/**'
       - 'app/src/test/java/me/rerere/rikkahub/x/**'
       - 'app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt'
