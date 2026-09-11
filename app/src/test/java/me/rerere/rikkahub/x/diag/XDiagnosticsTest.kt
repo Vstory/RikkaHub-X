@@ -292,4 +292,14 @@ class XDiagnosticsTest {
     fun `storage domain exists because P1 is built on it`() {
         assertEquals("storage", XDomain.STORAGE.key)
     }
+
+    // ---- logcat 提示 ----
+
+    @Test
+    fun `logcat hint uses the unified tag`() {
+        // 命令必须与 TAG 一致:两处各写一份常量,改 tag 时必漏一处,
+        // 用户照着敲就一条日志都看不到
+        assertEquals("adb logcat -s XCustom:*", XDiagnostics.logcatHint())
+        assertTrue(XDiagnostics.logcatHint().contains(XLogRing.TAG))
+    }
 }

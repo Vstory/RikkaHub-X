@@ -166,6 +166,14 @@ object XDiagnostics {
     /** 空缓冲的导出文案 —— 不返回空串，否则界面上分不清「没记录」与「界面坏了」。 */
     const val EMPTY_DUMP = "(无 X 诊断记录)"
 
+    /**
+     * logcat 过滤命令。
+     *
+     * 放在这里而非写死在界面里：诊断页要显示它，而命令必须与 [XLogRing.TAG] 一致 ——
+     * 两处各写一份常量，改 tag 时必漏一处，用户照着敲就会一条日志都看不到。
+     */
+    fun logcatHint(): String = "adb logcat -s ${XLogRing.TAG}:*"
+
     private fun timeTextOf(atMillis: Long?): String =
         if (atMillis == null) "(未开启过)" else XLogRing.timeText(atMillis)
 }

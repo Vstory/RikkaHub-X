@@ -202,9 +202,4 @@ class XLogRingTest {
         assertEquals("XCustom", XLogRing.TAG)
         assertEquals(XLogRing.TAG, XLog.TAG)
     }
-
-    @Test
-    fun `logcat hint uses the unified tag`() {
-        assertEquals("adb logcat -s XCustom:*", XLogRing.logcatHint())
-    }
 }
