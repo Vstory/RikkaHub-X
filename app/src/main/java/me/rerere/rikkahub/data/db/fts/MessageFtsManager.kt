@@ -8,6 +8,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
 import java.time.Instant
 
 data class MessageSearchResult(
@@ -107,14 +109,20 @@ class MessageFtsManager(private val database: AppDatabase) {
 
         applyPlan(plan, conversationId, conversation)
 
-        // 这条日志是「增量是否生效」的**现场证据**：touched 应当远小于 indexed 的规模，
+        // 这条日志是「增量是否生效」的**现场证据**：需写入应当远小于已索引的规模，
         // 而在流式保存时通常只有 1~2 行（那条正在增长的消息）。
-        Log.i(
-            TAG,
-            "indexConversation: conversation=$conversationId " +
-                "已索引=${indexed.size} 需写入=${plan.touchedCount} " +
-                "(删${plan.deleteRowIds.size}/改${plan.refresh.size}/增${plan.insert.size})",
-        )
+        //
+        // ⚠️ 走 XLog 而不是 android.util.Log（2026-09-11 改）：X 自己加的可观测点
+        // 应当受**诊断开关**控制 —— 否则用户在真机上根本看不到它，验证只能靠 adb。
+        // 走 XLog 后，开关打开时它会出现在「诊断」页的导出里，一键复制即可取证。
+        XLog.info(XDomain.SEARCH, XFtsEvents.INDEX_UPDATE) {
+            "conversation=" + conversationId +
+                " 已索引=" + indexed.size +
+                " 需写入=" + plan.touchedCount +
+                " (删" + plan.deleteRowIds.size +
+                "/改" + plan.refresh.size +
+                "/增" + plan.insert.size + ")"
+        }
     }
 
     suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {

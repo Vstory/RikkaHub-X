@@ -14,6 +14,15 @@ import java.util.concurrent.atomic.AtomicReference
  */
 enum class XDomain(val key: String, val label: String) {
     STORAGE("storage", "存储"),
+
+    /**
+     * 全文检索索引的维护（2026-09-11 加）。
+     *
+     * 单列一个域而不是并进「存储」：存储域的事件名一律以 `asset.` 开头
+     * （`XStorageEventsTest` 钉住了这条），而索引维护与资产账本是两件事 ——
+     * 硬塞进去会让「这个前缀代表什么」变得含糊。
+     */
+    SEARCH("search", "检索"),
     COMPRESS("compress", "上下文压缩"),
     CONTEXT("context", "容量表与用量"),
     CHAT("chat", "会话"),

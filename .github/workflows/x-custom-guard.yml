@@ -59,6 +59,7 @@ on:
       # 它们既不在原清单、又不 import x 包,原判据(只认 import)抓不到,故手工登记。
       - 'app/src/main/java/me/rerere/rikkahub/data/db/fts/MessageFtsManager.kt'
       - 'app/src/main/java/me/rerere/rikkahub/data/db/fts/FtsIndexPlanner.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/data/db/fts/XFtsEvents.kt'
       # 2026-09-11 补登(18 个):判据改强后才暴露出来的一批。它们都是「上游没有、X 加的」行为,
       # 但既不在原清单、又不 import x 包 → 原判据(只认 import)完全抓不到。
       # 逐个查看标记内容确认**全是实质定制**(不是纯日志):工具资源加固 / 图片识别范围 /
