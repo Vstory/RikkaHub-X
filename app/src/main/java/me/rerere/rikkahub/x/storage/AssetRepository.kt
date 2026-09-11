@@ -30,7 +30,7 @@ class AssetRepository(
     private val database: AppDatabase,
     /** 应用私有文件根目录（`context.filesDir`）。用于把 URL 还原成相对路径、以及判断文件是否在盘上。 */
     private val filesDir: File,
-) {
+) : AssetLedger {
     private companion object {
     }
 
@@ -46,16 +46,17 @@ class AssetRepository(
      * **同时查盘**：库里有记录不代表文件还在（用户清过数据目录、写入中途掉电、
      * 外部工具删过文件）。这正是 [KnownAsset.fileExists] 存在的原因。
      */
-    suspend fun knownAsset(hash: String): KnownAsset? = withContext(Dispatchers.IO) {
+    suspend fun knownAsset(hash: String): KnownAsset? = withContext(Dispatchers.IO) { findKnown(hash) }
+
+    /** @see AssetLedger.findKnown */
+    override fun findKnown(hash: String): KnownAsset? {
         val cursor = db.query(AssetSql.selectAssetByHash(hash).sql, arrayOf<Any?>(hash))
         cursor.use { c ->
             if (!c.moveToFirst()) {
-                null
-            } else {
-                c.getString(0)?.let { relativePath ->
-                    KnownAsset(relativePath = relativePath, fileExists = isFilePresent(relativePath))
-                }
+                return null
             }
+            val relativePath = c.getString(0) ?: return null
+            return KnownAsset(relativePath = relativePath, fileExists = isFilePresent(relativePath))
         }
     }
 
@@ -66,7 +67,16 @@ class AssetRepository(
         byteSize: Long,
         nowMillis: Long,
         extrasJson: String = "{}",
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) { recordAsset(hash, relativePath, byteSize, nowMillis, extrasJson) }
+
+    /** @see AssetLedger.recordAsset */
+    override fun recordAsset(
+        hash: String,
+        relativePath: String,
+        byteSize: Long,
+        nowMillis: Long,
+        extrasJson: String,
+    ) {
         exec(
             AssetSql.upsertAsset(
                 hash = hash,
@@ -172,9 +182,12 @@ class AssetRepository(
     }
 
     /** 某资产当前还有多少条引用。 */
-    suspend fun refCountOf(assetId: String): Int = withContext(Dispatchers.IO) {
+    suspend fun refCountOf(assetId: String): Int = withContext(Dispatchers.IO) { referenceCountOf(assetId) }
+
+    /** @see AssetLedger.referenceCountOf */
+    override fun referenceCountOf(assetId: String): Int {
         db.query(AssetSql.countRefsOfAsset(assetId).sql, arrayOf<Any?>(assetId)).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
     }
 

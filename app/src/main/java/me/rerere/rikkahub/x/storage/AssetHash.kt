@@ -52,6 +52,23 @@ object AssetHash {
         return toHex(digest.digest())
     }
 
+    /**
+     * 新建一个摘要器 —— 供**边写边算**的场景使用（写入路径）。
+     *
+     * [of] 要把流读一遍才算得出哈希，而落盘本来就要把内容读一遍。两遍读对
+     * `content://` 这类**不可重复读**的流不成立（第二遍可能已经空了），
+     * 故把摘要器交给写入方，让它在拷贝的同时喂数据，一趟完成。
+     */
+    fun newDigest(): MessageDigest = MessageDigest.getInstance(ALGORITHM)
+
+    /**
+     * 摘要字节 → 小写十六进制。
+     *
+     * 与 [of] 用的是同一套内部实现，避免「算哈希」与「转文本」两处格式不一致 ——
+     * 那种不一致会让同一个文件在两条路径下得到不同的哈希，去重直接失效。
+     */
+    fun hexOf(digest: ByteArray): String = toHex(digest)
+
     /** 是否为合法的（小写十六进制）SHA-256。 */
     fun isValid(hash: String): Boolean =
         hash.length == HEX_LENGTH && hash.all { it in '0'..'9' || it in 'a'..'f' }
