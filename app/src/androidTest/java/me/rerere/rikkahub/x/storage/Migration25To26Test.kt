@@ -3,6 +3,8 @@ package me.rerere.rikkahub.x.storage
 
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import me.rerere.rikkahub.data.db.AppDatabase
 import org.junit.Assert.assertEquals
@@ -10,58 +12,58 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
 
 /**
- * `25 → 26` 的升级验证 —— **在 JVM 上真的建一个 v25 的库、真的跑一遍 AutoMigration、再由 Room 校验结果**。
+ * `25 → 26` 的升级验证 —— 真的建一个 v25 的库、真的跑一遍 `AutoMigration`、**再由 Room 校验结果**。
  *
- * ## 为什么需要它（哪怕迁移是 Room 自动生成的）
+ * ## 为什么放在 `androidTest` 而不是 `test`
  *
- * 「自动生成」不等于「一定对」。这条路径仍然有四件事只有真跑一遍才知道：
+ * `MigrationTestHelper` 的官方定位是「**用于 instrumentation tests**」：它靠
+ * `InstrumentationRegistry.getInstrumentation()` 拿到目标 Context 与 assets 目录。
+ * 在纯 JVM 单测里 `Instrumentation` 不存在，即使用 Robolectric 顶替也会在反射初始化时失败
+ * （实测：`AndroidInterceptors` → `IllegalAccessException at Reflection.java`）。
+ *
+ * 本项目已有先例 —— `data/db/migrations/Migration_11_12_Test.kt` 就是按这个方式写的，
+ * 且 `androidTestImplementation(libs.androidx.room.testing)` 与 schemas 资产路径**早已配好**。
+ * 故本测试照该先例写，**并为它引入任何新的构建配置**（曾误放进 `test`，为此加的
+ * Robolectric / test-assets 配置已一并回滚）。
+ *
+ * ⚠️ **诚实标注**：CI 的 `X Custom Guard` **只跑 `:app:testDebugUnitTest`，不跑 `androidTest`**
+ * （后者需要设备/模拟器）。故本测试**当前不在 CI 上执行**，需在真机验证时（线 B 第 10 步）
+ * 用 `./gradlew :app:connectedDebugAndroidTest` 手动跑。
+ *
+ * ## 它守什么（哪怕 AutoMigration 是 Room 自动生成的）
+ *
+ * 「自动生成」不等于「一定对」。这条路径仍有四件事只有真跑一遍才知道：
  *
  * | # | 要确认的事 | 出错的表现 |
  * |---|---|---|
- * | 1 | **AutoMigration 能被生成**（需要 `25.json` 已被编译产出） | 编译期报「无法自动迁移，请手写」 |
- * | 2 | **生成出的结构与实体一致** | 升级后 Room 校验失败 → **库打不开** |
+ * | 1 | **AutoMigration 能被生成**（需要 `25.json`） | 编译期报「无法自动迁移，请手写」 |
+ * | 2 | **生成的结构与实体一致** | 升级后 Room 校验失败 → **库打不开** |
  * | 3 | **6 张表真的建出来了** | 表缺失 → 存储层静默退化（本项目已发生过一次） |
  * | 4 | **上游的表与数据没被碰** | 会话数据受损 |
  *
  * 第 2 条由 `runMigrationsAndValidate` 完成：它跑完迁移后**由 Room 逐列校验**结果与
  * `26.json` 是否一致 —— 少列 / 多列 / 类型不符 / 索引名不同 / 主键非空性不符都会被它抓到。
- *
- * ## 这组用例替代了什么
- *
- * 曾有过一个 **291 行手写迁移**（含「按形态判断并重建旧表」「搬数据」「补主键 NOT NULL」）。
- * 那套复杂度建立在一个**未核实的假设**上 —— 以为 Room 生成的建表语句不带
- * `IF NOT EXISTS`、以为 AutoMigration 不支持新增表。
- * 实测与官方文档都表明两点都相反：Room 生成的语句**带** `IF NOT EXISTS`，
- * 且 AutoMigration **支持新增表**。故手写迁移整体删除，这里改为验证自动路径。
- *
- * ## 关于「表已存在」的情况
- *
- * AutoMigration 生成的 `CREATE TABLE IF NOT EXISTS` 对已存在的表**直接跳过**：
- * - 形态正确 → 无影响；
- * - 形态不对（早期未发布构建的运行时建表产物）→ 跳过建表 → Room 校验失败 → 库打不开。
- *
- * 后者只可能在**装过早期构建的开发机**上出现（实测那些构建里建表从未成功过，
- * 且 P1 尚未发布），真有则卸载重装。故不为它保留任何手写语句。
  */
-@RunWith(RobolectricTestRunner::class)
+@RunWith(AndroidJUnit4::class)
 class Migration25To26Test {
 
-    private val dbName = "x-migration-25-26"
+    private val testDb = "x-migration-25-26"
 
     @get:Rule
     val helper: MigrationTestHelper = MigrationTestHelper(
         InstrumentationRegistry.getInstrumentation(),
         AppDatabase::class.java,
+        emptyList(),
+        FrameworkSQLiteOpenHelperFactory(),
     )
 
     @Test
-    fun `upgrades from v25 and creates every x table`() {
-        helper.createDatabase(dbName, 25).close()
+    fun upgradeFromV25CreatesEveryXTable() {
+        helper.createDatabase(testDb, 25).close()
 
-        val db = helper.runMigrationsAndValidate(dbName, 26, false)
+        val db = helper.runMigrationsAndValidate(testDb, 26, true)
 
         val tables = tableNames(db)
         XStorageTables.ALL.forEach { table ->
@@ -71,15 +73,16 @@ class Migration25To26Test {
             "唯一索引必须建出（去重的前提）:${indexNames(db)}",
             "idx_x_asset_path" in indexNames(db),
         )
+        db.close()
     }
 
     @Test
-    fun `upgrade does not touch upstream tables or their data`() {
+    fun upgradeDoesNotTouchUpstreamTablesOrTheirData() {
         // X 表是「加表」而不是「改表」—— 上游的会话数据必须原样保留。
-        // 这条挡的是「迁移语句误伤上游表」这类事故:一旦发生,用户丢的是聊天记录。
+        // 这条挡的是「迁移语句误伤上游表」这类事故：一旦发生，用户丢的是聊天记录。
         val conversationId = "c-upgrade-check"
 
-        helper.createDatabase(dbName, 25).apply {
+        helper.createDatabase(testDb, 25).apply {
             execSQL(
                 "INSERT INTO conversationentity " +
                     "(id, assistant_id, title, nodes, create_at, update_at, suggestions, is_pinned, " +
@@ -90,12 +93,13 @@ class Migration25To26Test {
             close()
         }
 
-        val db = helper.runMigrationsAndValidate(dbName, 26, false)
+        val db = helper.runMigrationsAndValidate(testDb, 26, true)
 
         db.query("SELECT title FROM conversationentity WHERE id = ?", arrayOf(conversationId)).use { cursor ->
             assertTrue("升级后原会话必须仍在", cursor.moveToFirst())
             assertEquals("升级前就有的会话", cursor.getString(0))
         }
+        db.close()
     }
 
     private fun tableNames(db: SupportSQLiteDatabase): List<String> =
