@@ -173,20 +173,48 @@ object XStorageSchema {
     /**
      * 建表/升级 X 表。**幂等**，可在每次打开库时安全调用。
      *
-     * 顺序：先建表（幂等）→ 再读元数据里的版本 → 版本落后则跑增量语句 → 记版本。
-     * 先建表的原因：元数据表本身也是被建的，**读它之前得保证它存在**。
+     * ## 顺序
      *
-     * 版本**更高**时不动作 —— 那说明用户装过更新的版本，本版本无从降级，保持原样最安全。
+     * 先建表（全部 `IF NOT EXISTS`）→ 再逐版按**形态**判断是否要重建 → 记版本。
+     * 先建表的原因：元数据表本身也是被建的，读它之前得保证它存在。
      *
-     * **事务容错**：本方法可能被从「已经在事务里」的上下文调用（Room 的 `onOpen`
-     * 在部分实现/路径下就处于事务中）。此时再 `beginTransaction()` 会抛
-     * 「cannot start a transaction within a transaction」—— 而调用方是 `runCatching`，
-     * **失败会被吞掉，功能静默失效**。
+     * ## 为什么按「形态」而不是按「版本号」判断（2026-09-11 实测事故）
+     *
+     * 原先写的是 `readInt(META_SCHEMA_VERSION) ?: 0`，再 `if (existing < SCHEMA_VERSION)`
+     * 就跑 1..3 的升级语句。**在全新库上这是错的**：meta 不存在 → 当成 0 →
+     * 跑 v2/v3 升级，可那几张表**刚刚被 CREATE_STATEMENTS 建成为最新形态**，
+     * 于是 v3 的 `INSERT ... SELECT not_before FROM x_asset_gc_legacy_v2`
+     * 撞上 `no such column: not_before` —— **整笔事务回滚，X 表一张都没建出来**。
+     * 后果是内容寻址静默退化：所有写入回落旧路径，同一张图在 A/B 会话各存一份。
+     *
+     * 现改为**看旧形态的标志列还在不在**（[needsRebuildTo]）：
+     *
+     * | 情况 | 标志列 | 动作 |
+     * |---|---|---|
+     * | 全新库（表刚建成新形态） | 不在 | 跳过 —— 无需升级 |
+     * | 真的 v1/v2 旧库 | 在 | 重建 |
+     *
+     * 这样**不依赖 meta 是否正确**：meta 缺失、超前、滞后都不会误判，
+     * 而且天然幂等（重建过就没有标志列了，第二次打开自然跳过）。
+     *
+     * ## 版本元数据
+     *
+     * 仍会写，但只用于**诊断与后续升级**，不再作为「要不要重建」的判据。
+     * 只在落后时写 —— 用户装过更新版本时不把版本号改小。
+     *
+     * ## 事务容错
+     *
+     * 本方法可能被从「已经在事务里」的上下文调用（Room 的 `onOpen` 在部分实现/路径下
+     * 就处于事务中）。此时再 `beginTransaction()` 会抛
+     * 「cannot start a transaction within a transaction」，而调用方是 `runCatching`
+     * —— **失败会被吞掉，功能静默失效**。
      * 因建表语句全是 `IF NOT EXISTS`（幂等），已有事务时直接借用外层事务：不自开、不提交，
-     * 由外层决定成败；自开事务时仍保持「任一语句失败即整体回滚」，不留半迁移状态。
+     * 由外层决定成败；自开事务时保持「任一语句失败即整体回滚」，不留半迁移状态。
      *
-     * **失败必须能定位**：语句失败时把**语句本身**带进异常 ——
-     * 否则只看到一句 `SQLiteException`，不知道是哪条建表语句出的问题。
+     * ## 失败必须能定位
+     *
+     * 每条语句失败时把**语句本身**带进异常 —— 否则只看到一句 `SQLiteException`，
+     * 不知道是哪条语句出的问题。本次事故正是靠这一点直接看到 `INSERT ... x_asset_gc`。
      */
     fun ensure(db: SupportSQLiteDatabase) {
         val ownsTransaction = !db.inTransaction()
@@ -195,13 +223,14 @@ object XStorageSchema {
             for (statement in CREATE_STATEMENTS) {
                 execOrThrow(db, statement)
             }
-            val existing = readInt(db, META_SCHEMA_VERSION) ?: 0
-            if (existing < SCHEMA_VERSION) {
-                for (version in (existing + 1)..SCHEMA_VERSION) {
-                    for (statement in upgradeStatementsTo(version)) {
-                        execOrThrow(db, statement)
-                    }
+            for (version in 1..SCHEMA_VERSION) {
+                if (!needsRebuildTo(db, version)) continue
+                for (statement in upgradeStatementsTo(version)) {
+                    execOrThrow(db, statement)
                 }
+            }
+            val recorded = readInt(db, META_SCHEMA_VERSION) ?: 0
+            if (recorded < SCHEMA_VERSION) {
                 putMeta(db, META_SCHEMA_VERSION, SCHEMA_VERSION.toString())
             }
             if (ownsTransaction) db.setTransactionSuccessful()
@@ -209,6 +238,38 @@ object XStorageSchema {
             if (ownsTransaction) db.endTransaction()
         }
     }
+
+    /**
+     * 该版本是否需要**重建** —— 判据是「那一版的旧标志列是否还在」。
+     *
+     * 标志列一律是**被后续版本移除/改名**的列：
+     *
+     * | 版本 | 标志列 | 含义 |
+     * |---|---|---|
+     * | 2 | `mime_type` | v1 的真列，v2 起移入 `extras_json` |
+     * | 3 | `not_before` | v2 的列，v3 起由 `first_unreferenced_at` 取代 |
+     *
+     * 这些列名**按字面量**书写：对应常量已随改动删除，而这里要认的正是「旧名字」——
+     * 引用新常量会问出一个恒为 false 的问题。
+     *
+     * 表不存在时 [hasColumn] 返回 false → 跳过（`CREATE_STATEMENTS` 已按新形态建好）。
+     */
+    private fun needsRebuildTo(db: SupportSQLiteDatabase, version: Int): Boolean = when (version) {
+        2 -> hasColumn(db, XStorageTables.ASSET, LEGACY_ASSET_V1_MARKER)
+        3 -> hasColumn(db, XStorageTables.ASSET_GC, LEGACY_ASSET_GC_V2_MARKER)
+        else -> false
+    }
+
+    /** 表里有没有这一列。表不存在 → false（`PRAGMA` 返回空集）。 */
+    private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
+        db.query("PRAGMA table_info($table)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            if (nameIndex < 0) return@use false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == column) return@use true
+            }
+            false
+        }
 
     /** 执行一条 DDL；失败时把语句带进异常，便于一眼定位。 */
     private fun execOrThrow(db: SupportSQLiteDatabase, statement: String) {
@@ -384,6 +445,12 @@ internal fun upgradeStatementsTo(version: Int): List<String> = when (version) {
 
         else -> emptyList()
     }
+
+    /** v1 资产表的标志列（v2 起移入 `extras_json`）—— 还在 = 仍是 v1 形态。 */
+    private const val LEGACY_ASSET_V1_MARKER = "mime_type"
+
+    /** v2 回收候选表的标志列（v3 起由 `first_unreferenced_at` 取代）—— 还在 = 仍是 v2 形态。 */
+    private const val LEGACY_ASSET_GC_V2_MARKER = "not_before"
 
     /** v1 资产表在 v1→v2 重建期间的临时名。 */
     private const val LEGACY_ASSET_TABLE_V1 = "x_asset_legacy_v1"
