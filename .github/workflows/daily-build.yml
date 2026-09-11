@@ -109,14 +109,40 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Prepare build files
+        env:
+          # ⚠️ secret 一律经 env 传入、脚本里只引用变量名，**不把值插进 run 脚本文本**。
+          #    理由：值里若含 $ 或反引号，插进脚本会被 shell 二次展开。
+          #    实测正式 keystore 的口令里就有 $，旧写法（echo "${{ secrets.X }}"）
+          #    会把口令吃掉一截，而且在签名报错之前没有任何提示。
+          X_KEY_BASE64: ${{ secrets.KEY_BASE64 }}
+          X_SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          X_SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          X_SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          X_GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'nightly' }}"
-          if [ "$BUILD_TYPE" = "release" ] && [ -n "${{ secrets.KEY_BASE64 }}" ]; then
+          if [ "$BUILD_TYPE" = "release" ]; then
+            # 选了正式构建却缺 secret → **直接失败**，不静默回退到随机签名。
+            # 回退的后果是：产物看着"构建成功"，签名却不对，要等用户安装时才发现升不了级。
+            missing=""
+            for v in X_KEY_BASE64 X_SIGNING_STORE_PASSWORD X_SIGNING_KEY_ALIAS X_SIGNING_KEY_PASSWORD; do
+              [ -n "${!v}" ] || missing="$missing $v"
+            done
+            if [ -n "$missing" ]; then
+              echo "❌ 选择了 release 构建，但以下 secret 为空:$missing"
+              echo "   拒绝回退到随机签名（那会让产物无法与后续正式包互相覆盖安装）。"
+              exit 1
+            fi
             # 正式构建(release)且已提供密钥:解码正式 keystore → 固定正式签名,接真实 Firebase
             echo "正式构建:使用正式密钥固定签名(commit ${{ github.sha }})"
-            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
-            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
-            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+            printf '%s' "$X_KEY_BASE64" | base64 -d > app/app.key
+            # storeFile 由 runner 现场拼（GITHUB_WORKSPACE），与 nightly 分支同一来源 ——
+            # 不写死仓库在 runner 上的路径名，改名/换布局都不会失配。
+            printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/app/app.key" > local.properties
+            printf 'storePassword=%s\n' "$X_SIGNING_STORE_PASSWORD" >> local.properties
+            printf 'keyAlias=%s\n' "$X_SIGNING_KEY_ALIAS" >> local.properties
+            printf 'keyPassword=%s\n' "$X_SIGNING_KEY_PASSWORD" >> local.properties
+            printf '%s\n' "$X_GOOGLE_SERVICES_JSON" > app/google-services.json
           else
             # 其余(nightly 默认 / 未提供密钥):每次构建生成一次性随机临时 keystore 签名。
             # 随机口令 + 随机 dname → 每次产物签名指纹不同,仅供测试分发,升级需重装。
