@@ -63,13 +63,18 @@ object AssetGcPolicy {
      *
      * 判定顺序**有意如此**：先看是否有活引用（安全优先，宁可留着），再看观察门槛。
      *
-     * [candidateAt] 缺省为 [Long.MAX_VALUE]，即「不设观察门槛」—— 刚失去引用的资产
-     * 立即成为候选。这样调用方只有真正关心门槛时才需要传值。
+     * **`candidateAt` 刻意不给默认值。**
+     * 曾给它一个「无门槛」的哨兵默认值 `Long.MAX_VALUE`，结果自相矛盾：
+     * `nowMillis < Long.MAX_VALUE` 恒真，于是**每个资产都卡在等待**，
+     * 与注释写的「立即成为候选」正好相反（CI 已抓到这个错）。
+     * 而换成 `Long.MIN_VALUE` 又等于默认放行 —— 把「刚失去引用」直接当候选，
+     * 方向偏危险。两种默认都反直觉，故**要求调用方显式给出门槛时刻**：
+     * 反正它总能从 `x_asset_gc.first_unreferenced_at` 算出（[candidateAt]）。
      */
     fun decide(
         hasLiveReferences: Boolean,
         nowMillis: Long,
-        candidateAt: Long = Long.MAX_VALUE,
+        candidateAt: Long,
     ): GcDecision = when {
         hasLiveReferences -> GcDecision.KEEP_REFERENCED
         nowMillis < candidateAt -> GcDecision.WAIT_OBSERVATION

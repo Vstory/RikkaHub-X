@@ -70,11 +70,13 @@ class AssetGcPolicyTest {
     }
 
     @Test
-    fun `omitting threshold means immediately eligible`() {
-        // 缺省门槛是 Long.MAX_VALUE,即「不设门槛」
+    fun `zero threshold expresses no observation window`() {
+        // 回归守护:`decide` 曾给 candidateAt 一个「无门槛」的哨兵默认值
+        // (Long.MAX_VALUE),结果恒真地卡在等待,与注释说的「立即成为候选」相反。
+        // 现要求显式传值;「不设门槛」的正当写法是传 0 —— 这条用例把它钉住。
         assertEquals(
             GcDecision.CANDIDATE,
-            AssetGcPolicy.decide(hasLiveReferences = false, nowMillis = now),
+            AssetGcPolicy.decide(hasLiveReferences = false, nowMillis = now, candidateAt = 0),
         )
     }
 
