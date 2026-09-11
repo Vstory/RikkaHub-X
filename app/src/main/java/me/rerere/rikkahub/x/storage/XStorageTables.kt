@@ -166,17 +166,25 @@ object XStorageTables {
             listOf(UPLOAD, CHAT_FILE, GEN_MEDIA, TOOL_OUTPUT, SKILL, FONT, UNKNOWN)
     }
 
-    /** `x_asset_ref.kind` 取值：该资产在消息里扮演什么角色。 */
+    /**
+     * `x_asset_ref.kind` 取值：该资产在消息里扮演什么角色。
+     *
+     * 前四个与 [UIMessagePart][me.rerere.ai.ui.UIMessagePart] 里带 `url` 的类型一一对应，
+     * 由 [AssetRefExtractor] 产出（嵌套在 `Tool.output` 里的附件同样按其自身类型记，
+     * 因为「这个文件长什么样」与「它由谁产生」是两件事 —— 后者记在 `x_asset.extras_json`
+     * 的 `asset.origin`）。
+     *
+     * [THUMBNAIL] 是预留给缩略图引用（`asset.thumbnailPath` 已存在）的角色名，
+     * 当前尚无产出方。
+     */
     object RefKinds {
-        const val ATTACHMENT = "attachment"
         const val IMAGE = "image"
-        const val THUMBNAIL = "thumbnail"
-        const val DOCUMENT = "document"
+        const val VIDEO = "video"
         const val AUDIO = "audio"
-        const val TOOL_OUTPUT = "tool_output"
+        const val DOCUMENT = "document"
+        const val THUMBNAIL = "thumbnail"
 
-        val ALL: List<String> =
-            listOf(ATTACHMENT, IMAGE, THUMBNAIL, DOCUMENT, AUDIO, TOOL_OUTPUT)
+        val ALL: List<String> = listOf(IMAGE, VIDEO, AUDIO, DOCUMENT, THUMBNAIL)
     }
 
     /** `x_gc_audit.kind` 取值：审计条目类型。 */
