@@ -107,14 +107,49 @@ class AssetRepository(
         return KnownAsset(relativePath = relativePath, fileExists = isFilePresent(relativePath))
     }
 
-    /** 登记（或覆盖）一条资产。调用方**只在内容首次落盘时**调用。 */
+    /**
+     * 登记（或覆盖）一条资产。调用方**只在内容首次落盘时**调用。
+     *
+     * 直接走 DAO（不再转调同步版 [recordAsset]）—— 后者内部用 `runBlocking` 桥接，
+     * 在已经在 IO 线程上的挂起调用里再套一层会让「阻塞等待」变得没有意义。
+     * 本方法是**挂起**的，调用方本来就在协程里。
+     */
     suspend fun registerAsset(
         hash: String,
         relativePath: String,
         byteSize: Long,
         nowMillis: Long,
         extrasJson: String = "{}",
-    ) = withContext(Dispatchers.IO) { recordAsset(hash, relativePath, byteSize, nowMillis, extrasJson) }
+    ) = withContext(Dispatchers.IO) {
+        dao.upsertAsset(assetEntity(hash, relativePath, byteSize, nowMillis, extrasJson))
+    }
+
+    /**
+     * 按内容哈希查**已登记的落盘路径**（不查盘）。
+     *
+     * 与 [findKnown] 的区别：那个要顺带做一次 `File.isFile`（决定「复用」还是「补写」），
+     * 而回填只需要知道「这个内容在账本里登记的路径是哪个」——
+     * 每文件一次多余的磁盘 stat，在几万个文件的扫描里不是小数目。
+     */
+    suspend fun registeredPathOf(hash: String): String? = withContext(Dispatchers.IO) {
+        dao.selectPathByHash(hash)
+    }
+
+    /** 资产行构造 —— 同步版与挂起版共用一份，避免两处漂移。 */
+    private fun assetEntity(
+        hash: String,
+        relativePath: String,
+        byteSize: Long,
+        nowMillis: Long,
+        extrasJson: String,
+    ) = XAssetEntity(
+        id = hash,
+        path = relativePath,
+        byteSize = byteSize,
+        createdAt = nowMillis,
+        lastReferencedAt = nowMillis,
+        extrasJson = extrasJson,
+    )
 
     /** @see AssetLedger.recordAsset */
     override fun recordAsset(
@@ -124,18 +159,7 @@ class AssetRepository(
         nowMillis: Long,
         extrasJson: String,
     ) {
-        awaitDb {
-            dao.upsertAsset(
-                XAssetEntity(
-                    id = hash,
-                    path = relativePath,
-                    byteSize = byteSize,
-                    createdAt = nowMillis,
-                    lastReferencedAt = nowMillis,
-                    extrasJson = extrasJson,
-                )
-            )
-        }
+        awaitDb { dao.upsertAsset(assetEntity(hash, relativePath, byteSize, nowMillis, extrasJson)) }
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -249,7 +273,9 @@ class AssetRepository(
     // ────────────────────────────────────────────────────────────────
 
     /** 界面上的「可清理 N 字节」：当前**无任何引用**的资产总大小。 */
-    suspend fun unreferencedBytes(): Long = withContext(Dispatchers.IO) { dao.sumUnreferencedBytes() }
+    suspend fun unreferencedBytes(): Long = withContext(Dispatchers.IO) {
+        dao.sumUnreferencedBytes(AssetStorePolicy.MANAGED_PATH_SQL_PREFIX)
+    }
 
     /**
      * 回收候选清单：无引用、且首次无引用时刻已早于观察门槛。
@@ -265,6 +291,7 @@ class AssetRepository(
         dao.selectGcCandidates(
             cutoff = cutoff,
             inactiveAt = AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT,
+            managedPrefix = AssetStorePolicy.MANAGED_PATH_SQL_PREFIX,
         ).map { row ->
             GcCandidate(
                 assetId = row.assetId,

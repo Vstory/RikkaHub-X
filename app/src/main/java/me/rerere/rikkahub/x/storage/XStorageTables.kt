@@ -173,6 +173,49 @@ object XStorageTables {
         val COLUMNS: List<String> = listOf(KEY, VALUE)
     }
 
+    /**
+     * `x_storage_meta` 的**键**。
+     *
+     * 回填的进度就靠这些键做到「可暂停、可续跑、进度可见」——
+     * 它必须落在库里而不是内存:进程被杀后要能接着上次的位置继续,
+     * 而界面要能读到一个**跨启动可见**的进度。
+     */
+    object MetaKeys {
+        const val SCHEMA_VERSION = "x.storage.schema_version"
+
+        /** 回填状态:`Running` / `Paused` / `Done` 的字符串形式(见 `AssetBackfill.State`)。 */
+        const val BACKFILL_STATE = "x.storage.backfill_state"
+
+        /** 续跑游标 = 最后一个**已处理完**的相对路径(严格按字典序推进)。 */
+        const val BACKFILL_CURSOR = "x.storage.backfill_cursor"
+
+        /** 本次扫描的文件总数(用于算百分比)。 */
+        const val BACKFILL_TOTAL = "x.storage.backfill_total"
+
+        /** 已处理的文件数。 */
+        const val BACKFILL_SCANNED = "x.storage.backfill_scanned"
+
+        /** 新登记进账本的资产数。 */
+        const val BACKFILL_REGISTERED = "x.storage.backfill_registered"
+
+        /** 存量重复文件数(只统计,不合并)。 */
+        const val BACKFILL_DUPLICATE_FILES = "x.storage.backfill_duplicate_files"
+
+        /** 存量重复**可省下的字节数**。 */
+        const val BACKFILL_DUPLICATE_BYTES = "x.storage.backfill_duplicate_bytes"
+
+        val ALL: List<String> = listOf(
+            SCHEMA_VERSION,
+            BACKFILL_STATE,
+            BACKFILL_CURSOR,
+            BACKFILL_TOTAL,
+            BACKFILL_SCANNED,
+            BACKFILL_REGISTERED,
+            BACKFILL_DUPLICATE_FILES,
+            BACKFILL_DUPLICATE_BYTES,
+        )
+    }
+
     /** `x_asset.origin` 取值：资产来自哪条路径（便于统计与按来源回收）。 */
     object Origins {
         const val UPLOAD = "upload"

@@ -31,6 +31,7 @@ import me.rerere.rikkahub.x.storage.XAssetGcEntity
 import me.rerere.rikkahub.x.storage.XAssetRefEntity
 import me.rerere.rikkahub.x.storage.XGcAuditEntity
 import me.rerere.rikkahub.x.storage.XAssetEntity
+import me.rerere.rikkahub.x.storage.XStorageMetaDao
 import me.rerere.rikkahub.x.storage.XStorageMetaEntity
 import me.rerere.rikkahub.x.storage.XTombstoneEntity
 
@@ -109,6 +110,9 @@ abstract class AppDatabase : RoomDatabase() {
 
     /** [X-custom] X 资产侧语句(由 Room 在编译期解析列名,不再手写 SQL 字符串)。 */
     abstract fun xAssetDao(): XAssetDao
+
+    /** [X-custom] `x_storage_meta` 读写(回填进度与续跑游标等运行状态)。 */
+    abstract fun xStorageMetaDao(): XStorageMetaDao
 }
 
 object TokenUsageConverter {

@@ -11,6 +11,7 @@ import me.rerere.rikkahub.data.repository.FilesRepository
 import me.rerere.rikkahub.data.repository.GenMediaRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.x.storage.AssetBackfill
 import me.rerere.rikkahub.x.storage.AssetLedger
 import me.rerere.rikkahub.x.storage.AssetRepository
 import me.rerere.rikkahub.x.storage.AssetWritePath
@@ -110,6 +111,17 @@ val repositoryModule = module {
     // `AssetLedger`,虽然现在已登记,但显式类型更不容易在后续重构里再次踩到上面那个坑。
     single {
         AssetWritePath(get<Context>().filesDir, get<AssetRepository>())
+    }
+
+    // [X-custom] 存量回填(X 存储重构 P1):把已有文件只读地扫一遍并纳入账本。
+    // 第二个参数显式写 `get<AssetRepository>()` 而不是 `get()` —— 推导目标是
+    // `AssetBackfill` 的构造参数类型,显式写出不易在后续重构里推导错(同类先例见上)。
+    single {
+        AssetBackfill(
+            database = get(),
+            filesDir = get<Context>().filesDir,
+            ledger = get<AssetRepository>(),
+        )
     }
 
     single {

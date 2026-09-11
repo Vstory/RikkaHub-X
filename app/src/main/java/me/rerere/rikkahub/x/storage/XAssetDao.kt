@@ -106,9 +106,10 @@ interface XAssetDao {
      */
     @Query(
         "SELECT COALESCE(SUM(a.byte_size), 0) FROM x_asset a " +
-            "WHERE NOT EXISTS (SELECT 1 FROM x_asset_ref r WHERE r.asset_id = a.id)"
+            "WHERE NOT EXISTS (SELECT 1 FROM x_asset_ref r WHERE r.asset_id = a.id) " +
+            "AND a.path LIKE :managedPrefix"
     )
-    fun sumUnreferencedBytes(): Long
+    fun sumUnreferencedBytes(managedPrefix: String): Long
 
     /**
      * 回收候选：无引用、且首次无引用时刻已早于 `cutoff`（即已过观察门槛）。
@@ -123,11 +124,12 @@ interface XAssetDao {
             "g.first_unreferenced_at AS first_unreferenced_at, g.generation AS generation " +
             "FROM x_asset a JOIN x_asset_gc g ON g.asset_id = a.id " +
             "WHERE NOT EXISTS (SELECT 1 FROM x_asset_ref r WHERE r.asset_id = a.id) " +
+            "AND a.path LIKE :managedPrefix " +
             "AND g.first_unreferenced_at > :inactiveAt " +
             "AND g.first_unreferenced_at <= :cutoff " +
             "ORDER BY g.first_unreferenced_at ASC, a.byte_size DESC"
     )
-    fun selectGcCandidates(cutoff: Long, inactiveAt: Long): List<XGcCandidateRow>
+    fun selectGcCandidates(cutoff: Long, inactiveAt: Long, managedPrefix: String): List<XGcCandidateRow>
 
     /**
      * 登记一条回收候选。**已存在则完全不改**（IGNORE）。

@@ -77,6 +77,25 @@ object AssetStorePolicy {
      * 判据用「前缀 + 分隔符」而不是 `startsWith("assets")`：后者会放过
      * `assets_evil/x`（同前缀不同目录）。同时拒绝路径穿越与绝对路径。
      */
+    /**
+     * [isManagedPath] 的 **SQL 侧等价形式** —— 供必须在 SQL 里过滤的场合使用
+     * （`sumUnreferencedBytes` / `selectGcCandidates`）。
+     *
+     * ## 为什么需要它，以及为什么它不是可有可无的
+     *
+     * 「可清理量」与「回收候选」必须**只统计内容寻址路径下的资产**：
+     * 存量回填会把 `upload/` 下的老文件也登记进账本，而那些文件**引用无法登记**
+     * （路径里没有内容指纹，反解不出资产 id）→ 在引用表里表现为「无引用」，
+     * 但它们**确实被消息用着**。若不过滤，它们会被算成「可清理」、甚至成为可删候选
+     * —— 删掉就是坏图。
+     *
+     * 故：**没有引用 ≠ 没人用**（对老文件而言），这条过滤就是那个区别。
+     *
+     * ⚠️ 与 [isManagedPath] 必须保持一致：改一侧必须同时改另一侧。
+     * `LIKE` 的通配符是 `%`；本前缀不含 `_`（SQL 里 `_` 是单字符通配），故没有转义问题。
+     */
+    const val MANAGED_PATH_SQL_PREFIX: String = AssetHash.ROOT + "/%"
+
     fun isManagedPath(relativePath: String): Boolean {
         if (relativePath.isEmpty()) return false
         // 绝对路径与上跳一律拒绝(V2 之前不规范化,直接当不安全)

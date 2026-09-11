@@ -32,6 +32,10 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
+import me.rerere.rikkahub.x.storage.AssetBackfill
+import me.rerere.rikkahub.x.storage.XStorageEvents
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.sync.BackupManager
 import me.rerere.rikkahub.data.sync.RestoreFailedException
@@ -101,6 +105,9 @@ class RikkaHubApp : Application() {
         // sync upload files to DB
         syncManagedFiles()
 
+        // [X-custom] 存量回填:把已有文件纳入内容寻址账本(后台静默、可续跑)
+        startAssetIndexBackfill()
+
         // Start WebServer if enabled in settings
         startWebServerIfEnabled()
 
@@ -119,6 +126,25 @@ class RikkaHubApp : Application() {
                 Log.i(TAG, "incrementLaunchCount: ${store.settingsFlowRaw.first().launchCount}")
             }.onFailure {
                 Log.e(TAG, "incrementLaunchCount failed", it)
+            }
+        }
+    }
+
+    /**
+     * [X-custom] 存量回填（X 存储重构 P1，决策 A：后台静默）。
+     *
+     * 与相邻几个启动任务同样的形态：`AppScope` + IO 调度器 + `runCatching`。
+     * **失败不阻断启动**，但要走 XLog 留痕 —— 回填失败会让「可清理量」长期偏小，
+     * 那是需要事后能查的降级，不是可以静默的降级。
+     *
+     * 可重复调用：已做完则内部立即返回（状态落在 `x_storage_meta`）。
+     */
+    private fun startAssetIndexBackfill() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<AssetBackfill>().resumeIfNeeded()
+            }.onFailure {
+                XLog.warn(XDomain.STORAGE, XStorageEvents.BACKFILL_SCAN, it) { "存量回填失败" }
             }
         }
     }

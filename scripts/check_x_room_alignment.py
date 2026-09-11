@@ -48,6 +48,7 @@ import sys
 STORAGE = pathlib.Path("app/src/main/java/me/rerere/rikkahub/x/storage")
 ENTITIES = STORAGE / "XStorageEntities.kt"
 DAO = STORAGE / "XAssetDao.kt"
+META_DAO = STORAGE / "XStorageMetaDao.kt"
 TABLES = STORAGE / "XStorageTables.kt"
 
 # 常量对象名 → 表名（与 XStorageTables 逐字对应；改前先改那边）
@@ -88,6 +89,9 @@ REQUIRED_DAO_METHODS = {
     # 审计
     "insertAudit",
 }
+
+# `x_storage_meta` DAO 必须提供的方法（同样按名核对）
+REQUIRED_META_DAO_METHODS = {"getValue", "put", "remove"}
 
 # 必需索引（名字与语义）
 REQUIRED_INDEXES = {
@@ -158,7 +162,7 @@ def entity_declarations() -> dict[str, dict]:
 
 
 def main() -> int:
-    for path in (ENTITIES, DAO, TABLES):
+    for path in (ENTITIES, DAO, META_DAO, TABLES):
         if not path.exists():
             sys.exit(f"  ❌ 缺文件:{path}")
 
@@ -247,7 +251,7 @@ def main() -> int:
             if not value.strip():
                 errors.append(f"{obj} 取值不得为空白")
 
-    # ── 3 & 4. DAO ──
+    # ── DAO 源码（供下面各段解析查询文本）──
     dao_src = DAO.read_text(encoding="utf-8")
     # ── 11. 回收候选查询的两道必需守卫 ──
     # 两道都**不可省**,少了任一条都会让「不该出现的资产」出现在可清理清单里:
@@ -270,33 +274,86 @@ def main() -> int:
                 "selectGcCandidates 必须带非活跃过滤 `first_unreferenced_at > :inactiveAt` —— "
                 "少了它,被重新引用过的资产(值为哨兵)会直接进候选清单、观察期未起算即可被删"
             )
+        # ③ 内容寻址前缀:回填会把 upload/ 下的老文件也登记进账本,而它们的引用登记不上
+        #    (路径里没有内容指纹)→ 在引用表里表现为「无引用」。不过滤就会把**正在被消息使用**
+        #    的老文件算成可清理、甚至列为可删候选。
+        if "a.path LIKE :managedPrefix" not in gc_query:
+            errors.append(
+                "selectGcCandidates 必须带内容寻址过滤 `a.path LIKE :managedPrefix` —— "
+                "少了它,回填登记的老文件(引用登记不上,但确实被消息用着)会被当成可删候选"
+            )
 
-    all_columns = set().union(*declared.values()) if declared else set()
-    queries = re.findall(r'@Query\(\s*((?:"[^"]*"\s*\+?\s*)+)\)', dao_src, re.S)
-    for raw in queries:
-        sql = " ".join(re.findall(r'"([^"]*)"', raw))
-        params = set(re.findall(r":(\w+)", sql))
-        aliases = set(re.findall(r"(?:FROM|JOIN)\s+x_\w+\s+(\w+)\b", sql))
-        aliases |= set(re.findall(r"\b(\w+)\.\w+", sql))
-        aliases |= set(re.findall(r"\bAS\s+(\w+)", sql))
-        for token in re.findall(r"\b([a-z_][a-z0-9_]*)\b", sql):
-            if token in SQL_KEYWORDS or token in params or token in aliases:
-                continue
-            if token in all_columns or token.startswith("x_"):
-                continue
-            errors.append(f"DAO 语句里的未知标识符 `{token}`:{sql[:70]}")
-    declared_methods = set(re.findall(r"\n    fun (\w+)\(", dao_src))
-    print(f"  DAO:{len(queries)} 条 @Query,{len(re.findall(r'@Insert', dao_src))} 条 @Insert,"
-          f"{len(declared_methods)} 个方法")
-    missing_methods = REQUIRED_DAO_METHODS - declared_methods
-    extra_methods = declared_methods - REQUIRED_DAO_METHODS
-    if missing_methods:
-        errors.append(f"DAO 缺少应有的方法:{sorted(missing_methods)}")
-    if extra_methods:
+    # 「可清理字节数」同样必须过滤:它比候选清单更早出现在界面上,不过滤会直接虚报可清理量
+    sum_query = None
+    for raw in re.findall(r'@Query\(\s*((?:"[^"]*"\s*\+?\s*)+)\)\s*\n\s*fun sumUnreferencedBytes', dao_src, re.S):
+        sum_query = " ".join(re.findall(r'"([^"]*)"', raw))
+    if sum_query is None:
+        errors.append("找不到 sumUnreferencedBytes 的 @Query")
+    elif "a.path LIKE :managedPrefix" not in sum_query:
         errors.append(
-            f"DAO 多出未登记的方法:{sorted(extra_methods)} —— "
-            "新加方法请同时登记进本脚本的 REQUIRED_DAO_METHODS(这是有意的确认步骤)"
+            "sumUnreferencedBytes 必须带内容寻址过滤 `a.path LIKE :managedPrefix` —— "
+            "否则「可清理 N 字节」会把回填进来的老文件算进去(它们仍被消息用着)"
         )
+
+    # ── 12. 元数据键:x.storage. 前缀 + 唯一 ──
+    # 这些键是回填「可暂停/可续跑/进度可见」的载体,也是将来看「存储底账」的入口。
+    # 前缀不统一会让「存储域有哪些状态」无法靠 grep 答出来。
+    meta_keys_block = re.search(r"object MetaKeys \{(.*?)\n    \}", tables_src, re.S)
+    if not meta_keys_block:
+        errors.append("XStorageTables 里找不到 MetaKeys")
+    else:
+        keys = re.findall(r'const val \w+ = "([^"]+)"', meta_keys_block.group(1))
+        if not keys:
+            errors.append("MetaKeys 里没有解析到任何键")
+        if len(keys) != len(set(keys)):
+            errors.append(f"元数据键重复会互相覆盖:{keys}")
+        for key in keys:
+            if not key.startswith("x.storage."):
+                errors.append(f"元数据键需带 x.storage. 命名空间:{key}")
+        # ALL 必须与常量集合一致(漏登记会让「遍历全部键」的代码漏掉新键)
+        all_block = re.search(r"val ALL: List<String> = listOf\((.*?)\)", meta_keys_block.group(1), re.S)
+        if not all_block:
+            errors.append("MetaKeys 缺 ALL 清单")
+        else:
+            listed = [x.strip() for x in all_block.group(1).replace("\n", " ").split(",") if x.strip()]
+            consts = re.findall(r"const val (\w+) = ", meta_keys_block.group(1))
+            if len(listed) != len(consts):
+                errors.append(
+                    f"MetaKeys.ALL 与常量数量不一致:ALL {len(listed)} 项 vs 常量 {len(consts)} 个 —— "
+                    "新增键必须同时登记进 ALL"
+                )
+        print(f"  元数据键 {len(keys)} 个")
+
+    # ── 3 & 4 通用部分:对每个 DAO 各跑一遍 ──
+    all_columns = set().union(*declared.values()) if declared else set()
+    for dao_path, required in ((DAO, REQUIRED_DAO_METHODS), (META_DAO, REQUIRED_META_DAO_METHODS)):
+        src = dao_path.read_text(encoding="utf-8")
+        label = dao_path.name
+        queries = re.findall(r'@Query\(\s*((?:"[^"]*"\s*\+?\s*)+)\)', src, re.S)
+        for raw in queries:
+            sql = " ".join(re.findall(r'"([^"]*)"', raw))
+            params = set(re.findall(r":(\w+)", sql))
+            aliases = set(re.findall(r"(?:FROM|JOIN)\s+x_\w+\s+(\w+)\b", sql))
+            aliases |= set(re.findall(r"\b(\w+)\.\w+", sql))
+            aliases |= set(re.findall(r"\bAS\s+(\w+)", sql))
+            for token in re.findall(r"\b([a-z_][a-z0-9_]*)\b", sql):
+                if token in SQL_KEYWORDS or token in params or token in aliases:
+                    continue
+                if token in all_columns or token.startswith("x_"):
+                    continue
+                errors.append(f"{label} 语句里的未知标识符 `{token}`:{sql[:70]}")
+        methods = set(re.findall(r"\n    fun (\w+)\(", src))
+        print(f"  {label}:{len(queries)} 条 @Query,{len(re.findall(r'@Insert', src))} 条 @Insert,"
+              f"{len(methods)} 个方法")
+        missing = required - methods
+        extra = methods - required
+        if missing:
+            errors.append(f"{label} 缺少应有的方法:{sorted(missing)}")
+        if extra:
+            errors.append(
+                f"{label} 多出未登记的方法:{sorted(extra)} —— "
+                "新加方法请同时登记进本脚本的 REQUIRED_*_DAO_METHODS(这是有意的确认步骤)"
+            )
 
     if errors:
         print("\n  ❌ 发现问题:")
