@@ -16,7 +16,32 @@ data class GcCandidate(
     val relativePath: String,
     val byteSize: Long,
     val firstUnreferencedAt: Long,
+    /**
+     * 读出该行时的**代数**。界面必须原样保存,用户确认删除时交回 [AssetRepository.purgeAsset]
+     * —— 期间该资产若被重新引用过,代数会变,删除会被拒（见 [AssetGcPolicy.isPlanStale]）。
+     */
+    val generation: Long,
 )
+
+/**
+ * [AssetRepository.purgeAsset] 的结果。
+ *
+ * **两种拒绝分开**,因为原因与处置不同:
+ * - [STILL_REFERENCED]:资产还在用 → 等它真的没引用;
+ * - [PLAN_STALE]:用户看到清单之后该资产被重新引用过 → 清单上的「闲置 N 天」已不准 → **刷新清单**。
+ *
+ * 合成一个布尔会让界面只能提示「删不掉」,而说不出为什么。
+ */
+enum class PurgeOutcome {
+    /** 已删除登记（文件由调用方先删）。 */
+    DELETED,
+
+    /** 期间被重新引用 —— **拒绝删除**。 */
+    STILL_REFERENCED,
+
+    /** 手上的候选清单已过期 —— **拒绝删除**。 */
+    PLAN_STALE,
+}
 
 /**
  * X 存储层的读写入口。
@@ -199,8 +224,10 @@ class AssetRepository(
                 )
             )
             dao.touchLastReferenced(assetId, nowMillis)
-            // 资产又活了 → 撤销回收候选（与登记同生同死，见方法注释）
-            dao.deleteGcCandidate(assetId)
+            // 资产又活了 → 退出回收状态（与登记同生同死，见方法注释）。
+            // ⚠️ 这里是 **标记非活跃** 而不是删行 —— 删行会让代数归零，
+            // 于是「查看清单期间被重新引用」这件事再也追不出来（详见 XAssetDao 的注释）。
+            dao.markGcCandidateInactive(assetId, AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT)
             registered++
         }
         return registered
@@ -235,12 +262,16 @@ class AssetRepository(
         observationMillis: Long = AssetGcPolicy.DEFAULT_OBSERVATION_MILLIS,
     ): List<GcCandidate> = withContext(Dispatchers.IO) {
         val cutoff = nowMillis - observationMillis
-        dao.selectGcCandidates(cutoff).map { row ->
+        dao.selectGcCandidates(
+            cutoff = cutoff,
+            inactiveAt = AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT,
+        ).map { row ->
             GcCandidate(
                 assetId = row.assetId,
                 relativePath = row.relativePath,
                 byteSize = row.byteSize,
                 firstUnreferencedAt = row.firstUnreferencedAt,
+                generation = row.generation,
             )
         }
     }
@@ -255,14 +286,24 @@ class AssetRepository(
         firstUnreferencedAt: Long,
         reason: String = "",
     ) = withContext(Dispatchers.IO) {
-        dao.insertGcCandidate(
-            XAssetGcEntity(
-                assetId = assetId,
-                firstUnreferencedAt = firstUnreferencedAt,
-                generation = 0L,
-                reason = reason,
+        database.withTransaction {
+            // 先确保有行（`INSERT OR IGNORE`：已存在则**代数与原因都不动**）
+            dao.insertGcCandidate(
+                XAssetGcEntity(
+                    assetId = assetId,
+                    firstUnreferencedAt = firstUnreferencedAt,
+                    generation = 0L,
+                    reason = reason,
+                )
             )
-        )
+            // 再「重启观察期」—— 只在当前处于非活跃（曾被重新引用过）时才改写起算点。
+            // 反复扫描不会刷新起算点，否则闲置时长永远从今天算起、候选永远等不到门槛。
+            dao.restartGcObservation(
+                assetId = assetId,
+                at = firstUnreferencedAt,
+                inactiveAt = AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT,
+            )
+        }
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -272,43 +313,73 @@ class AssetRepository(
     /**
      * 删除一条资产的**登记**（审计留痕）。
      *
-     * **删除前必须再查一次引用**：用户从看到候选清单到点确认之间，
-     * 该资产完全可能又被某条消息引用（恢复备份、导入会话）。此时按旧清单删就会
-     * 删掉在用的文件 —— 这是本设计里代价最高的一种错，故把校验放在最靠近删除的位置。
+     * **两道校验,缺一不可**:
+     *
+     * | # | 校验 | 挡住什么 |
+     * |:--:|---|---|
+     * | ① | **代数**(`plannedGeneration < 当前代数`) | 用户看到清单之后该资产被**重新引用过** → 清单上的「闲置 N 天」已不准 → 刷新清单 |
+     * | ② | **引用计数** | 删除前再数一次 —— 最靠近删除的位置,挡住「仍被引用」 |
+     *
+     * **为什么①单独存在**:用户看到清单(T0)→ 资产被重新引用(T1)→ 又失去引用(T2)。
+     * 此时引用计数为 0,②放行;而观察期本应从 T2 重新起算(远未到 24 小时),
+     * 清单却按 T0 之前的旧时刻把它算成「闲置 30 天」。**只有代数能追出这个跳跃。**
+     *
+     * 校验顺序**有意如此**:先判代数(便宜且语义更准),再数引用。
      *
      * 文件本身的删除由调用方负责（本类只管库）—— 顺序应为**先删文件、后删登记**：
      * 反过来会在中途失败时留下「有文件、无登记」的孤儿，那比「无文件、有登记」更难收拾
      * （后者下次写入会按 [AssetStorePlan.RewriteMissing] 自动补回）。
      *
-     * @return true = 已删除；false = 仍有引用，**拒绝删除**。
+     * @param plannedGeneration 界面上那份清单里带的代数（[GcCandidate.generation]）。
+     * @return [PurgeOutcome] —— 两种拒绝分开,界面才能说清为什么删不掉。
      */
     suspend fun purgeAsset(
         assetId: String,
         byteSize: Long?,
         nowMillis: Long,
+        plannedGeneration: Long,
         reason: String = "",
-    ): Boolean {
-        var purged = false
+    ): PurgeOutcome {
+        var outcome = PurgeOutcome.DELETED
         database.withTransaction {
-            if (dao.countRefsOfAsset(assetId) == 0) {
-                dao.deleteGcCandidate(assetId)
-                dao.deleteAsset(assetId)
-                dao.insertAudit(
-                    XGcAuditEntity(
-                        kind = XStorageTables.AuditKinds.ASSET_DELETED,
-                        entityId = assetId,
-                        byteSize = byteSize,
-                        detail = reason,
-                        completedAt = nowMillis,
+            // ① 代数:该资产在用户查看清单期间是否被重新引用过
+            val currentGeneration = dao.selectGeneration(assetId) ?: 0L
+            when {
+                AssetGcPolicy.isPlanStale(plannedGeneration, currentGeneration) ->
+                    outcome = PurgeOutcome.PLAN_STALE
+
+                // ② 引用:删除前再数一次
+                dao.countRefsOfAsset(assetId) > 0 ->
+                    outcome = PurgeOutcome.STILL_REFERENCED
+
+                else -> {
+                    dao.deleteGcCandidate(assetId)
+                    dao.deleteAsset(assetId)
+                    dao.insertAudit(
+                        XGcAuditEntity(
+                            kind = XStorageTables.AuditKinds.ASSET_DELETED,
+                            entityId = assetId,
+                            byteSize = byteSize,
+                            detail = reason,
+                            completedAt = nowMillis,
+                        )
                     )
-                )
-                purged = true
+                }
             }
         }
-        if (!purged) {
-            XLog.warn(XDomain.STORAGE, XStorageEvents.GC_REFUSE) { "拒绝删除仍被引用的资产:" + assetId }
+        when (outcome) {
+            PurgeOutcome.DELETED ->
+                XLog.info(XDomain.STORAGE, XStorageEvents.GC_PURGE) { "已删除资产登记:" + assetId }
+
+            PurgeOutcome.PLAN_STALE ->
+                XLog.warn(XDomain.STORAGE, XStorageEvents.GC_PLAN_STALE) {
+                    "拒绝删除:候选清单已过期(查看期间被重新引用过):" + assetId
+                }
+
+            PurgeOutcome.STILL_REFERENCED ->
+                XLog.warn(XDomain.STORAGE, XStorageEvents.GC_REFUSE) { "拒绝删除仍被引用的资产:" + assetId }
         }
-        return purged
+        return outcome
     }
 
     // ────────────────────────────────────────────────────────────────

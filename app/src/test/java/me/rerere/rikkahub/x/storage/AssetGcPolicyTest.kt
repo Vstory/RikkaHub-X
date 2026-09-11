@@ -126,4 +126,59 @@ class AssetGcPolicyTest {
             AssetGcPolicy.isPlanStale(plannedGeneration = 2, currentGeneration = 1),
         )
     }
+
+    @Test
+    fun `plan goes stale after a single re reference`() {
+        // 界面在 T0 读出清单(代数 0);期间资产被重新引用一次 → 代数 1。
+        // 此时用户仍拿 T0 的清单来删 —— 必须判作废,否则会按「闲置 30 天」删掉刚被用过的文件。
+        val plannedFromUi = 0L
+        val afterOneReReference = 1L
+        assertTrue(
+            "被重新引用一次后,旧清单必须失效",
+            AssetGcPolicy.isPlanStale(plannedFromUi, afterOneReReference),
+        )
+    }
+
+    // ---- 非活跃哨兵（代数的前提）----
+
+    @Test
+    fun `inactive sentinel is negative`() {
+        // 哨兵必须是负值:它要能与**任何真实时间戳**区分开,
+        // 而真实时间戳从 0 起算(epoch)。若哨兵取 0,「刚失去引用」与「被重新引用」就撞在一起。
+        assertTrue(
+            "哨兵必须为负,否则无法与真实时刻区分:${AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT}",
+            AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT < 0,
+        )
+    }
+
+    @Test
+    fun `inactive sentinel is not considered active`() {
+        // 这是「被重新引用过的资产不得进候选清单」的 Kotlin 侧判据。
+        // 与 SQL 里的 `first_unreferenced_at > :inactiveAt` 等价 —— 两侧必须一致。
+        assertFalse(
+            "哨兵本身不是活跃状态",
+            AssetGcPolicy.isActive(AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT),
+        )
+    }
+
+    @Test
+    fun `zero and later timestamps are active`() {
+        assertTrue("epoch 是最早的合法时刻,应算活跃", AssetGcPolicy.isActive(0L))
+        assertTrue("正常时刻应算活跃", AssetGcPolicy.isActive(1_700_000_000_000L))
+    }
+
+    @Test
+    fun `real timestamps are never mistaken for inactive`() {
+        // 反向确认:哨兵与真实时刻之间没有重叠区 —— 时钟回拨、时区问题都不会把
+        // 一个真实时刻误判成「非活跃」。
+        val plausibleEarliest = 0L
+        assertTrue(
+            "最早的可能时刻必须判为活跃",
+            AssetGcPolicy.isActive(plausibleEarliest),
+        )
+        assertTrue(
+            "哨兵必须小于最早的可能时刻",
+            AssetGcPolicy.INACTIVE_FIRST_UNREFERENCED_AT < plausibleEarliest,
+        )
+    }
 }

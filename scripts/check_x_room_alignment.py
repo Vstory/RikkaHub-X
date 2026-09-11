@@ -20,13 +20,14 @@ Room 的编译期校验覆盖「实体内部自洽」（列类型、`@Query` 里
 | 1 | 实体表名/列集合 == 常量表名/列集合 | 漂移时编译不报，运行时才炸 |
 | 2 | 实体声明的索引名以 `idx_x_` 开头，且必需索引都在 | 与既有命名一致；缺唯一索引则去重不成立 |
 | 3 | DAO 每个标识符都是列名 / 关键字 / 别名 / 参数 | 列名写错编译期虽会报，但这里是**秒级**拦 |
-| 4 | DAO 方法数 == 15 | 与方案的任务分解对齐 |
+| 4 | DAO 方法名集合 == 登记清单 | 数量对不上时说不出少了哪个;并强制「新加方法要显式登记」 |
 | 5 | 表名一律 `x_` 前缀 | 避免与上游新增表撞名 |
 | 6 | extras 键带 `asset.` 前缀、唯一、不与真列同名 | 免 schema 纪律：只读字段必须住 JSON |
 | 7 | 资产表真列恰为 6 个指定列 | 同上，把「别顺手加列」变成机器可查 |
 | 8 | 取值常量（origin / kind / audit kind）唯一非空 | 重复会让审计与引用分类互相覆盖 |
 | 9 | 引用表主键 = (message, asset, kind)；墓碑表主键 = (scope, entity) | 这两条是设计核心，改动必须是有意的 |
 | 10 | 回收候选表不得出现重试/宽限列 | 删除是用户显式动作，没有自动重试 |
+| 11 | 候选查询带**代数列**与**非活跃过滤** | 两道守卫缺一不可,否则不该出现的资产会进可清理清单 |
 
 ## 退出码
 
@@ -72,6 +73,20 @@ SQL_KEYWORDS = {
 # 免 schema 纪律：资产表只允许这 6 个真列，其余字段一律进 extras_json
 ASSET_ALLOWED_COLUMNS = {
     "id", "path", "byte_size", "created_at", "last_referenced_at", "extras_json",
+}
+
+# DAO 必须提供的方法（按名核对,而不是数数量 —— 数量对不上时说不出少了哪个、多了哪个）
+REQUIRED_DAO_METHODS = {
+    # 资产
+    "selectPathByHash", "upsertAsset", "touchLastReferenced", "deleteAsset",
+    # 引用
+    "insertRef", "deleteRefsOfConversation", "deleteRefsOfMessage", "countRefsOfAsset",
+    # 回收:统计与状态流转
+    "sumUnreferencedBytes", "selectGcCandidates", "insertGcCandidate",
+    "markGcCandidateInactive", "restartGcObservation",
+    "deleteGcCandidate", "deleteAllGcCandidates", "selectGeneration",
+    # 审计
+    "insertAudit",
 }
 
 # 必需索引（名字与语义）
@@ -234,6 +249,28 @@ def main() -> int:
 
     # ── 3 & 4. DAO ──
     dao_src = DAO.read_text(encoding="utf-8")
+    # ── 11. 回收候选查询的两道必需守卫 ──
+    # 两道都**不可省**,少了任一条都会让「不该出现的资产」出现在可清理清单里:
+    # ① 代数(generation 列)必须随清单读出 —— 否则界面无法在确认时交回校验,代数机制失效;
+    # ② 非活跃过滤(first_unreferenced_at > :inactiveAt)——
+    #    曾无引用、后被重新引用的资产其值是哨兵 -1,不过滤会直接出现在候选里
+    #    (此时观察期尚未起算,却能立刻被删)。
+    gc_query = None
+    for raw in re.findall(r'@Query\(\s*((?:"[^"]*"\s*\+?\s*)+)\)\s*\n\s*fun selectGcCandidates', dao_src, re.S):
+        gc_query = " ".join(re.findall(r'"([^"]*)"', raw))
+    if gc_query is None:
+        errors.append("找不到 selectGcCandidates 的 @Query")
+    else:
+        if "generation AS generation" not in gc_query:
+            errors.append(
+                "selectGcCandidates 必须把 generation 读出来(界面要在确认删除时交回校验)"
+            )
+        if "first_unreferenced_at > :inactiveAt" not in gc_query:
+            errors.append(
+                "selectGcCandidates 必须带非活跃过滤 `first_unreferenced_at > :inactiveAt` —— "
+                "少了它,被重新引用过的资产(值为哨兵)会直接进候选清单、观察期未起算即可被删"
+            )
+
     all_columns = set().union(*declared.values()) if declared else set()
     queries = re.findall(r'@Query\(\s*((?:"[^"]*"\s*\+?\s*)+)\)', dao_src, re.S)
     for raw in queries:
@@ -248,10 +285,18 @@ def main() -> int:
             if token in all_columns or token.startswith("x_"):
                 continue
             errors.append(f"DAO 语句里的未知标识符 `{token}`:{sql[:70]}")
-    n_methods = len(re.findall(r"\n    fun ", dao_src))
-    print(f"  DAO:{len(queries)} 条 @Query,{len(re.findall(r'@Insert', dao_src))} 条 @Insert,{n_methods} 个方法")
-    if n_methods != 15:
-        errors.append(f"DAO 方法数应为 15(方案要求),实际 {n_methods}")
+    declared_methods = set(re.findall(r"\n    fun (\w+)\(", dao_src))
+    print(f"  DAO:{len(queries)} 条 @Query,{len(re.findall(r'@Insert', dao_src))} 条 @Insert,"
+          f"{len(declared_methods)} 个方法")
+    missing_methods = REQUIRED_DAO_METHODS - declared_methods
+    extra_methods = declared_methods - REQUIRED_DAO_METHODS
+    if missing_methods:
+        errors.append(f"DAO 缺少应有的方法:{sorted(missing_methods)}")
+    if extra_methods:
+        errors.append(
+            f"DAO 多出未登记的方法:{sorted(extra_methods)} —— "
+            "新加方法请同时登记进本脚本的 REQUIRED_DAO_METHODS(这是有意的确认步骤)"
+        )
 
     if errors:
         print("\n  ❌ 发现问题:")

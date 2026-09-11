@@ -74,6 +74,14 @@ class XStorageEventsTest {
         assertTrue("缺少写入降级事件", XStorageEvents.WRITE_FALLBACK in all)
         assertTrue("缺少引用登记失败事件", XStorageEvents.REF_FAIL in all)
         assertTrue("缺少落盘成功但登记失败的事件", XStorageEvents.WRITE_UNRECORDED in all)
+        // 两种「拒绝删除」也必须分开可查:仍被引用 vs 清单已过期 ——
+        // 前者等引用撤销,后者刷新清单即可,排查时给出的下一步完全不同。
+        assertTrue("缺少拒绝删除(仍被引用)事件", XStorageEvents.GC_REFUSE in all)
+        assertTrue("缺少拒绝删除(清单过期)事件", XStorageEvents.GC_PLAN_STALE in all)
+        assertTrue(
+            "两种拒绝不得合并成一个事件名 —— 处置方式不同",
+            XStorageEvents.GC_REFUSE != XStorageEvents.GC_PLAN_STALE,
+        )
     }
 
     @Test

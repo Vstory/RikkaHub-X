@@ -84,7 +84,12 @@ data class XAssetRefEntity(
     @ColumnInfo(name = "created_at") val createdAt: Long,
 )
 
-/** `x_asset_gc` —— 回收候选。**只登记，不自动删**；删除由用户显式确认。 */
+/**
+ * `x_asset_gc` —— 资产的**回收状态**（不是候选队列）。**只登记，不自动删**；删除由用户显式确认。
+ *
+ * 行建立后**不删**：被重新引用时只把 `first_unreferenced_at` 置为非活跃哨兵并 `generation + 1`，
+ * 这样代数才连续、才能追出「查看清单期间被重新引用」（见 `AssetGcPolicy.isPlanStale`）。
+ */
 @Entity(
     tableName = "x_asset_gc",
     indices = [

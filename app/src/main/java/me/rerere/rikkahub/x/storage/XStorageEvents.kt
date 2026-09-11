@@ -88,6 +88,15 @@ object XStorageEvents {
     /** 审计表主键补 `NOT NULL`（Room 对自增主键的要求，SQLite 不会自动补这个标记位）。 */
     const val MIGRATION_PK_FIX = "asset.migration.pk_fix"
 
+    /**
+     * 拒绝删除:手上的候选清单已过期。
+     *
+     * 单列一条事件(而不是复用 [GC_REFUSE])的理由:两种拒绝的**原因与处置不同** ——
+     * 「仍被引用」是资产还在用;[本事件]是**用户看到清单之后**该资产被重新引用过,
+     * 故清单上的「闲置 N 天」已不准。前者等引用撤销,后者**刷新清单**即可。
+     */
+    const val GC_PLAN_STALE = "asset.gc.plan_stale"
+
     /** 撤销会话引用失败 —— 会话已删但引用残留，附件将暂时清不掉。 */
     const val REF_DROP_FAIL = "asset.ref.drop_fail"
 
@@ -96,7 +105,7 @@ object XStorageEvents {
         WRITE_NEW, WRITE_REUSE, WRITE_REWRITE, WRITE_FALLBACK, WRITE_UNRECORDED,
         REF_SYNC, REF_DROP, REF_DROP_FAIL, REF_SKIP, REF_FAIL,
         BACKFILL_SCAN, BACKFILL_DONE,
-        GC_CANDIDATE, GC_PURGE, GC_REFUSE,
+        GC_CANDIDATE, GC_PURGE, GC_REFUSE, GC_PLAN_STALE,
         SCHEMA_ENSURE_FAIL,
     )
 }

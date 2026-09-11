@@ -120,13 +120,14 @@ interface XAssetDao {
      */
     @Query(
         "SELECT a.id AS asset_id, a.path AS relative_path, a.byte_size AS byte_size, " +
-            "g.first_unreferenced_at AS first_unreferenced_at " +
+            "g.first_unreferenced_at AS first_unreferenced_at, g.generation AS generation " +
             "FROM x_asset a JOIN x_asset_gc g ON g.asset_id = a.id " +
             "WHERE NOT EXISTS (SELECT 1 FROM x_asset_ref r WHERE r.asset_id = a.id) " +
+            "AND g.first_unreferenced_at > :inactiveAt " +
             "AND g.first_unreferenced_at <= :cutoff " +
             "ORDER BY g.first_unreferenced_at ASC, a.byte_size DESC"
     )
-    fun selectGcCandidates(cutoff: Long): List<XGcCandidateRow>
+    fun selectGcCandidates(cutoff: Long, inactiveAt: Long): List<XGcCandidateRow>
 
     /**
      * 登记一条回收候选。**已存在则完全不改**（IGNORE）。
@@ -139,7 +140,40 @@ interface XAssetDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insertGcCandidate(candidate: XAssetGcEntity): Long
 
-    /** 资产重新被引用 → 撤销候选。 */
+    /**
+     * 资产**重新被引用** → 代数 +1,并把「首次无引用时刻」置为非活跃哨兵。
+     *
+     * ## 为什么是「置哨兵」而不是「删行」
+     *
+     * 删行会让代数归零 —— 下次无引用时新插入的行 `generation` 又从 0 开始,
+     * 于是 `isPlanStale(旧清单的代数 = 0, 当前 = 0)` 判不出差异,**代数校验形同虚设**。
+     * 行保留后代数才连续:查看清单 → 被重新引用(代数 0→1)→ 用户拿旧清单来删 → 判为过期。
+     *
+     * 置哨兵的另一半作用:该资产此刻**仍在被引用**,不该出现在候选清单里 ——
+     * 候选查询据此过滤(见 [selectGcCandidates]),不必依赖引用表也能排除。
+     *
+     * @return 受影响行数。0 表示该资产从未进过回收状态(无需记账)。
+     */
+    @Query(
+        "UPDATE x_asset_gc SET generation = generation + 1, first_unreferenced_at = :inactiveAt " +
+            "WHERE asset_id = :assetId"
+    )
+    fun markGcCandidateInactive(assetId: String, inactiveAt: Long): Int
+
+    /**
+     * 资产**再次失去全部引用** → 重启观察期(只在当前处于非活跃时改)。
+     *
+     * `WHERE first_unreferenced_at = :inactiveAt` 这个条件不能省:
+     * 扫描会反复调用本方法,若无条件地写入,每次扫描都把起算点刷新成「现在」,
+     * **闲置时长永远从今天算起、候选永远等不到门槛**。
+     */
+    @Query(
+        "UPDATE x_asset_gc SET first_unreferenced_at = :at " +
+            "WHERE asset_id = :assetId AND first_unreferenced_at = :inactiveAt"
+    )
+    fun restartGcObservation(assetId: String, at: Long, inactiveAt: Long): Int
+
+    /** 删除一条回收状态行(仅在资产登记被删除后调用)。 */
     @Query("DELETE FROM x_asset_gc WHERE asset_id = :assetId")
     fun deleteGcCandidate(assetId: String): Int
 
@@ -175,4 +209,9 @@ data class XGcCandidateRow(
     @ColumnInfo(name = "relative_path") val relativePath: String,
     @ColumnInfo(name = "byte_size") val byteSize: Long,
     @ColumnInfo(name = "first_unreferenced_at") val firstUnreferencedAt: Long,
+    /**
+     * 该行被读出时的**代数** —— 必须随清单一起交给界面,
+     * 用户确认时再交回来校验([AssetGcPolicy.isPlanStale])。
+     */
+    @ColumnInfo(name = "generation") val generation: Long,
 )

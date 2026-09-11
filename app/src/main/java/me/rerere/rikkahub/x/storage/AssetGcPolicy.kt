@@ -40,6 +40,35 @@ object AssetGcPolicy {
     val DEFAULT_OBSERVATION_MILLIS: Long = 24L * 60 * 60 * 1000
 
     /**
+     * `first_unreferenced_at` 的**哨兵值**:该资产**当前仍有引用**,但曾经无引用过。
+     *
+     * ## 为什么需要一个哨兵
+     *
+     * `generation`(代数)要能连续才起作用 —— 而它只有在行**持久存在**时才连续。
+     * 若「资产被重新引用」时把行删掉,下次无引用时新插入的行 `generation` 又从 0 开始,
+     * 代数就永远追不出「查看期间被重新引用过」这件事([isPlanStale] 也就成了死代码)。
+     *
+     * 故 [XStorageTables.ASSET_GC] 的语义是「**资产的回收状态**」而非「候选队列」:
+     * 行一旦建立就保留,被重新引用时只把 `first_unreferenced_at` 置为本哨兵并 `generation + 1`。
+     *
+     * ## 判据是「大于哨兵」而不是「不等于哨兵」
+     *
+     * 因为 SQL 那边要用它做过滤(`first_unreferenced_at > :inactiveAt`),
+     * 用「大于」比「不等于」更能兜住脏数据 —— 任何负值都被当作非活跃。
+     * [isActive] 是这条 SQL 条件的 **Kotlin 侧镜像**,两侧必须一致(有单测钉住)。
+     */
+    const val INACTIVE_FIRST_UNREFERENCED_AT: Long = -1L
+
+    /**
+     * 该资产当前是否处于「已无引用」的活跃计时状态。
+     *
+     * **与 `XAssetDao.selectGcCandidates` 里的 `first_unreferenced_at > :inactiveAt` 等价** ——
+     * 改一侧必须同时改另一侧。
+     */
+    fun isActive(firstUnreferencedAt: Long): Boolean =
+        firstUnreferencedAt > INACTIVE_FIRST_UNREFERENCED_AT
+
+    /**
      * 候选门槛时刻 = 首次观察到无引用的时刻 + 观察期。
      */
     fun candidateAt(
