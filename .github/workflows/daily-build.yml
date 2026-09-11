@@ -138,20 +138,26 @@ jobs:
             cp .github/google-services.placeholder.json app/google-services.json
           fi
 
-      - name: Gradle Build
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease
-
-      # 计算短提交号，用于 APK 命名区分每次构建
+      # 计算短提交号与构建时间戳(北京时间)。须在构建**之前**完成 —— 时间戳要作为
+      # -Px.build.info 传给 Gradle,用于 versionCode 与 versionName(见 app/build.gradle.kts)。
+      # APK 文件名 / versionCode / versionName 三处时间必须一致,故三者取自**同一次 date 调用**,
+      # 否则临近分钟或跨日边界时三处会不一致:
+      #   info = "<epoch 秒>|<yyMMdd>|<8 位短哈希>"
       - name: Compute short SHA
         id: sha
         run: echo "short=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
 
-      # 计算构建时间戳(北京时间)，供 APK 命名与 release 说明复用
       - name: Compute build timestamp
         id: ts
-        run: echo "ts=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+        run: |
+          NOW=$(date +%s)
+          echo "ts=$(TZ=Asia/Shanghai date -d "@$NOW" +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+          echo "info=$NOW|$(TZ=Asia/Shanghai date -d "@$NOW" +%y%m%d)|${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - name: Gradle Build
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease -Px.build.info="${{ steps.ts.outputs.info }}"
 
       # 把 APK 重命名：文件名带「构建时间(北京时间)+短提交号」。
       # 时间戳放前部便于肉眼按时间辨认，同一次构建的三包相邻；短号用于对应 commit。

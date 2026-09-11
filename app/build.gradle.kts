@@ -3,6 +3,16 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.FileInputStream
 import java.util.Properties
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import javax.inject.Inject
+import org.gradle.api.provider.Property
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.process.ExecOperations
 
 plugins {
     alias(libs.plugins.android.application)
@@ -12,6 +22,78 @@ plugins {
     alias(libs.plugins.google.services)
     alias(libs.plugins.firebase.crashlytics)
     alias(libs.plugins.baselineprofile)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [X-custom] 构建版本信息(merge 上游时保留;详见知识库 `X-CUSTOM.md` C 表)
+//
+// versionCode:自 2020-01-01T00:00:00Z 起的**秒数** —— 秒级唯一、随构建时间单调递增,
+//   与上游「每次发版 +1」的编号体系不冲突(差值百万级)。AGP / Play 允许的最大值为
+//   2,100,000,000,故本方案约至 **2086 年**触顶。
+//   不采用「年月日时分秒」直接拼接:那是 12~14 位数字,结构性超过 10 位上限;
+//   即便去掉秒,两位年(yy)写法仍以 26 开头(即 2.6e9),同样超限。
+//
+// versionName:上游语义版本 + "+" + 构建日期(yyMMdd) + "." + 提交短哈希,例:
+//   `2.5.1+260911.87b34618`
+//   "+" 之后属 semver 的**构建元数据**,不参与版本比较 —— 上游 `VersionTest`
+//   (`build metadata is ignored`) 已覆盖,故不影响更新检查等比较逻辑;
+//   上游版本号保留在 `+` 之前,便于与上游对照。
+//
+// 单一真源:APK 文件名 / versionCode / versionName 三处时间必须一致,故 CI 由
+// daily-build.yml 用**同一次 `date` 调用**生成一个值(-Px.build.info)传入;
+// 本地未传时由下方 ValueSource 现取(本机时间 + git HEAD)。
+//   ⚠️ 本地回退会让 Configuration Cache 每次构建失效 —— ValueSource 每次构建重新求值,
+//      值变了就作废缓存(详见 Gradle 文档 Configuration Cache Behavior)。
+//      若更看重本地配置缓存,把 obtain() 里的 System.currentTimeMillis()
+//      换成 git 提交时间(`git log -1 --format=%ct`)即可:同一提交版本号稳定。
+// ─────────────────────────────────────────────────────────────────────────────
+val xVersionCodeBaseEpochSecond = 1_577_836_800L // 2020-01-01T00:00:00Z
+val xVersionCodeMax = 2_100_000_000
+
+abstract class XBuildInfoValueSource : ValueSource<String, XBuildInfoValueSource.Parameters> {
+    interface Parameters : ValueSourceParameters {
+        val workingDir: Property<String>
+    }
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    override fun obtain(): String {
+        val epochSecond = System.currentTimeMillis() / 1000
+        val date = Instant.ofEpochSecond(epochSecond)
+            // 与 APK 文件名同一时区:避免临近跨日时两处日期不一致
+            .atZone(ZoneId.of("Asia/Shanghai"))
+            .format(DateTimeFormatter.ofPattern("yyMMdd"))
+        val sha = runCatching {
+            val output = ByteArrayOutputStream()
+            execOperations.exec {
+                workingDir = File(parameters.workingDir.get())
+                commandLine("git", "rev-parse", "--short=8", "HEAD")
+                standardOutput = output
+                isIgnoreExitValue = true
+            }
+            String(output.toByteArray(), Charsets.UTF_8).trim()
+        }.getOrDefault("").ifEmpty { "nogit" }
+        return "$epochSecond|$date|$sha"
+    }
+}
+
+val xBuildInfoFromCi: String? = providers.gradleProperty("x.build.info").orNull
+val xBuildInfo: String = xBuildInfoFromCi ?: providers.of(XBuildInfoValueSource::class) {
+    parameters { workingDir = rootDir.absolutePath }
+}.get()
+val xBuildInfoParts = xBuildInfo.trim().split("|")
+require(xBuildInfoParts.size == 3) {
+    "[X-custom] x.build.info 应为 <epoch>|<yyMMdd>|<sha>,实际为:$xBuildInfo"
+}
+val xBuildEpochSecond = xBuildInfoParts[0].toLongOrNull()
+    ?: error("[X-custom] x.build.info 的 epoch 不是整数:$xBuildInfo")
+val xBuildStamp = "+${xBuildInfoParts[1]}.${xBuildInfoParts[2]}"
+
+val xVersionCode = (xBuildEpochSecond - xVersionCodeBaseEpochSecond).toInt()
+require(xVersionCode in 1..xVersionCodeMax) {
+    "[X-custom] versionCode=$xVersionCode 超出允许范围 1..$xVersionCodeMax" +
+        "(时间基数方案约 2086 年触顶,届时需改用其他编码)"
 }
 
 android {
@@ -24,6 +106,12 @@ android {
         targetSdk = 37
         versionCode = 186
         versionName = "2.5.1"
+
+        // [X-custom] 覆盖上游版本号:随构建时间与提交变化(说明见文件头)。
+        // 上面两行上游赋值保持原样不动 —— 每次同步上游都不会在此处产生 merge 冲突,
+        // 靠「后赋值覆盖」生效;下方 buildTypes 的 buildConfigField 读到的也是覆盖后的值。
+        versionCode = xVersionCode
+        versionName = "${android.defaultConfig.versionName}$xBuildStamp"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -120,6 +208,21 @@ android {
         compilerOptions.optIn.add("kotlin.time.ExperimentalTime")
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
         compilerOptions.optIn.add("androidx.navigation3.runtime.ExperimentalNavigation3Api")
+    }
+}
+
+// [X-custom] 版本号核对任务(不产出 APK,秒级完成):./gradlew :app:xVersionInfo
+val xFinalVersionName: String = android.defaultConfig.versionName ?: "unknown"
+tasks.register("xVersionInfo") {
+    group = "help"
+    description = "打印本次构建的 versionCode / versionName(X 定制)"
+    val code = xVersionCode
+    val name = xFinalVersionName
+    val origin = if (xBuildInfoFromCi != null) "CI 传入" else "本地现取(本机时间 + git HEAD)"
+    doLast {
+        println("[X-custom] 版本来源   : $origin")
+        println("[X-custom] versionCode: $code")
+        println("[X-custom] versionName: $name")
     }
 }
 
