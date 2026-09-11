@@ -54,6 +54,11 @@ on:
       # xAssetDao 入口、version 25 → 26)。它此前不在清单里 —— 改它不会触发本工作流,
       # 而这些改动一旦被同步上游时覆盖,表现是 X 表整体消失、内容寻址静默退化。
       - 'app/src/main/java/me/rerere/rikkahub/data/db/AppDatabase.kt'
+      # 2026-09-11 补登:FTS 索引改增量维护(P4)。这两个文件承载 X 的行为 ——
+      # MessageFtsManager 的维护策略与检索查询被整体改写,FtsIndexPlanner 是新增的纯逻辑层。
+      # 它们既不在原清单、又不 import x 包,原判据(只认 import)抓不到,故手工登记。
+      - 'app/src/main/java/me/rerere/rikkahub/data/db/fts/MessageFtsManager.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/data/db/fts/FtsIndexPlanner.kt'
       # 2026-09-11 补登(此前已漏):RikkaHubApp.kt 头部就写着 [X-custom],
       # 且承载 X 的启动任务(存量回填的触发点)。漏登的后果是:把这里的调用同步上游时冲掉,
       # App 行为**看不出异常**(附件照常存、照常显示),只是账本永远不完整、『可清理量』长期偏小。
