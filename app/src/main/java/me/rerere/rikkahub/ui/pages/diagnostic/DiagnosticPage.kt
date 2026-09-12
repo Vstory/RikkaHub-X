@@ -1,5 +1,8 @@
 package me.rerere.rikkahub.ui.pages.diagnostic
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -29,6 +33,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
@@ -38,6 +45,7 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLogRing
+import me.rerere.rikkahub.x.diag.XLogcatProbe
 
 /**
  * X 定制诊断页。
@@ -69,6 +77,12 @@ fun DiagnosticPage() {
     // 本地版本号：开关与清空之后 +1，以下所有快照随之重算
     var revision by remember { mutableIntStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
+
+    // ⚠️ 临时（logcat 自读验证 spike）—— 验完与本文件末尾那张卡片、
+    // 以及 XLogcatProbe.kt 一起删除。
+    val probeScope = rememberCoroutineScope()
+    var probing by remember { mutableStateOf(false) }
+    var probeSummary by remember { mutableStateOf<String?>(null) }
 
     val enabled = remember(revision) { XDiagnostics.isEnabled() }
     val total = remember(revision) { XDiagnostics.totalCount() }
@@ -268,6 +282,44 @@ fun DiagnosticPage() {
                 }
             }
 
+            // ⚠️ 临时：logcat 自读验证（spike）。见 XLogcatProbe 的类注释。
+            // 它回答的是「诊断框架能否靠 logcat 白捡上游与框架日志」，
+            // 从而决定后面是「插桩为主」还是「捕获为主」。验完整块删除。
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text("⚠️ 临时探针（验完删除）") },
+                ) {
+                    item(
+                        headlineContent = {
+                            Text(if (probing) "正在读取 logcat…" else "验证 logcat 自读")
+                        },
+                        supportingContent = {
+                            Text(
+                                probeSummary
+                                    ?: "读取本进程的 logcat（一次性 dump + 崩溃缓冲 + 限时流读），结果复制到剪贴板"
+                            )
+                        },
+                        onClick = {
+                            if (!probing) {
+                                probing = true
+                                probeScope.launch {
+                                    val declared = declaresReadLogs(context)
+                                    val report = withContext(Dispatchers.IO) {
+                                        XLogcatProbe.run(declared).report()
+                                    }
+                                    probeSummary = report.lineSequence().firstOrNull {
+                                        it.startsWith("✅") || it.startsWith("❌") || it.startsWith("⚠️")
+                                    }
+                                    copy(report)
+                                    probing = false
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+
             // ── 提示：命令行等价物（不装本页也能看） ──
             item {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -311,3 +363,17 @@ fun DiagnosticPage() {
         )
     }
 }
+
+/**
+ * ⚠️ 临时（随探针一起删除）：Manifest 里是否声明了 `READ_LOGS`。
+ *
+ * 报告里要如实体现代码的声明状态：本次验证的正是「不声明也能读自己 UID 的日志」，
+ * 若哪天有人误加了该权限声明，结论会变得不可解释 —— 所以这一项必须打出来。
+ */
+@Suppress("DEPRECATION")
+private fun declaresReadLogs(context: Context): Boolean = runCatching {
+    context.packageManager
+        .getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+        .requestedPermissions
+        ?.contains(Manifest.permission.READ_LOGS) == true
+}.getOrDefault(false)
