@@ -202,10 +202,22 @@ object XLogcatCapture {
         // 这里不 kill 进程 —— 读取端会通过 destroyForcibly 唤醒，见 runSession。
     }
 
-    /** 清空全部会话目录(用户点「清空」时一并调用)。 */
-    fun clearSessions(context: Context) {
-        stop()
-        XDiagSession.clearAll(context)
+    /**
+     * 结束当前捕获,并**同步**摘掉会话引用。
+     *
+     * 与 [stop] 的区别只在「什么时候摘引用」:[stop] 把收尾交给读取线程,而本函数立刻
+     * 摘掉 —— 供「清空后要马上重开一轮」用(见 [XDiagClear])。不这样做的话,`start()`
+     * 的幂等守卫会返回那个**正要死掉的旧会话**,新一轮永远起不来。
+     *
+     * 摘引用是安全的:读取线程收尾时那一步本就带 `if (session === s)` 守卫,不会被它清错。
+     * 旧线程此后往**已被删除**的文件里补写结束标记,落在无人可读的 inode 上 —— 无害。
+     *
+     * ⚠️ 别把 [stop] 也改成同步摘:那里「等读取线程收尾」是有意的(要写完结束标记)。
+     */
+    fun stopNow() {
+        val s = synchronized(lock) { session } ?: return
+        s.stopRequested.set(true)
+        synchronized(lock) { if (session === s) session = null }
     }
 
     /** 捕获失败的事件名(三段点分隔,由 check_x_event_names.py 机检)。 */

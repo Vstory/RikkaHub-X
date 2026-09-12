@@ -50,6 +50,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.x.diag.XDiagClear
 import me.rerere.rikkahub.x.diag.XDiagEnv
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
@@ -260,14 +261,29 @@ fun DiagnosticPage() {
                         },
                         supportingContent = {
                             Column {
+                                // 体积与行数**同源**:两者都取当前会话。此前体积会退化到
+                                // 读磁盘文件、而行数硬编码 0,于是出现「75.6 KB · 0 行」这种
+                                // 自相矛盾 —— 未在记录时改为显示上一次留下的文件体积,并说清它
+                                // 是「上次记录」(见下面的分支)。
                                 val size = capture?.bytes ?: (captureFile?.length() ?: 0L)
-                                val lines = capture?.lines ?: 0L
+                                val lines = capture?.lines
                                 Text(
-                                    stringResource(
-                                        R.string.diagnostic_capture_size,
-                                        XLogcatCapture.sizeText(size),
-                                        lines,
-                                    )
+                                    when {
+                                        // 在记录:两者都来自当前会话,必然自洽。
+                                        lines != null -> stringResource(
+                                            R.string.diagnostic_capture_size,
+                                            XLogcatCapture.sizeText(size),
+                                            lines,
+                                        )
+                                        // 未在记录但上次留下了文件:只说体积,并点明是「上次记录」。
+                                        // 此前这里会显示硬编码的 0 行,与体积自相矛盾。
+                                        size > 0L -> stringResource(
+                                            R.string.diagnostic_capture_size_last,
+                                            XLogcatCapture.sizeText(size),
+                                        )
+                                        // 未在记录且没有文件 —— 明说,而不是显示「0 B · 0 行」。
+                                        else -> stringResource(R.string.diagnostic_capture_size_none)
+                                    }
                                 )
                                 if (capture?.isCapped == true) {
                                     Text(
@@ -419,9 +435,16 @@ fun DiagnosticPage() {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        XDiagnostics.clearAll()
                         confirmClear = false
+                        // 先刷一次:内存环已清,概况该立刻归零,不必等磁盘那步。
                         revision += 1
+                        // 清空要删文件、并可能重起一轮记录 —— 都是阻塞操作,放 IO 线程。
+                        // 只调 XDiagnostics.clearAll() 会漏掉磁盘上的文件(用户实测撞到过)。
+                        scope.launch {
+                            withContext(Dispatchers.IO) { XDiagClear.perform(context) }
+                            // 再刷一次:此时磁盘已清、新一轮(若有)已开,状态卡才是最终态。
+                            revision += 1
+                        }
                         toaster.show(message = context.getString(R.string.diagnostic_cleared))
                     }
                 ) {

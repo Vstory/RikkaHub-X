@@ -1391,11 +1391,11 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_domain_entries">%1$d</string>
   <string name="diagnostic_export_title">导出</string>
   <string name="diagnostic_export_redacted">导出诊断记录(已脱敏)</string>
-  <string name="diagnostic_export_redacted_desc">保存为文件。路径已缩短、哈希已掩码,可直接分享。</string>
+  <string name="diagnostic_export_redacted_desc">保存为文件。路径已缩短、哈希已掩码,但可能仍含凭据,分享前请先过目。</string>
   <string name="diagnostic_export_full">导出诊断记录(完整)</string>
-  <string name="diagnostic_export_full_desc">含完整路径与哈希,分享前请先过目。</string>
+  <string name="diagnostic_export_full_desc">含完整路径与哈希,也可能含凭据,分享前请先过目。</string>
   <string name="diagnostic_export_logcat">导出应用日志</string>
-  <string name="diagnostic_export_logcat_desc">本应用的完整日志,上游与框架的日志也在内。导出时逐行脱敏。</string>
+  <string name="diagnostic_export_logcat_desc">本应用的完整日志,上游与框架的日志也在内。原样导出、不做脱敏,可能含密钥,分享前请先过目。</string>
   <string name="diagnostic_export_logcat_none">还没有日志文件 —— 打开上面的开关,从那一刻起才会开始记录。</string>
   <string name="diagnostic_export_done">已保存</string>
   <string name="diagnostic_export_failed">保存失败</string>
@@ -1403,6 +1403,8 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_capture_running">正在记录整个应用</string>
   <string name="diagnostic_capture_stopped">未在记录</string>
   <string name="diagnostic_capture_size">%1$s · %2$d 行</string>
+  <string name="diagnostic_capture_size_last">上次记录 %1$s</string>
+  <string name="diagnostic_capture_size_none">还没有日志</string>
   <string name="diagnostic_capture_capped">已达体积上限,后续日志未记录</string>
   <string name="diagnostic_clear">清空</string>
   <string name="diagnostic_clear_desc">删除此前记录的全部内容。</string>

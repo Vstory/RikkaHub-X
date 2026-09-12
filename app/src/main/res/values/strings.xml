@@ -886,11 +886,11 @@
   <string name="diagnostic_domain_entries">%1$d</string>
   <string name="diagnostic_export_title">Export</string>
   <string name="diagnostic_export_redacted">Export record (redacted)</string>
-  <string name="diagnostic_export_redacted_desc">Saves to a file. Paths shortened and hashes masked — safe to share.</string>
+  <string name="diagnostic_export_redacted_desc">Saves to a file. Paths shortened and hashes masked, but it may still hold credentials — check it before sharing.</string>
   <string name="diagnostic_export_full">Export record (full)</string>
-  <string name="diagnostic_export_full_desc">Keeps full paths and hashes. Check it before sharing.</string>
+  <string name="diagnostic_export_full_desc">Keeps full paths and hashes. It may also hold credentials — check it before sharing.</string>
   <string name="diagnostic_export_logcat">Export app log</string>
-  <string name="diagnostic_export_logcat_desc">Full log of this app, upstream and framework logs included. Credentials are masked on export.</string>
+  <string name="diagnostic_export_logcat_desc">Full log of this app, upstream and framework logs included. Exported as-is with no masking, so it may contain credentials such as API keys — review it before sharing.</string>
   <string name="diagnostic_export_logcat_none">No log file yet — turn the switch on above to start recording.</string>
   <string name="diagnostic_export_done">Saved</string>
   <string name="diagnostic_export_failed">Save failed</string>
@@ -898,6 +898,8 @@
   <string name="diagnostic_capture_running">Recording the whole app</string>
   <string name="diagnostic_capture_stopped">Not recording</string>
   <string name="diagnostic_capture_size">%1$s · %2$d lines</string>
+  <string name="diagnostic_capture_size_last">Last run %1$s</string>
+  <string name="diagnostic_capture_size_none">No log yet</string>
   <string name="diagnostic_capture_capped">Size limit reached — later lines were not recorded</string>
   <string name="diagnostic_clear">Clear</string>
   <string name="diagnostic_clear_desc">Deletes everything recorded so far.</string>
