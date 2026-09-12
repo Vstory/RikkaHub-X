@@ -106,6 +106,20 @@ jobs:
           fi
           echo "✅ release 基于 main 最新提交 ${HEAD_SHA:0:8}"
 
+      # X 定制:产物命名自检 —— 刻意放在编译之前,失败只花几秒(本地实测 0.4 秒)。
+      #
+      # 为什么必须在这一步兜底:命名规则散在**本文件的五处**(重命名 / 正文「最新构建」/
+      # 正文「历史构建」解析 / 清理 jq 匹配 / 清理 key_of),任一处漏改都是**静默错** ——
+      # 链接 404、历史列表整段消失、旧资产永不被清理、或资产被误删。而本文件不在任何
+      # CI 的 paths 过滤内(Compile Check 只管 app/src/**,Guard 只管它自己列的文件),
+      # 只改它不会触发任何工作流,只能等下次构建才暴露 —— 2026-09-12 的下载链接整段 404
+      # 就是这么漏过去的。
+      #
+      # 脚本会用 strings.xml 里的**真实应用名**构造样例资产名,再喂给本工作流里的
+      # sed / jq 表达式真跑一遍,所以「改应用名导致前缀变化」也会在这里被拦住。
+      - name: Verify APK naming rules are self-consistent
+        run: python3 scripts/check_x_apk_naming.py
+
       - name: Set up JDK
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
@@ -282,6 +296,41 @@ jobs:
             mv -- "$f" "${PREFIX}_${{ steps.ts.outputs.ts }}_${abi}_${CHANNEL}_${{ steps.sha.outputs.short }}.apk"
           done
           ls -l
+
+      # X 定制:拿**实际产出的文件名**再断言一次 —— 用现实校验,不只信规则自洽。
+      #
+      # 2026-09-12 的下载链接 404 根因就在文件名上:本地名含空格,而平台在上传时会把空格
+      # 改写成点,于是按本地名拼出的链接永远对不上真实资产名。思路同下面的
+      # 「Verify signing certificate」:宁可不发,也不发一个用户点不开的包。
+      #
+      # 断言两件事:
+      #   ① 数量不为 0 —— 空集会让循环整体跳过,变成「永远通过的检查」;
+      #   ② 每个名字都符合文档规则 `前缀_时间_架构_渠道_短号.apk`,前缀只含 URL 安全字符
+      #      (正则里的字符集与重命名那一步的白名单守卫保持一致)。
+      - name: Assert APK file names match the documented rule
+        run: |
+          cd app/build/outputs/apk/release
+          shopt -s nullglob
+          apks=(*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "❌ 目录里没有任何 APK —— 拒绝发布(空集不能算通过)"
+            exit 1
+          fi
+          bad=0
+          for f in "${apks[@]}"; do
+            if printf '%s' "$f" | grep -qE '^[A-Za-z0-9._-]+_[0-9]{8}-[0-9]{4}_(arm64-v8a|universal|x86_64)_(nightly|release)_[0-9a-f]{8}\.apk$'; then
+              echo "  ✅ ${f}"
+            else
+              echo "  ❌ 与命名规则不符(或含空格 / 百分号等 URL 不友好字符):${f}"
+              bad=1
+            fi
+          done
+          if [ "${bad}" != "0" ]; then
+            echo "❌ 拒绝发布:产物名不是 URL 安全的、或与文档规则不符。"
+            echo "   规则见「Rename APKs with build time & commit hash」那一步的注释。"
+            exit 1
+          fi
+          echo "✅ 产物名全部符合规则且 URL 安全(${#apks[@]} 个)"
 
       # 决定本次产物发到哪个 Release。两者**必须是不同的 Release**：共用同一个 tag 时，
       # 后一次构建的说明会整段覆盖前一次 —— 实测正式包的说明把 nightly 页面的免责声明刷掉了。
