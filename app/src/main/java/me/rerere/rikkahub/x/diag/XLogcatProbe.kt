@@ -3,8 +3,10 @@ package me.rerere.rikkahub.x.diag
 
 import android.os.Build
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * ⚠️⚠️ **临时验证代码（2026-09-12），不是正式实现，验完即删。**
@@ -51,6 +53,13 @@ object XLogcatProbe {
     private const val SAMPLE_LINES = 8
 
     private const val DUMP_TIMEOUT_SECONDS = 30L
+
+    /**
+     * [Dump.exitCode] 的哨兵：本次读取是**被看门狗按超时停下**的。
+     *
+     * 流读探针就靠它收尾 —— 那是它的正常结束方式，不是故障；报告里会据此加注说明。
+     */
+    private const val EXIT_STOPPED = -2
 
     /** 限时流读的时长（秒）。 */
     const val STREAM_SECONDS = 5
@@ -116,7 +125,14 @@ object XLogcatProbe {
         )
     }
 
-    /** 一次性 dump：读完即退出。 */
+    /**
+     * 一次性 dump：读完即退出。
+     *
+     * ⚠️ 超时由**看门狗线程**把守，而不是「读完再 `waitFor`」—— 后者管不住真正的风险：
+     * 万一 logcat 卡住不退出，读取端会一直阻塞在 `readLine()` 上，**根本走不到 `waitFor`**，
+     * 那个 `timeoutSeconds` 于是形同虚设。看门狗从外面关流才能把读取端唤醒；
+     * 而被唤醒时抛的是 IO 异常而非 EOF，原理与处理见 [drain] 的注释。
+     */
     private fun exec(args: List<String>, timeoutSeconds: Long): Dump {
         val started = System.currentTimeMillis()
         val command = "logcat " + args.joinToString(" ")
@@ -128,31 +144,18 @@ object XLogcatProbe {
             return failure(command, started, e)
         }
         return try {
-            val lines = ArrayList<String>(512)
-            var bytes = 0L
-            var truncated = false
-            BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8)).use { reader ->
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (lines.size >= MAX_LINES) {
-                        truncated = true
-                        break
-                    }
-                    bytes += line.length + 1
-                    lines.add(line)
-                }
-            }
-            val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-            if (!finished) proc.destroyForcibly()
+            val stopped = watchdog(proc, timeoutSeconds * 1000L)
+            val read = drain(proc, stopped)
+            val finished = proc.waitFor(1, TimeUnit.SECONDS)
             Dump(
                 command = command,
-                exitCode = if (finished) proc.exitValue() else -2,
+                exitCode = if (stopped.get() || !finished) EXIT_STOPPED else proc.exitValue(),
                 elapsedMs = System.currentTimeMillis() - started,
-                lines = lines.size,
-                bytes = bytes,
-                truncated = truncated,
-                markers = MARKERS.map { (marker, _) -> marker to lines.count { it.contains(marker) } },
-                sample = lines.takeLast(SAMPLE_LINES),
+                lines = read.lines.size,
+                bytes = read.bytes,
+                truncated = read.truncated,
+                markers = MARKERS.map { (marker, _) -> marker to read.lines.count { it.contains(marker) } },
+                sample = read.lines.takeLast(SAMPLE_LINES),
                 error = null,
             )
         } catch (e: Throwable) {
@@ -162,10 +165,13 @@ object XLogcatProbe {
     }
 
     /**
-     * 限时流读：读若干秒后强制结束。
+     * 限时流读：读若干秒后强制结束，用来量出体积速率。
      *
      * 用**看门狗线程**而不是「读循环里查截止时间」：`readLine()` 一旦阻塞在半个行上，
-     * 循环内的判断就没机会执行。看门狗到点直接杀进程 → 读取端拿到 EOF 自然退出。
+     * 循环内的判断就没机会执行 —— 只有从外面把流关掉才唤醒得了它。
+     *
+     * ⚠️ 而它被唤醒时抛的是 **IO 异常，不是 EOF**。第一版把「杀进程 → 读取端自然拿到 EOF」
+     * 当成必然，正是这个错误假设让它在真机上一上就丢掉了整段数据（细节见 [drain] 的注释）。
      */
     private fun stream(seconds: Int): Dump {
         val started = System.currentTimeMillis()
@@ -176,43 +182,95 @@ object XLogcatProbe {
             return failure(command, started, e)
         }
         return try {
-            Thread {
-                runCatching {
-                    Thread.sleep(seconds * 1000L + 300)
-                    proc.destroyForcibly()
-                }
-            }.apply { isDaemon = true; name = "x-logcat-probe-watchdog" }.start()
-
-            val lines = ArrayList<String>(512)
-            var bytes = 0L
-            var truncated = false
-            BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8)).use { reader ->
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (lines.size >= MAX_LINES) {
-                        truncated = true
-                        break
-                    }
-                    bytes += line.length + 1
-                    lines.add(line)
-                }
-            }
-            val elapsed = System.currentTimeMillis() - started
+            // 多给 300ms：logcat 按块 flush，留点余量让这段时间的行落进管道。
+            val stopped = watchdog(proc, seconds * 1000L + 300)
+            val read = drain(proc, stopped)
+            val finished = proc.waitFor(1, TimeUnit.SECONDS)
             Dump(
                 command = command,
-                exitCode = 0,
-                elapsedMs = elapsed,
-                lines = lines.size,
-                bytes = bytes,
-                truncated = truncated,
-                markers = MARKERS.map { (marker, _) -> marker to lines.count { it.contains(marker) } },
-                sample = lines.takeLast(SAMPLE_LINES),
+                exitCode = if (stopped.get() || !finished) EXIT_STOPPED else proc.exitValue(),
+                elapsedMs = System.currentTimeMillis() - started,
+                lines = read.lines.size,
+                bytes = read.bytes,
+                truncated = read.truncated,
+                markers = MARKERS.map { (marker, _) -> marker to read.lines.count { it.contains(marker) } },
+                sample = read.lines.takeLast(SAMPLE_LINES),
                 error = null,
             )
         } catch (e: Throwable) {
             runCatching { proc.destroyForcibly() }
             failure(command, started, e)
         }
+    }
+
+    /** [drain] 的产物。用小类而不是 Triple：字段有名字，读起来不费劲。 */
+    private class Collected(val lines: List<String>, val bytes: Long, val truncated: Boolean)
+
+    /**
+     * 看门狗：等 [proc] 自己结束，等不到就替它结束；返回「是否由我们叫停」的标志。
+     *
+     * 用 `waitFor(timeout)` 而不是 `sleep(timeout)`：进程**正常结束**时（`logcat -d` 就是）
+     * 它会立刻返回，于是不会留下一个空等几十秒的线程。
+     *
+     * ⚠️ 顺序要紧：**先置标志，再 `destroyForcibly()`**。读取端要靠这个标志区分
+     * 「我们自己关的流」与真故障（见 [drain]）；顺序反了它会误判成故障、把数据丢掉。
+     */
+    private fun watchdog(proc: Process, timeoutMs: Long): AtomicBoolean {
+        val stopped = AtomicBoolean(false)
+        Thread {
+            runCatching {
+                if (!proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                    stopped.set(true)
+                    proc.destroyForcibly()
+                }
+            }
+        }.apply { isDaemon = true; name = "x-logcat-probe-watchdog" }.start()
+        return stopped
+    }
+
+    /**
+     * 读尽 [proc] 的 stdout（stderr 已由 `redirectErrorStream` 并进来）。
+     *
+     * ⚠️⚠️ **这个函数存在的唯一理由，是一个在真机上踩到的坑。**
+     *
+     * Android 的 `Process.destroyForcibly()` 在结束进程的同时**会关掉它的 stdout 流**；
+     * 而阻塞在 `read()` 上的线程拿到的**不是干净的 EOF，是一个异常**：
+     *
+     * ```
+     * InterruptedIOException: read interrupted by close() on another thread
+     * ```
+     *
+     * 第一版据此写下「看门狗到点直接杀进程 → 读取端拿到 EOF 自然退出」，把这件事当成必然。
+     * 真机一跑就露了：异常穿透到外层 `catch (Throwable)` → 返回 `failure()`（行数归零）
+     * → **5 秒里读到的行全部丢失**，报告上只剩一行错误（2026-09-12，构建 `4db822b7`）。
+     *
+     * 故这里把「已叫停之后发生的 IO 异常」显式认成**预期的停止信号**：不外抛，循环正常收尾，
+     * 已读到的数据留住 —— 这正是这个探针能量出速率的前提。反过来，**没被叫停时的 IO 异常
+     * 照旧外抛**：那才是真故障，不能吞掉。
+     */
+    private fun drain(proc: Process, stopped: AtomicBoolean): Collected {
+        val lines = ArrayList<String>(512)
+        var bytes = 0L
+        var truncated = false
+        BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8)).use { reader ->
+            while (true) {
+                val line = try {
+                    reader.readLine()
+                } catch (e: IOException) {
+                    // 已叫停 → 是我们自己关的流，当作读完；否则是真故障，外抛。
+                    if (!stopped.get()) throw e
+                    null
+                }
+                if (line == null) break
+                if (lines.size >= MAX_LINES) {
+                    truncated = true
+                    break
+                }
+                bytes += line.length + 1
+                lines.add(line)
+            }
+        }
+        return Collected(lines, bytes, truncated)
     }
 
     private fun failure(command: String, started: Long, e: Throwable) = Dump(
@@ -252,7 +310,8 @@ object XLogcatProbe {
             appendLine("错误: " + d.error)
             return@buildString
         }
-        appendLine("退出码: " + d.exitCode + "    耗时: " + d.elapsedMs + " ms")
+        val exitNote = if (d.exitCode == EXIT_STOPPED) "（看门狗按超时停止，属正常收尾）" else ""
+        appendLine("退出码: " + d.exitCode + exitNote + "    耗时: " + d.elapsedMs + " ms")
         appendLine("行数: " + d.lines + "    字节: " + d.bytes + (if (d.truncated) "（已截断）" else ""))
         val hit = d.markers.filter { it.second > 0 }
         if (hit.isEmpty()) {
