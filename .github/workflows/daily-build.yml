@@ -6,6 +6,9 @@ name: Daily Build
 # 渠道名用与 Release 页面**同一套词汇**(Nightly Build / Release Build),而不是裸的
 # `nightly` / `release` —— 后者只差一个词,列表里扫一眼容易看串;且 `release` 在别处既指
 # 构建类型、又指 AGP 变体名,单独出现有歧义。改成页面名后,运行标题与它产出的页面可互相检索。
+# ⚠️ `A && B || C` 是 GitHub 官方的三目写法(文档「Evaluate expressions」明确给出),但有个前提:
+#    **B 必须为真值** —— 否则会静默落到 C。这里 B 是非空字符串 'Release Build',恒为真,故安全。
+#    将来若把 B 改成可能为空/为 false 的值(如 '')，这个写法会失效,须改用别的结构。
 run-name: "Daily Build · ${{ inputs.build_type == 'release' && 'Release Build' || 'Nightly Build' }} · ${{ github.ref_name }}"
 
 on:
