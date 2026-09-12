@@ -16,6 +16,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_apk_naming.py` | 产物名规则在 `daily-build.yml` 五处是否自洽 | 链接 404 / 历史列表消失 / 旧资产不清理 / 资产被误删 |
 # | `check_x_model_resolution.py` | UI 侧是否用了全局模型口径 | 只配了会话级模型时误报「请先选择聊天模型」 |
 # | `pangu_format_resources.py` | 中文文案的盘古之白是否已格式化 | 排版回退,得人工重跑脚本 |
+# | `check_x_string_resources.py` | 字符串资源里未转义的撇号与重名 | aapt2 拒收 → 资源编译失败,整条 CI 中断 |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -51,6 +52,7 @@ on:
       - 'scripts/check_x_apk_naming.py'
       - 'scripts/check_x_model_resolution.py'
       - 'scripts/pangu_format_resources.py'
+      - 'scripts/check_x_string_resources.py'
       # 检查器的输入。用**通配**而不是逐个列模块:盘古检查器会扫**所有 Gradle 模块**的
       # values-zh(实测:app / oauth / search 共 3 个 —— `collect_files` 遍历
       # `*/src/main/res`),逐个手写模块名极易漏,而漏掉的后果正是「改了那个模块的文案、
@@ -99,3 +101,10 @@ jobs:
       # 用 --check 只看不改 —— CI 不该改文件,发现未格式化即失败。
       - name: 中文文案盘古格式化
         run: python3 scripts/pangu_format_resources.py --check
+
+      # 字符串资源里 aapt2 会拒收的写法。2026-09-12 漏过一次:文案里 `app's` 的撇号没转义,
+      # XML 层面合法(本地用解析器扫过,没报),但 aapt2 报 `does not contain a valid string
+      # resource`,资源编译失败 → Guard 与 nightly 双双中断。能秒级判定的规则不该等 CI 才报,
+      # 故把那条规则前移到这里;同时查同一文件里的重名(aapt2 也会因此失败)。
+      - name: 字符串资源写法
+        run: python3 scripts/check_x_string_resources.py
