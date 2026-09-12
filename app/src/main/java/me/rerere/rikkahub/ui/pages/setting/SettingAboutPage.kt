@@ -49,6 +49,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.openUrl
+import me.rerere.rikkahub.x.app.xAppLabel
 import me.rerere.rikkahub.utils.plus
 
 @Composable
@@ -56,6 +57,9 @@ fun SettingAboutPage() {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val context = LocalContext.current
     val navController = LocalNavController.current
+    // [X-custom] 应用名走系统实际标签(按渠道取值),不用 app_name 资源 ——
+    // 后者是基础名,夜间包里会与桌面图标的名字对不上。
+    val appLabel = remember(context) { context.xAppLabel() }
     val emojiOptions = remember {
         listOf(
             "🎉", "✨", "🌟", "💫", "🎊", "🥳", "🎈", "🎆", "🎇", "🧨",
@@ -122,9 +126,9 @@ fun SettingAboutPage() {
                         )
 
                         Text(
-                            // [X-custom] 原为硬编码 "RikkaHub"，改为随 app_name 资源(RikkaHub X)，
-                            // 各语言自动跟随，不再与桌面图标名称不一致
-                            text = stringResource(R.string.app_name),
+                            // [X-custom] 原为硬编码 "RikkaHub"；再改为**运行时**读应用标签 ——
+                            // 那与桌面图标逐字一致,夜间包能显示 "RikkaHub X Nightly"。
+                            text = appLabel,
                             style = MaterialTheme.typography.displaySmall,
                         )
                     }

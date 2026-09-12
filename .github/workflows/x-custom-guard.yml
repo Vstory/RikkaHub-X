@@ -56,6 +56,11 @@ on:
       # 2026-09-12 补登:应用名按渠道取值(标签占位符)。上游若重写该文件并丢掉占位符,
       # 表现是 nightly 包**静默**少了后缀 —— 而别处都正常,故纳入守卫。
       - 'app/src/main/AndroidManifest.xml'
+      # 2026-09-12 补登:关于页与前台通知标题此前读 app_name 资源(基础名),
+      # 改为运行时读应用标签 —— 这两处都承载 X 的显示名定制。
+      # SettingAboutPage.kt 此前就有 [X-custom] 标记却一直没登记,属既有缺口。
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingAboutPage.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt'
   workflow_dispatch:
 
 permissions:

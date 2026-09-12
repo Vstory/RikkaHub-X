@@ -16,6 +16,7 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.x.app.xAppLabel
 import org.koin.android.ext.android.inject
 import kotlin.uuid.Uuid
 
@@ -150,7 +151,8 @@ class ChatGenerationForegroundService : Service() {
     private fun buildNotification(conversationId: String) =
         NotificationCompat.Builder(this, CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_rikkahub)
-            .setContentTitle(getString(R.string.app_name))
+            // [X-custom] 同关于页:用系统实际标签,夜间包显示 "RikkaHub X Nightly"
+            .setContentTitle(xAppLabel())
             .setContentText(getString(R.string.notification_live_update_title))
             .setContentIntent(getConversationPendingIntent(conversationId))
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
