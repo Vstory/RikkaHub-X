@@ -90,6 +90,16 @@ val xBuildEpochSecond = xBuildInfoParts[0].toLongOrNull()
     ?: error("[X-custom] x.build.info 的 epoch 不是整数:$xBuildInfo")
 val xBuildStamp = "+${xBuildInfoParts[1]}.${xBuildInfoParts[2]}"
 
+// [X-custom] 渠道:CI 按构建渠道传入 `-Px.channel=nightly|release`(见 daily-build.yml)。
+// 两个渠道的 applicationId / versionCode / versionName 完全相同,同一台机器上只能装一个 ——
+// 于是应用名成了用户唯一能一眼分辨「手上是哪个包」的地方,nightly 追加后缀。
+// 未传(本地构建)按正式包处理;值不认识时**直接报错**,避免渠道名写错后静默少了后缀。
+val xChannel = providers.gradleProperty("x.channel").orNull?.trim()?.lowercase().orEmpty()
+require(xChannel in listOf("", "nightly", "release")) {
+    "[X-custom] x.channel 应为 nightly 或 release,实际为:$xChannel"
+}
+val xAppLabelRes = if (xChannel == "nightly") "@string/app_name_nightly" else "@string/app_name"
+
 val xVersionCode = (xBuildEpochSecond - xVersionCodeBaseEpochSecond).toInt()
 require(xVersionCode in 1..xVersionCodeMax) {
     "[X-custom] versionCode=$xVersionCode 超出允许范围 1..$xVersionCodeMax" +
@@ -112,6 +122,10 @@ android {
         // 靠「后赋值覆盖」生效;下方 buildTypes 的 buildConfigField 读到的也是覆盖后的值。
         versionCode = xVersionCode
         versionName = "${android.defaultConfig.versionName}$xBuildStamp"
+
+        // [X-custom] 应用名按渠道取值 —— nightly 构建显示 `RikkaHub X Nightly`。
+        // 走占位符指向资源(而非直接写字面量):各语言仍按资源回退,后续可本地化。
+        manifestPlaceholders["appLabel"] = xAppLabelRes
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

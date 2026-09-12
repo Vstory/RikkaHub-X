@@ -8,6 +8,9 @@
   <string name="about_page_website">Website</string>
   <string name="add">Add</string>
   <string name="app_name">RikkaHub X</string>
+  <!-- [X-custom] nightly 渠道的应用名,由 AndroidManifest 的标签占位符按渠道引用
+       (见 build.gradle.kts 的 x.channel)。其它语言不单独提供,回退到本文件。 -->
+  <string name="app_name_nightly">RikkaHub X Nightly</string>
   <string name="asr_button_content_description">Speech Recognition</string>
   <string name="asr_button_stop">Stop</string>
   <string name="assistant_detail_basic_desc">Configure name, avatar, model, and parameters</string>

@@ -53,6 +53,9 @@ on:
       # 2026-09-12 补登:语音模式的模型闸门改用会话感知口径(原先读全局口径,只配了会话级
       # 模型时会误报「请先选择聊天模型」)。该文件此前不含 X 定制,自此次改动起承载 X 行为。
       - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/VoiceMode.kt'
+      # 2026-09-12 补登:应用名按渠道取值(标签占位符)。上游若重写该文件并丢掉占位符,
+      # 表现是 nightly 包**静默**少了后缀 —— 而别处都正常,故纳入守卫。
+      - 'app/src/main/AndroidManifest.xml'
   workflow_dispatch:
 
 permissions:
