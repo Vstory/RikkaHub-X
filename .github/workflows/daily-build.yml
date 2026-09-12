@@ -83,6 +83,29 @@ jobs:
           fetch-depth: 0
           submodules: recursive # 拉取子模块
 
+      # release 必须基于 main 的最新代码 —— 两条断言都放在编译之前（失败只花几秒）：
+      #   ① 触发 ref 必须是 main：workflow_dispatch 允许挑任意分支/标签，从特性分支误触发
+      #      会把非 main 代码打成正式包直接发到 release 页面；
+      #   ② 检出的提交必须就是 main 当前的 HEAD：检出用的是**派发时**解析的 SHA，若 main 在
+      #      「派发 → 检出」之间前进，构建出的就是稍旧的提交。该窗口通常只有几秒，故几乎不会
+      #      触发；一旦触发即说明用的确实不是最新代码，宁可报错也不静默构建旧代码。
+      # nightly 不受这两条约束 —— 从特性分支出测试包是既定用法（见发布流程「特性分支」）。
+      - name: Guard release to main's latest commit
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          echo "触发 ref: ${GITHUB_REF}"
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::release 只能从 main 触发,当前是 ${GITHUB_REF}"
+            exit 1
+          fi
+          HEAD_SHA="$(git rev-parse HEAD)"
+          MAIN_SHA="$(git rev-parse origin/main)"
+          if [ "${HEAD_SHA}" != "${MAIN_SHA}" ]; then
+            echo "::error::main 已前进(检出 ${HEAD_SHA:0:8},main 现在 ${MAIN_SHA:0:8}),请重新触发"
+            exit 1
+          fi
+          echo "✅ release 基于 main 最新提交 ${HEAD_SHA:0:8}"
+
       - name: Set up JDK
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
