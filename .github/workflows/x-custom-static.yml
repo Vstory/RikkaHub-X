@@ -1,0 +1,101 @@
+name: X Static Checks
+
+# run 标题:push 触发的 run 默认拿 commit message 首行当标题,同一提交多次触发时标题完全
+# 重复。显式声明后可按触发方式与分支区分(与 x-custom-audit / x-custom-guard 一致)。
+run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}"
+
+# 仓库级静态自检(2026-09-12)。
+#
+# ## 解决什么
+#
+# `scripts/` 下有几个**秒级**检查器,判据都是「仓库内的几份文本是否彼此自洽」——
+# 不需要 JDK、不需要编译、不需要联网。它们此前**不被任何 workflow 调用**:
+#
+# | 检查器 | 守什么 | 漏了会怎样 |
+# |---|---|---|
+# | `check_x_apk_naming.py` | 产物名规则在 `daily-build.yml` 五处是否自洽 | 链接 404 / 历史列表消失 / 旧资产不清理 / 资产被误删 |
+# | `check_x_model_resolution.py` | UI 侧是否用了全局模型口径 | 只配了会话级模型时误报「请先选择聊天模型」 |
+# | `pangu_format_resources.py` | 中文文案的盘古之白是否已格式化 | 排版回退,得人工重跑脚本 |
+#
+# 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
+# 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
+# 改的正是那个文件里的命名规则,而看板上看不到任何动静。
+#
+# ## 为什么**单独一个 workflow**,而不是塞进 x-custom-guard
+#
+# guard 要装 JDK + Node + pnpm 并跑 Gradle 单测(数分钟),为的是验 Kotlin 行为。而本文件的
+# 检查只依赖 python3 + sed + bash,**三者合起来不到 1 秒**(本地实测:0.30–0.41 / 0.23–0.35 /
+# 0.10–0.14 秒)。塞进 guard 有两重代价:
+#
+#   ① 改 `daily-build.yml` 会连带触发数分钟的 Kotlin 测试 —— 与改的内容毫不相干;
+#   ② guard 带 `paths` 白名单,得把 `daily-build.yml` 登进去才会跑,等于让「改 YAML 里一行
+#      注释」触发整套重型回归网。
+#
+# 单独一个 workflow 才能做到**几十秒内给结论**,把反馈从「下次构建」提前到「推送之后」。
+# 这与 `x-custom-audit.yml` 的选择同源 —— 那里也写着:能秒级判定的检查不要塞进 guard。
+#
+# ## 能力边界
+#
+# 这些是**静态**检查,验的是「文本之间是否自洽」,验不了运行时行为。产物正确性的最后一道
+# 防线仍在构建期(`daily-build.yml` 里那两步:编译前跑本目录的自检、重命名后拿**实际文件名**
+# 再断言一次 URL 安全)。三者是互补的:
+#
+#   推送后(本文件) → 几分钟内知道「规则还自洽吗」
+#   构建时(构建里) → 出包前挡住「名字真的不对」的包
+on:
+  push:
+    # 不设 branches 过滤:任何分支都要早发现,不只在 main 上。
+    paths:
+      # 被检查的对象
+      - '.github/workflows/daily-build.yml'
+      - 'scripts/check_x_apk_naming.py'
+      - 'scripts/check_x_model_resolution.py'
+      - 'scripts/pangu_format_resources.py'
+      # 检查器的输入。用**通配**而不是逐个列模块:盘古检查器会扫**所有 Gradle 模块**的
+      # values-zh(实测:app / oauth / search 共 3 个 —— `collect_files` 遍历
+      # `*/src/main/res`),逐个手写模块名极易漏,而漏掉的后果正是「改了那个模块的文案、
+      # 检查却不跑」这种静默缺口。本 workflow 只花几十秒,路径放宽的代价远小于漏检。
+      - '**/src/main/res/values/strings.xml'
+      - '**/src/main/res/values-zh/strings.xml'
+      - '**/src/main/res/values-zh-rTW/strings.xml'
+      # 模型口径检查器的扫描面 —— 它只扫 app 的 ui 目录(`UI_ROOT` 是硬编码的)
+      - 'app/src/main/java/me/rerere/rikkahub/ui/**'
+      # 本文件自身的改动也要自检一遍
+      - '.github/workflows/x-custom-static.yml'
+  workflow_dispatch:
+
+# 只读即可:不发布、不写仓库。
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      # 不需要 git 历史(与 audit 的 fetch-depth: 0 不同)—— 这里只读工作区里的文本,
+      # 故保持默认浅检出,少拉一点。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # 不装 JDK / Node / pnpm:这几项检查都不需要。装了反而把「几十秒」拖成「几分钟」,
+      # 而慢的反馈等于没有反馈。
+      #
+      # 每一步失败即停(workflow 默认行为),不必额外加 shell 选项。
+
+      # 产物命名规则散在 daily-build.yml 的**五处**(重命名 / 正文「最新构建」/
+      # 正文「历史构建」解析 / 清理 jq 匹配 / 清理 key_of),任一处漏改都是**静默错**。
+      # 本检查器会用 strings.xml 里的**真实应用名**构造样例资产名,再喂给工作流里的
+      # sed / jq 表达式真跑一遍 —— 所以「改应用名导致前缀变化」也会在这里被拦住。
+      # 它同时守「构建期那道用现实校验的断言步骤还在、且顺序正确」。
+      - name: 产物命名规则自洽性
+        run: python3 scripts/check_x_apk_naming.py
+
+      # UI 层不得用全局模型口径(getCurrentChatModel),须走会话感知口径
+      # (getConversationChatModel(conversation))。这条曾经以「本地秒级检查全绿、CI 红」
+      # 的形态漏到守卫测试才暴露 —— 故在此前移一道。
+      - name: UI 模型解析口径
+        run: python3 scripts/check_x_model_resolution.py
+
+      # 中文文案的盘古之白(中英文之间插空格)。幂等:已格式化则零改动。
+      # 用 --check 只看不改 —— CI 不该改文件,发现未格式化即失败。
+      - name: 中文文案盘古格式化
+        run: python3 scripts/pangu_format_resources.py --check
