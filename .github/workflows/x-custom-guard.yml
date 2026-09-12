@@ -66,6 +66,11 @@ on:
       # 让诊断页变成不可达,而 App 行为**看不出异常**,只是「出问题时没有现场可查」。
       - 'app/src/main/java/me/rerere/rikkahub/RouteActivity.kt'
       - 'app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic/DiagnosticPage.kt'
+      # 2026-09-12 补登:RikkaHubApp.onCreate 是诊断框架的接线点(开关同步读回 + logcat 捕获起停)。
+      # 上游若重写该方法而丢掉这几行,表现是**开关重启归零、应用日志一条不记** ——
+      # 而 App 行为看起来完全正常,只是「出问题时没有任何现场」。
+      # ⚠️ 该文件此前**已带 [X-custom] 标记**(压缩结果通知定制)却一直没登记,属既有缺口,一并补上。
+      - 'app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt'
   workflow_dispatch:
 
 permissions:

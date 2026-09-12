@@ -92,6 +92,17 @@ object XDiagnostics {
     private var persist: ((Boolean) -> Unit)? = null
 
     /**
+     * 开关翻转时通知**日志捕获**的回调 —— 由 Android 侧接上（见 [attachCapture]）。
+     *
+     * 与 [persist] 分开、而不是让捕获模块自己来读开关:捕获是个会起子进程的副作用,
+     * 依赖「谁在什么时候读」不可靠 —— 开关翻转的**那一刻**才是准确的起停时机。
+     *
+     * **可为 null**（JVM 单测里就是 null）：那时只有语义事件、没有 logcat 捕获,
+     * 与加入捕获之前的行为一致。
+     */
+    private var capture: ((Boolean) -> Unit)? = null
+
+    /**
      * 启动期接上持久化，并把**上次的开关状态**读回来。
      *
      * ## 为什么必须持久化（2026-09-11 用户指出，实测确认）
@@ -120,6 +131,19 @@ object XDiagnostics {
         persist = write
     }
 
+    /**
+     * 接上日志捕获（见 [XLogcatCapture]）。
+     *
+     * 开关**打开**时捕获要开始、**关闭**时要结束 —— 故这里传的是翻转事件本身，
+     * 而不是让捕获模块轮询开关状态。
+     *
+     * 捕获启停失败**不能**影响开关本身（用户要的是「开着」，捕获只是其中一个消费者）,
+     * 但也不能静默:记进关键失败留存,诊断页上能看到。
+     */
+    fun attachCapture(onEnabledChanged: (Boolean) -> Unit) {
+        capture = onEnabledChanged
+    }
+
     private val rings: Map<XDomain, XLogRing> =
         XDomain.entries.associateWith { XLogRing(MAX_ENTRIES_PER_DOMAIN) }
 
@@ -146,6 +170,18 @@ object XDiagnostics {
                     level = XLogRing.Level.WARN,
                     event = PERSIST_FAIL_EVENT,
                     message = "诊断开关落盘失败，下次启动将回到默认：" + error,
+                    error = error,
+                )
+            }
+        }
+        // 日志捕获随开关起停。放在落盘之后:捕获失败要记的关键失败本身也要能落盘。
+        capture?.let { notify ->
+            runCatching { notify(enabled) }.onFailure { error ->
+                record(
+                    domain = XDomain.CORE,
+                    level = XLogRing.Level.WARN,
+                    event = "diag.capture.toggle_fail",
+                    message = "日志捕获起停失败：" + error,
                     error = error,
                 )
             }
