@@ -2,8 +2,11 @@
 package me.rerere.rikkahub.x.diag
 
 import java.io.BufferedOutputStream
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
 import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -21,17 +24,19 @@ import java.util.zip.ZipOutputStream
  *    (消息正文里本来就带各种标记)。分文件则不需要猜。
  * ③ 顺带:一个文件比分四个文件好传。
  *
- * ## 为什么不像文本导出那样逐行过脱敏
+ * ## 「文件里留全,包里脱敏」—— 两件事分开
  *
- * 包**不脱敏**(与既有的文本导出保持一致:脱敏当前是关的,见 [XLogScrub.ENABLED])。
- * 但包里放了一份 [MANIFEST_NAME] 说清这件事 —— 逐条列出每个文件里有什么、以及
- * 「可能含凭据,别外传」。**读者第一眼就该看到它**,而不是自己去猜。
+ * 会话目录里的文件**始终原样**(见 [XLogScrub.ENABLED] 的说明):现场不被破坏,也便于
+ * 复核脱敏器到底掩了什么。打包时逐行过一遍 [XLogScrub],把凭据形态的值换成 [XLogScrub.MASK]。
+ *
+ * ⚠️ 但**正则只认凭据的形态**,它抓不到聊天内容 —— 故清单里既写「已脱敏」,也写明
+ * 「哪些东西照旧在包里」。见 [manifest] 的 `CAUTION` 段。
  *
  * ## 为什么吃的是「头部行」而不是 `Context`
  *
  * 要往清单里写设备与版本信息,最直接的做法是传 `Context` 进来取。但那样**这个类就碰了
  * Android**,于是「包到底打成什么样」只能装机去看 —— 而打包正是这一步最该被验的地方
- * (条目名、清单内容、空目录判据)。故把那些行**由调用方取好传进来**:
+ * (条目名、清单内容、脱敏是否生效、空目录判据)。故把那些行**由调用方取好传进来**:
  * 本类因此是纯逻辑,CI 里能真的写一个 zip 再读回来逐项核对。
  *
  * ## 流式写,不占内存
@@ -62,31 +67,89 @@ object XDiagZip {
      *   包里有内容却报「写失败」会让人以为出了问题,而其实只是没东西可打。
      */
     fun write(header: List<String>, out: OutputStream, dir: File): Boolean {
-        val files = dir.listFiles()
-            ?.filter { it.isFile && it.length() > 0L }
-            ?.sortedBy { it.name }
-            .orEmpty()
+        val files = filesOf(dir)
         if (files.isEmpty()) return false
 
+        val redacted = XLogScrub.ENABLED
+        // 先预扫一遍取「每个文件掩了几处」:那个数只有读完才知道,而清单要落在**最前**。
+        // 代价是两遍顺序读 —— 与单文件文本导出同一套取舍(见 DiagnosticPage 的注释)。
+        val hits = if (redacted) files.associate { it.name to countHits(it) } else emptyMap()
+
         ZipOutputStream(BufferedOutputStream(out, BUFFER)).use { zip ->
+            // 清单**先写**:它是读包时的唯一指引,放到最后等于没人会先看到。
+            // ⚠️ 清单本身不过脱敏 —— 那是我们自己生成的一段已知文本,且它里面就写着
+            //    「Authorization」这类词;过一遍反而有被改坏的风险(改坏的正是那条警告)。
             zip.putNextEntry(ZipEntry(MANIFEST_NAME))
-            zip.write(manifest(header, dir.name, files).toByteArray(Charsets.UTF_8))
+            zip.write(
+                manifest(header, dir.name, files, redacted, hits).toByteArray(Charsets.UTF_8),
+            )
             zip.closeEntry()
 
             files.forEach { file ->
                 zip.putNextEntry(ZipEntry(file.name))
-                file.inputStream().use { it.copyTo(zip, BUFFER) }
+                if (redacted) {
+                    writeScrubbed(file, zip)
+                } else {
+                    file.inputStream().use { it.copyTo(zip, BUFFER) }
+                }
                 zip.closeEntry()
             }
         }
         return true
     }
 
+    private fun filesOf(dir: File): List<File> =
+        dir.listFiles()
+            ?.filter { it.isFile && it.length() > 0L }
+            ?.sortedBy { it.name }
+            .orEmpty()
+
+    /** 逐行读 → 脱敏 → 写。内存占用与文件大小无关,故几百 MB 的日志也压得动。 */
+    private fun writeScrubbed(file: File, zip: ZipOutputStream) {
+        // ⚠️ 只 flush、**不 close** —— close 会把整个 zip 流一并关掉。
+        val writer = OutputStreamWriter(zip, Charsets.UTF_8)
+        BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                writer.write(XLogScrub.scrub(line))
+                writer.write("\n")
+            }
+        }
+        writer.flush()
+    }
+
     /**
-     * 组包内清单。**纯函数**(头部行由调用方取好)便于单测 —— 这份文本是 AI 读包时的
-     * 唯一指引,它自己出错就全错了。
+     * 数一个文件里有多少行被脱敏器**动过**。
+     *
+     * 判据用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,而不是另写一套规则去猜
+     * 哪些行「应该」被掩。两套判据迟早漂移(这条与单文件导出用的是同一套判据)。
      */
-    internal fun manifest(header: List<String>, sessionName: String, files: List<File>): String = buildString {
+    private fun countHits(file: File): Long {
+        var n = 0L
+        BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (XLogScrub.scrub(line) != line) n++
+            }
+        }
+        return n
+    }
+
+    /**
+     * 组包内清单。**纯函数**(模式与命中数都由调用方传)便于单测 —— 这份文本是读包时的
+     * 唯一指引,它自己出错就全错了,故**两种模式都要能测**。
+     *
+     * @param redacted 本次是否真的过了脱敏。清单必须**如实**说,不能一边脱敏一边写「原样导出」,
+     *   也不能反过来 —— 后者会让人以为已经安全了。
+     * @param hits 文件 → 被掩的行数。仅 [redacted] 为真时有意义。
+     */
+    internal fun manifest(
+        header: List<String>,
+        sessionName: String,
+        files: List<File>,
+        redacted: Boolean,
+        hits: Map<String, Long> = emptyMap(),
+    ): String = buildString {
         appendLine("${XDiagEnv.MARK} RikkaHub X diagnostic bundle ${XDiagEnv.MARK}")
         appendLine()
         appendLine("This archive is a snapshot of one diagnostic session of the RikkaHub X app.")
@@ -100,7 +163,7 @@ object XDiagZip {
         files.forEach { f ->
             appendLine("  ${f.name}")
             appendLine("    ${describe(f.name)}")
-            appendLine("    ${XLogcatCapture.sizeText(f.length())}")
+            appendLine("    ${XLogcatCapture.sizeText(f.length())}${hitNote(f.name, redacted, hits)}")
             appendLine()
         }
         appendLine("${XDiagEnv.MARK} how to read it ${XDiagEnv.MARK}")
@@ -115,17 +178,49 @@ object XDiagZip {
         appendLine("                      respHeaders. reqBody is the FULL request body -- for chat")
         appendLine("                      requests that means the complete prompt sent to the model.")
         appendLine()
-        appendLine("${XDiagEnv.MARK} CAUTION: not redacted ${XDiagEnv.MARK}")
-        appendLine()
-        appendLine("  This bundle is exported AS-IS. Redaction is currently disabled on purpose, so")
-        appendLine("  it may contain credentials and personal content, including:")
-        appendLine("    - Authorization / api keys in net.log request headers")
-        appendLine("    - the full model request body in net.log (system prompt, chat history,")
-        appendLine("      and anything typed by the user)")
-        appendLine("    - whatever the app itself happened to log into logcat")
-        appendLine()
-        appendLine("  Review it before sharing it with anyone. If you only need the app's own")
-        appendLine("  custom log lines, filter logcat on the XCustom tag instead of sharing this.")
+        appendRedactionNote(this, redacted)
+    }
+
+    /**
+     * 逐文件的命中数。**这个数的作用是「可被证伪」** —— 若清单说某文件「0 处命中」而正文里
+     * 明摆着一个 `sk-...`,那就是脱敏没生效,一眼看得出来。静默地掩掉则无从判断。
+     */
+    private fun hitNote(name: String, redacted: Boolean, hits: Map<String, Long>): String {
+        if (!redacted) return " · not redacted"
+        val n = hits[name] ?: 0L
+        return if (n > 0L) " · redacted, $n value(s) masked" else " · redacted, nothing matched"
+    }
+
+    private fun appendRedactionNote(sb: StringBuilder, redacted: Boolean) {
+        if (!redacted) {
+            sb.appendLine("${XDiagEnv.MARK} CAUTION: not redacted ${XDiagEnv.MARK}")
+            sb.appendLine()
+            sb.appendLine("  This bundle is exported AS-IS. Redaction is currently disabled, so it may")
+            sb.appendLine("  contain credentials and personal content, including:")
+            sb.appendLine("    - Authorization / api keys in net.log request headers")
+            sb.appendLine("    - the full model request body in net.log (system prompt, chat history,")
+            sb.appendLine("      and anything typed by the user)")
+            sb.appendLine("    - whatever the app itself happened to log into logcat")
+            sb.appendLine()
+            sb.appendLine("  Review it before sharing it with anyone.")
+            return
+        }
+        sb.appendLine("${XDiagEnv.MARK} redaction: credentials masked, content NOT sanitised ${XDiagEnv.MARK}")
+        sb.appendLine()
+        sb.appendLine("  Every file except this README was passed through a regex redactor line by line")
+        sb.appendLine("  (see XLogScrub). Credential-shaped values were replaced with \"${XLogScrub.MASK}\":")
+        sb.appendLine("  Authorization headers, Bearer tokens, JWTs, cookies, and known vendor key")
+        sb.appendLine("  prefixes such as sk-, ghp_, glpat-, AIza, AKIA. Per-file counts are listed")
+        sb.appendLine("  above -- if a file says \"nothing matched\" but you can see a key in it, the")
+        sb.appendLine("  redactor missed it, and that is worth reporting.")
+        sb.appendLine()
+        sb.appendLine("  What this does NOT do -- the redactor only knows credential *patterns*. It")
+        sb.appendLine("  cannot tell that ordinary text is private, so the following are still in here:")
+        sb.appendLine("    - the full model request body in net.log: system prompt, chat history, and")
+        sb.appendLine("      anything typed by the user")
+        sb.appendLine("    - app and framework log lines that happen to contain user content")
+        sb.appendLine()
+        sb.appendLine("  Review it before sharing it with anyone.")
     }
 
     /** 一个文件是什么 —— 按名字给读者一句说明。认不出就明说认不出。 */

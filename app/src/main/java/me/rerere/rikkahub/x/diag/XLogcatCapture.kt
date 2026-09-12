@@ -363,7 +363,8 @@ object XLogcatCapture {
             // 那是关于原始文件的陈述,在两种载体里都成立。
             add(
                 "redaction: " + if (XLogScrub.ENABLED) {
-                    "applied line by line on in-app export"
+                    "applied line by line on export (this file and the bundle); credentials " +
+                        "are masked, but ordinary content such as chat text is NOT sanitised"
                 } else {
                     "DISABLED - exports are raw and may carry credentials such as API keys"
                 }
