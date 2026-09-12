@@ -890,7 +890,7 @@
   <string name="diagnostic_export_full">Export record (full)</string>
   <string name="diagnostic_export_full_desc">Keeps full paths and hashes. Check it before sharing.</string>
   <string name="diagnostic_export_logcat">Export app log</string>
-  <string name="diagnostic_export_logcat_desc">The app's full log, upstream and framework logs included. Redacted line by line on export.</string>
+  <string name="diagnostic_export_logcat_desc">Full log of this app, upstream and framework logs included. Credentials are masked on export.</string>
   <string name="diagnostic_export_logcat_none">No log file yet — turn the switch on above to start recording.</string>
   <string name="diagnostic_export_done">Saved</string>
   <string name="diagnostic_export_failed">Save failed</string>
