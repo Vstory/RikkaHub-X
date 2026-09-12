@@ -388,7 +388,9 @@ jobs:
               echo "> [!CAUTION]"
               echo "> **本页面为自动构建的开发测试版,功能不稳定,仅供开发者测试功能使用,请勿下载。**"
               echo
-              echo "自动构建 · commit [\`${{ github.sha }}\`](https://github.com/${REPO}/commit/${{ github.sha }})"
+              # 完整 SHA 是链接（点开即看是哪次提交），短号另附 —— 短号用于和 APK 里的
+              # versionName、以及文件名末尾的短号对照，肉眼比对时比 40 位长号方便。
+              echo "自动构建 · commit [\`${{ github.sha }}\`](https://github.com/${REPO}/commit/${{ github.sha }})(短号 \`${SHA}\`)"
               echo
               echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             else
@@ -399,7 +401,7 @@ jobs:
               echo "> [!CAUTION]"
               echo "> **本页面为自动构建的尝鲜版,功能仍在快速迭代,仅供尝鲜体验,请勿用于重要场景。**"
               echo
-              echo "自动构建 · \`${VERSION}\` · commit [\`${{ github.sha }}\`](https://github.com/${REPO}/commit/${{ github.sha }})"
+              echo "自动构建 · \`${VERSION}\` · commit [\`${{ github.sha }}\`](https://github.com/${REPO}/commit/${{ github.sha }})(短号 \`${SHA}\`)"
               echo
               echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             fi
