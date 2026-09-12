@@ -1395,7 +1395,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_export_full">导出诊断记录(完整)</string>
   <string name="diagnostic_export_full_desc">含完整路径与哈希,也可能含凭据,分享前请先过目。</string>
   <string name="diagnostic_export_bundle">导出诊断包</string>
-  <string name="diagnostic_export_bundle_desc">一次导出全部:应用日志、各域记录与网络请求,打成压缩包,适合交给 AI。</string>
+  <string name="diagnostic_export_bundle_desc">一次导出全部:应用日志、各域记录与网络请求,打成压缩包,适合交给 AI。原样导出、不做脱敏,可能含密钥,分享前请先过目。</string>
   <string name="diagnostic_export_bundle_none">还没有记录 —— 打开上面的开关,从那一刻起才会开始记录。</string>
   <string name="diagnostic_export_logcat">导出应用日志</string>
   <string name="diagnostic_export_logcat_desc">本应用的完整日志,上游与框架的日志也在内。原样导出、不做脱敏,可能含密钥,分享前请先过目。</string>
