@@ -219,6 +219,56 @@ class XDiagZipTest {
     }
 
     @Test
+    fun `progress is reported per phase and never exceeds the total`() {
+        // 文件要足够大,进度才会分成多次上报 —— 太小的话一次就读完了,分段逻辑测不出来。
+        val line = "x".repeat(1024) + "\n"
+        listOf("logcat.log", "net.log", "chat.log").forEach { name ->
+            File(dir, name).bufferedWriter(Charsets.UTF_8).use { w -> repeat(64) { w.write(line) } }
+        }
+        val reports = mutableListOf<Triple<XExportPhase, Long, Long>>()
+        val progress = XExportProgress { phase, processed, total ->
+            reports += Triple(phase, processed, total)
+        }
+
+        XDiagZip.write(listOf("app     : RikkaHub X"), ByteArrayOutputStream(), dir, progress)
+
+        assertTrue("应上报进度", reports.isNotEmpty())
+
+        // ① 任何一次上报都不能越过总量。
+        //    ⚠️ 这一条是**实测踩到过的**:预扫阶段把计数器累加到总量后没归零,于是写入阶段
+        //    从 100% 起步、整段进度条都是满的 —— 等于没有进度。不夹的话这里就会炸。
+        reports.forEach { (phase, processed, total) ->
+            assertTrue("$phase 上报 $processed 超过了总量 $total", processed <= total)
+        }
+
+        // ② 每个阶段内部单调不减(否则进度条会往回跳)。
+        XExportPhase.entries.forEach { phase ->
+            val seq = reports.filter { it.first == phase }.map { it.second }
+            assertEquals("$phase 的进度应单调不减", seq.sorted(), seq)
+        }
+
+        val total = reports.first().third
+        val writing = reports.filter { it.first == XExportPhase.WRITING }.map { it.second }
+        assertTrue("必须有写入阶段", writing.isNotEmpty())
+
+        // ③ 写入阶段要从接近 0 开始(而不是接着上一阶段的计数)。
+        assertTrue(
+            "写入阶段应从头开始,实得首次上报 ${writing.first()} / 总量 $total",
+            writing.first() < total / 2,
+        )
+
+        // ④ 收尾要走到总量 —— 否则进度条永远差一截到不了头。
+        assertEquals("写入阶段应走到总量", total, writing.last())
+
+        // ⑤ 开了脱敏才有预扫阶段(它正是为了算「掩了几处」而多读一遍)。
+        if (XLogScrub.ENABLED) {
+            val analysing = reports.filter { it.first == XExportPhase.ANALYSING }.map { it.second }
+            assertTrue("开了脱敏就应有分析阶段", analysing.isNotEmpty())
+            assertEquals("分析阶段也应走到总量", total, analysing.last())
+        }
+    }
+
+    @Test
     fun `hasContent treats missing empty and blank dirs alike`() {
         assertFalse("null 视为没有内容", XDiagZip.hasContent(null))
         assertFalse("空目录没有内容", XDiagZip.hasContent(dir))

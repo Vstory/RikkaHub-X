@@ -892,6 +892,14 @@
   <string name="diagnostic_export_bundle">Export diagnostic bundle</string>
   <string name="diagnostic_export_bundle_desc">Everything in one archive: the app log, every domain record and the network requests. Best for handing to an AI, but it is exported as-is, so it may contain credentials — review it before sharing.</string>
   <string name="diagnostic_export_bundle_none">Nothing recorded yet — turn the switch on above to start recording.</string>
+  <string name="diagnostic_export_notif_title">Exporting diagnostic records</string>
+  <string name="diagnostic_export_notif_channel">Diagnostic export</string>
+  <string name="diagnostic_export_notif_channel_desc">Shows progress while diagnostic records are being exported.</string>
+  <string name="diagnostic_export_notif_analysing">Analysing records…</string>
+  <string name="diagnostic_export_notif_writing">Writing…</string>
+  <string name="diagnostic_export_notif_percent">%1$s %2$d%%</string>
+  <string name="diagnostic_export_notif_done">Export finished · %1$s</string>
+  <string name="diagnostic_export_notif_failed">Export failed — could not write to the chosen location</string>
   <string name="diagnostic_export_logcat">Export app log</string>
   <string name="diagnostic_export_logcat_desc">Full log of this app, upstream and framework logs included. Exported as-is with no masking, so it may contain credentials such as API keys — review it before sharing.</string>
   <string name="diagnostic_export_logcat_none">No log file yet — turn the switch on above to start recording.</string>

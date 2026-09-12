@@ -44,22 +44,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.x.diag.NoExportProgress
 import me.rerere.rikkahub.x.diag.XDiagClear
+import me.rerere.rikkahub.x.diag.XDiagExportNotifier
 import me.rerere.rikkahub.x.diag.XDiagEnv
 import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XDiagZip
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XExportPhase
+import me.rerere.rikkahub.x.diag.XExportProgress
 import me.rerere.rikkahub.x.diag.XLogRing
 import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XRedaction
+import me.rerere.rikkahub.x.diag.countingStream
+import org.koin.compose.koinInject
 
 /**
  * 诊断页 —— **本应用的**运行记录与完整日志。
@@ -102,6 +109,9 @@ fun DiagnosticPage() {
     val toaster = LocalToaster.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val scope = rememberCoroutineScope()
+    // 导出跑在**应用级**作用域上,不是本页的:本页的作用域会随页面一起取消 ——
+    // 用户在导出途中退出去看别的,写了一半的文件就会被丢在那里。
+    val appScope: AppScope = koinInject()
 
     // 本地版本号：开关与清空之后 +1，以下所有快照随之重算。
     // tick 是另一回事 —— 日志体积会持续增长，靠它每秒 +1 让页面上的数字跟着动，
@@ -139,10 +149,17 @@ fun DiagnosticPage() {
         val payload = pending
         pending = null
         if (uri == null || payload == null) return
-        scope.launch {
+        val fileName = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
+        XDiagExportNotifier.begin(context)
+        appScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { writeExport(context, uri, payload) }.getOrDefault(false)
+                runCatching {
+                    writeExport(context, uri, payload, XDiagExportNotifier.progress(context))
+                }.getOrDefault(false)
             }
+            // 结果同时走通知与吐司:通知保证「离开了这一页也看得到」,
+            // 吐司保证「通知权限被关掉时仍有反馈」。
+            XDiagExportNotifier.finish(context, fileName, ok)
             toaster.show(
                 message = context.getString(
                     if (ok) R.string.diagnostic_export_done else R.string.diagnostic_export_failed
@@ -526,15 +543,19 @@ private fun writeExport(
     context: Context,
     uri: Uri,
     payload: PendingExport,
+    progress: XExportProgress = NoExportProgress,
 ): Boolean = context.contentResolver.openOutputStream(uri)?.use { out ->
     when (payload) {
-        // 压缩包**不逐行过脱敏**(与文本导出一致:脱敏当前是关的),但包里放了一份清单
-        // 说清「这是原样导出、可能含凭据」—— 由 XDiagZip 写。
+        // 打包与脱敏都在 XDiagZip 里,进度由它上报(读两遍:先扫、后写)。
         is PendingExport.SessionZip ->
-            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir)
+            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress)
 
         is PendingExport.Text -> {
+            // 一小段文本,没有可分段的进度 —— 报一次头、一次尾即可(否则通知会一直停在 0%)。
+            val total = payload.text.length.toLong()
+            progress.report(XExportPhase.WRITING, 0L, total)
             OutputStreamWriter(out, Charsets.UTF_8).use { it.write(payload.text) }
+            progress.report(XExportPhase.WRITING, total, total)
             true
         }
 
@@ -549,10 +570,17 @@ private fun writeExport(
             // ⚠️ 先预扫一遍再写正文:摘要要落在**文件开头**(读者第一眼就该看到行数、
             //    以及脱敏到底开没开),而这两个数只有读完才知道 —— 单遍做不到。
             //    代价是两遍顺序读:实测单份日志是 KB 级可忽略。
-            val scan = scanForExport(payload.file)
+            val scan = scanForExport(payload.file, progress)
+            // 写入阶段重新从 0 计:通知上标着阶段名,两个阶段各走一遍 0→100% 才读得懂。
+            val total = payload.file.length()
+            var written = 0L
             BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
                 writeExportSummary(writer, scan)
-                BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
+                val source = countingStream(payload.file.inputStream()) { n ->
+                    written += n
+                    progress.report(XExportPhase.WRITING, written, total)
+                }
+                BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
                         writer.write(if (XLogScrub.ENABLED) XLogScrub.scrub(line) else line)
@@ -574,10 +602,16 @@ private class ExportScan(val lines: Long, val scrubbed: Long)
  * 判「这一行被脱敏过」用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,
  * 而不是另写一套规则去猜哪些行"应该"被掩。两套判据迟早会漂移。
  */
-private fun scanForExport(file: File): ExportScan {
+private fun scanForExport(file: File, progress: XExportProgress = NoExportProgress): ExportScan {
     var lines = 0L
     var scrubbed = 0L
-    BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+    var read = 0L
+    val total = file.length()
+    val source = countingStream(file.inputStream()) { n ->
+        read += n
+        progress.report(XExportPhase.ANALYSING, read, total)
+    }
+    BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
         while (true) {
             val line = reader.readLine() ?: break
             lines++

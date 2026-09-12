@@ -66,14 +66,37 @@ object XDiagZip {
      * @return 是否至少打进了一个文件。`false` 时调用方应提示「还没有记录」——
      *   包里有内容却报「写失败」会让人以为出了问题,而其实只是没东西可打。
      */
-    fun write(header: List<String>, out: OutputStream, dir: File): Boolean {
+    fun write(
+        header: List<String>,
+        out: OutputStream,
+        dir: File,
+        progress: XExportProgress = NoExportProgress,
+    ): Boolean {
         val files = filesOf(dir)
         if (files.isEmpty()) return false
 
         val redacted = XLogScrub.ENABLED
+        // 进度以**输入字节数**为准:压缩后的体积事先不可知,而读了多少是确定的。
+        val total = files.sumOf { it.length() }
+        var read = 0L
+
         // 先预扫一遍取「每个文件掩了几处」:那个数只有读完才知道,而清单要落在**最前**。
         // 代价是两遍顺序读 —— 与单文件文本导出同一套取舍(见 DiagnosticPage 的注释)。
-        val hits = if (redacted) files.associate { it.name to countHits(it) } else emptyMap()
+        // 报告成 ANALYSING 阶段,好在界面上与「写入」区分开 —— 否则进度条会先走满一遍再重来。
+        val hits = if (redacted) {
+            files.associate { f ->
+                f.name to countHits(f) { n ->
+                    read += n
+                    progress.report(XExportPhase.ANALYSING, read, total)
+                }
+            }
+        } else {
+            emptyMap()
+        }
+
+        // ⚠️ **必须归零**:上面预扫已经把 read 累加到了 total。不归零的话写入阶段会从
+        //    100% 开始一路报超,进度条整段是满的 —— 等于没有进度。
+        read = 0L
 
         ZipOutputStream(BufferedOutputStream(out, BUFFER)).use { zip ->
             // 清单**先写**:它是读包时的唯一指引,放到最后等于没人会先看到。
@@ -88,9 +111,15 @@ object XDiagZip {
             files.forEach { file ->
                 zip.putNextEntry(ZipEntry(file.name))
                 if (redacted) {
-                    writeScrubbed(file, zip)
+                    writeScrubbed(file, zip) { n ->
+                        read += n
+                        progress.report(XExportPhase.WRITING, read, total)
+                    }
                 } else {
-                    file.inputStream().use { it.copyTo(zip, BUFFER) }
+                    countingStream(file.inputStream()) { n ->
+                        read += n
+                        progress.report(XExportPhase.WRITING, read, total)
+                    }.use { it.copyTo(zip, BUFFER) }
                 }
                 zip.closeEntry()
             }
@@ -105,10 +134,11 @@ object XDiagZip {
             .orEmpty()
 
     /** 逐行读 → 脱敏 → 写。内存占用与文件大小无关,故几百 MB 的日志也压得动。 */
-    private fun writeScrubbed(file: File, zip: ZipOutputStream) {
+    private fun writeScrubbed(file: File, zip: ZipOutputStream, onRead: (Long) -> Unit = {}) {
         // ⚠️ 只 flush、**不 close** —— close 会把整个 zip 流一并关掉。
         val writer = OutputStreamWriter(zip, Charsets.UTF_8)
-        BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+        val source = countingStream(file.inputStream(), onRead)
+        BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
                 writer.write(XLogScrub.scrub(line))
@@ -124,9 +154,10 @@ object XDiagZip {
      * 判据用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,而不是另写一套规则去猜
      * 哪些行「应该」被掩。两套判据迟早漂移(这条与单文件导出用的是同一套判据)。
      */
-    private fun countHits(file: File): Long {
+    private fun countHits(file: File, onRead: (Long) -> Unit = {}): Long {
         var n = 0L
-        BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+        val source = countingStream(file.inputStream(), onRead)
+        BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
                 if (XLogScrub.scrub(line) != line) n++
