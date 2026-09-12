@@ -1,8 +1,12 @@
 name: Daily Build
 
-# run 标题(2026-09-10):本 workflow 仅手动触发,默认标题就是 workflow 名,
-# 多跑几次同样分不清批次;带上构建类型与分支后可辨认。
-run-name: "Daily Build · ${{ inputs.build_type || 'nightly' }} · ${{ github.ref_name }}"
+# run 标题(2026-09-10 引入,2026-09-12 改):本 workflow 仅手动触发,默认标题就是 workflow 名,
+# 多跑几次分不清批次;带上渠道与分支后可辨认。
+#
+# 渠道名用与 Release 页面**同一套词汇**(Nightly Build / Release Build),而不是裸的
+# `nightly` / `release` —— 后者只差一个词,列表里扫一眼容易看串;且 `release` 在别处既指
+# 构建类型、又指 AGP 变体名,单独出现有歧义。改成页面名后,运行标题与它产出的页面可互相检索。
+run-name: "Daily Build · ${{ inputs.build_type == 'release' && 'Release Build' || 'Nightly Build' }} · ${{ github.ref_name }}"
 
 on:
   # 2026-09-10:定时自动构建已停用(注释掉 schedule),仅保留手动触发。
