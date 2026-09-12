@@ -53,6 +53,7 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLogRing
+import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XRedaction
 
@@ -133,7 +134,7 @@ fun DiagnosticPage() {
         if (uri == null || payload == null) return@rememberLauncherForActivityResult
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { writeExport(context, uri, payload, filesRoot) }.getOrDefault(false)
+                runCatching { writeExport(context, uri, payload) }.getOrDefault(false)
             }
             toaster.show(
                 message = context.getString(
@@ -449,7 +450,7 @@ private sealed interface PendingExport {
      * 应用日志文件。
      *
      * ⚠️ 原文件是**未脱敏**的(捕获时不做脱敏:那是热路径,而且文件本身在应用私有目录)。
-     * 交出去之前必须逐行过一遍 [XRedaction] —— 导出物的去向是聊天/AI,带出一个凭证就是泄漏。
+     * 交出去之前必须逐行过一遍 [XLogScrub] —— 导出物的去向是聊天/AI,带出一个凭证就是泄漏。
      */
     data class LogcatFile(val file: File) : PendingExport
 }
@@ -463,7 +464,6 @@ private fun writeExport(
     context: Context,
     uri: Uri,
     payload: PendingExport,
-    filesRoot: String,
 ): Boolean = context.contentResolver.openOutputStream(uri)?.use { out ->
     when (payload) {
         is PendingExport.Text -> {
@@ -474,11 +474,14 @@ private fun writeExport(
         is PendingExport.LogcatFile -> {
             // 逐行:读一行 → 脱敏一行 → 写一行。内存占用与文件大小无关,
             // 故几百 MB 的日志也能导出而不会 OOM。
+            //
+            // 脱敏用 XLogScrub(正则换掉凭据)、不用 XRedaction:后者是为 X 的事件文本写的
+            // (缩路径、掩哈希),而 logcat 是任意文本,要防的是凭证泄漏。见 XLogScrub 的类注释。
             BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
                 BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        writer.write(XRedaction.redact(line, filesRoot, full = false))
+                        writer.write(XLogScrub.scrub(line))
                         writer.newLine()
                     }
                 }
