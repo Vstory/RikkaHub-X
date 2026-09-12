@@ -225,7 +225,7 @@ jobs:
       #    (旧→新)排列，文件名排序无法改变它(softprops/action-gh-release 文档明确：
       #    "does not control the final asset ordering")。
       #    故「最新构建置顶」改由 release 说明(body)实现 —— 见下方 Generate release body。
-      # 例：app-20260910-0215-arm64-v8a-nightly-a1b2c3d4.apk（第三段为渠道标记）
+      # 例：RikkaHub X Nightly_20260910-0215_arm64-v8a_nightly_a1b2c3d4.apk（前缀 = 应用名）
       - name: Rename APKs with build time & commit hash
         env:
           # 文件名第三段标出**渠道**（nightly / release），不再是 AGP 的构建变体名 ——
@@ -233,13 +233,30 @@ jobs:
           # 的产物也叫 `…-release-….apk`，在页面与资产列表里看着像一个正式包。
           CHANNEL: ${{ github.event.inputs.build_type || 'nightly' }}
         run: |
-          cd app/build/outputs/apk/release
           [ "$CHANNEL" = "release" ] || CHANNEL=nightly
-          echo "渠道标记: ${CHANNEL}"
+          # 产物名前缀取**应用名**，与 strings.xml 的 app_name / app_name_nightly 同源
+          # （在这里现读，避免"应用名"存在第二份来源、改一处忘一处）。
+          # ⚠️ 应用名含空格 → 产物名也含空格：本文件所有引用都要加引号；写进 Markdown
+          #    链接时必须把空格编码成 %20，否则链接会被空格截断。
+          LABEL_RELEASE="$(sed -nE 's/.*<string name="app_name">([^<]+)<\/string>.*/\1/p' app/src/main/res/values/strings.xml | head -1)"
+          LABEL_NIGHTLY="$(sed -nE 's/.*<string name="app_name_nightly">([^<]+)<\/string>.*/\1/p' app/src/main/res/values/strings.xml | head -1)"
+          if [ -z "$LABEL_RELEASE" ] || [ -z "$LABEL_NIGHTLY" ]; then
+            echo "❌ 读不到应用名（strings.xml 的 app_name / app_name_nightly），拒绝用空前缀给产物命名"
+            exit 1
+          fi
+          if [ "$CHANNEL" = "release" ]; then PREFIX="$LABEL_RELEASE"; else PREFIX="$LABEL_NIGHTLY"; fi
+          echo "渠道标记: ${CHANNEL} · 产物名前缀: ${PREFIX}"
+          cd app/build/outputs/apk/release
           for f in *.apk; do
-            abi="${f#app-}"
-            abi="${abi%-release.apk}"
-            mv "$f" "app-${{ steps.ts.outputs.ts }}-${abi}-${CHANNEL}-${{ steps.sha.outputs.short }}.apk"
+            # 架构不再从前缀解析（前缀随渠道变），改按已知架构匹配；认不出即报错 ——
+            # 否则新名字里架构段会静默变成空串，产物名残缺却照常发布。
+            case "$f" in
+              *arm64-v8a*) abi=arm64-v8a ;;
+              *x86_64*)    abi=x86_64 ;;
+              *universal*) abi=universal ;;
+              *) echo "❌ 无法从产物名识别架构：$f"; exit 1 ;;
+            esac
+            mv -- "$f" "${PREFIX}_${{ steps.ts.outputs.ts }}_${abi}_${CHANNEL}_${{ steps.sha.outputs.short }}.apk"
           done
           ls -l
 
@@ -399,6 +416,14 @@ jobs:
           BASE="https://github.com/${REPO}/releases/download/${TARGET_TAG}"
           # 时间戳 20260910-0925 → 可读 2026-09-10 09:25
           PRETTY="${TS:0:4}-${TS:4:2}-${TS:6:2} ${TS:9:2}:${TS:11:2}"
+          # 产物名前缀 = 应用名（与 strings.xml 同源，同上一步）：含空格，链接里须编码成 %20。
+          LABEL_RELEASE="$(sed -nE 's/.*<string name="app_name">([^<]+)<\/string>.*/\1/p' app/src/main/res/values/strings.xml | head -1)"
+          LABEL_NIGHTLY="$(sed -nE 's/.*<string name="app_name_nightly">([^<]+)<\/string>.*/\1/p' app/src/main/res/values/strings.xml | head -1)"
+          if [ -z "$LABEL_RELEASE" ] || [ -z "$LABEL_NIGHTLY" ]; then
+            echo "❌ 读不到应用名（strings.xml），拒绝按空前缀拼下载链接"
+            exit 1
+          fi
+          if [ "$CHANNEL" = "release" ]; then PREFIX="$LABEL_RELEASE"; else PREFIX="$LABEL_NIGHTLY"; fi
 
           abi_label() {
             case "$1" in
@@ -439,10 +464,10 @@ jobs:
             echo "| 架构 | 适用 | 下载 |"
             echo "|---|---|---|"
             for abi in arm64-v8a universal x86_64; do
-              f="app-${TS}-${abi}-${CHANNEL}-${SHA}.apk"
+              f="${PREFIX}_${TS}_${abi}_${CHANNEL}_${SHA}.apk"
               if [ -f "$f" ]; then
                 mb="$(awk -v b="$(stat -c %s "$f")" 'BEGIN{printf "%.1f", b/1048576}')"
-                echo "| \`${abi}\` | $(abi_label "$abi") | [⬇ 下载 ${mb} MB](${BASE}/${f}) |"
+                echo "| \`${abi}\` | $(abi_label "$abi") | [⬇ 下载 ${mb} MB](${BASE}/${f// /%20}) |"
               fi
             done
             echo
@@ -462,27 +487,52 @@ jobs:
           # 历史构建：从**本渠道**已有 asset 名解析出 (时间戳, 短号)，去重后倒序 → 新在上。
           # ⚠️ 必须用 ${TARGET_TAG} —— 原先写死 nightly，导致尝鲜版页面列出的是 nightly 的产物，
           #    而链接按 BASE 拼成了 /download/release/…，点开全是 404。
-          mapfile -t PREV < <(gh api --paginate \
+          # 历史构建：从**本渠道**已有 asset 名解析出「时间戳 / 短号 / 架构 / 完整文件名」，
+          # 去重后倒序 → 新 → 旧。
+          # ⚠️ 必须用 ${TARGET_TAG} —— 原先写死 nightly，导致尝鲜版页面列出的是 nightly
+          #    而链接按 BASE 拼成了 /download/release/…，点开全是 404。
+          # ⚠️ 链接直接用**解析出来的真实资产名**，不按规则重建：原先重建时把渠道段写死成
+          #    `release`，于是 nightly 页面的历史链接指向根本不存在的名字 → 同样 404。
+          #    资产名含空格，故链接里编码成 %20。
+          # ⚠️ 字段分隔符用 `|`：文件名含空格，用空格切字段会把文件名切碎。
+          mapfile -t PREV_ROWS < <(gh api --paginate \
             -H "Accept: application/vnd.github+json" \
             "repos/${REPO}/releases/tags/${TARGET_TAG}" \
             --jq '.assets[].name' 2>/dev/null \
-            | sed -nE 's/^app-([0-9]{8}-[0-9]{4})-(arm64-v8a|universal|x86_64)-(nightly|release)-([0-9a-f]{8})\.apk$/\1 \4/p' \
+            | sed -nE 's/^(.*)_([0-9]{8}-[0-9]{4})_(arm64-v8a|universal|x86_64)_(nightly|release)_([0-9a-f]{8})\.apk$/\2|\5|\3|&|/p' \
             | sort -u -r)
 
-          if [ "${#PREV[@]}" -gt 0 ]; then
+          # 同一次构建的三个架构合成一行 → 关联数组按「构建键|架构」索引到真实资产名
+          declare -A HIST_FILE=()
+          HIST_KEYS=()
+          for row in "${PREV_ROWS[@]}"; do
+            [ -n "$row" ] || continue
+            IFS='|' read -r h_ts h_sha h_abi h_full _ <<< "$row"
+            [ -n "$h_full" ] || continue
+            h_key="${h_ts} ${h_sha}"
+            HIST_FILE["${h_key}|${h_abi}"]="$h_full"
+            case " ${HIST_KEYS[*]} " in
+              *" ${h_key} "*) ;;
+              *) HIST_KEYS+=("$h_key") ;;
+            esac
+          done
+
+          if [ "${#HIST_KEYS[@]}" -gt 0 ]; then
             {
               echo "## 🕘 历史构建(新 → 旧)"
               echo
             } >> "$BODY"
             n=0
-            for row in "${PREV[@]}"; do
+            for h_key in "${HIST_KEYS[@]}"; do
               if [ "$n" -ge 6 ]; then break; fi
-              pts="${row%% *}"
-              psha="${row##* }"
+              pts="${h_key%% *}"
+              psha="${h_key##* }"
               pd="${pts:0:4}-${pts:4:2}-${pts:6:2} ${pts:9:2}:${pts:11:2}"
               links=""
               for abi in arm64-v8a universal x86_64; do
-                links="${links}[\`${abi}\`](${BASE}/app-${pts}-${abi}-release-${psha}.apk) "
+                pfull="${HIST_FILE["${h_key}|${abi}"]:-}"
+                [ -n "$pfull" ] || continue
+                links="${links}[\`${abi}\`](${BASE}/${pfull// /%20}) "
               done
               echo "- **${pd}** · \`${psha}\` — ${links}" >> "$BODY"
               n=$((n + 1))
@@ -493,7 +543,7 @@ jobs:
           {
             echo "---"
             echo
-            echo "文件名规则 = \`app-<构建时间>-<架构>-${CHANNEL}-<短号>.apk\`（第三段为渠道标记）。"
+            echo "文件名规则 = \`${PREFIX}_<构建时间>_<架构>_${CHANNEL}_<短号>.apk\`（前缀为应用名，故 nightly 页面前缀含 Nightly）。"
             echo "下方 **Assets 列表由 GitHub 按上传时间(旧 → 新)排列,无法调整** —— 故请以上方表格为准下载最新构建。"
           } >> "$BODY"
 
@@ -539,12 +589,12 @@ jobs:
           mapfile -t ASSETS < <(gh api --paginate \
             -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/releases/tags/${TARGET_TAG}" \
-            --jq '.assets[] | select(.name | test("-[0-9a-f]{8}\\.apk$")) | [.id, .name] | @tsv')
+            --jq '.assets[] | select(.name | test("[-_][0-9a-f]{8}\\.apk$")) | [.id, .name] | @tsv')
           echo "匹配命名规则的 asset 共 ${#ASSETS[@]} 个"
 
           # 从文件名解析「构建键」= "构建时间戳 短号"；旧命名解析不出键 → 视为待清理
           key_of() {
-            sed -nE 's/^app-([0-9]{8}-[0-9]{4})-(arm64-v8a|universal|x86_64)-(nightly|release)-([0-9a-f]{8})\.apk$/\1 \4/p' <<< "$1"
+            sed -nE 's/^(.*)_([0-9]{8}-[0-9]{4})_(arm64-v8a|universal|x86_64)_(nightly|release)_([0-9a-f]{8})\.apk$/\2 \5/p' <<< "$1"
           }
 
           KEYS_FILE="$(mktemp)"
