@@ -473,23 +473,24 @@ private fun writeExport(
         }
 
         is PendingExport.LogcatFile -> {
-            // 逐行:读一行 → 脱敏一行 → 写一行。内存占用与文件大小无关,
+            // 逐行:读一行 → (脱敏) → 写一行。内存占用与文件大小无关,
             // 故几百 MB 的日志也能导出而不会 OOM。
             //
-            // 脱敏用 XLogScrub(正则换掉凭据)、不用 XRedaction:后者是为 X 的事件文本写的
-            // (缩路径、掩哈希),而 logcat 是任意文本,要防的是凭证泄漏。见 XLogScrub 的类注释。
+            // ⚠️ 脱敏**当前是关的**(见 [XLogScrub.ENABLED]):导出物是原样日志。开关在
+            //    XLogScrub 里,改回 true 即恢复 —— 规则与单测都还在,不必重写。
+            //    XLogScrub(而不是 XRedaction)是为任意 logcat 文本写的:后者面向 X 的事件文本
+            //    (缩路径、掩哈希),防不了凭证泄漏。
             //
-            // ⚠️ 先预扫一遍再写正文:摘要要落在**文件开头**(读者第一眼就该看到「脱敏跑了没、
-            //    跑了多少」),而命中数只有读完全文才知道 —— 单遍做不到这件事。
-            //    代价是两遍顺序读:实测单份日志是 KB 级可忽略;即便 200MB 的极端情况,
-            //    也多不过「让人对着文件猜脱敏有没有生效」的代价。
+            // ⚠️ 先预扫一遍再写正文:摘要要落在**文件开头**(读者第一眼就该看到行数、
+            //    以及脱敏到底开没开),而这两个数只有读完才知道 —— 单遍做不到。
+            //    代价是两遍顺序读:实测单份日志是 KB 级可忽略。
             val scan = scanForExport(payload.file)
             BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
                 writeExportSummary(writer, scan)
                 BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        writer.write(XLogScrub.scrub(line))
+                        writer.write(if (XLogScrub.ENABLED) XLogScrub.scrub(line) else line)
                         writer.newLine()
                     }
                 }
@@ -515,7 +516,9 @@ private fun scanForExport(file: File): ExportScan {
         while (true) {
             val line = reader.readLine() ?: break
             lines++
-            if (XLogScrub.scrub(line) != line) scrubbed++
+            // 关掉时不去调脱敏器:既省一遍正则,也让「命中 0」这个数**诚实**
+            // (否则会算出"如果不关会命中多少",与文件实际情况不符)。
+            if (XLogScrub.ENABLED && XLogScrub.scrub(line) != line) scrubbed++
         }
     }
     return ExportScan(lines, scrubbed)
@@ -527,22 +530,34 @@ private fun scanForExport(file: File): ExportScan {
  * 这是实测分析里点出的缺口之一:原先掩了凭据,但文件里一个字不说,读者无从判断。
  * 现在若这一行写着「命中 0 行」而正文里明显挂着 `Authorization:`,那就是脱敏没生效 ——
  * 一眼看得出来。**可被证伪比「静默地掩掉」有用得多。**
+ *
+ * 与文件里其它自产内容一致用英文:它们是日志元数据,读者是分析工具与 AI。
  */
 private fun writeExportSummary(writer: BufferedWriter, scan: ExportScan) {
-    writer.write("${XDiagEnv.MARK} 导出摘要 ${XDiagEnv.MARK}")
+    writer.write("${XDiagEnv.MARK} export summary ${XDiagEnv.MARK}")
     writer.newLine()
-    writer.write("导出时间: ${XDiagEnv.stamp(System.currentTimeMillis())}")
+    writer.write("exported  : ${XDiagEnv.stamp(System.currentTimeMillis())}")
     writer.newLine()
     writer.write(
-        "脱敏    : 已逐行应用 XLogScrub;命中 ${scan.scrubbed} 行" +
-            "(这些行里含被替换成 ${XLogScrub.MASK} 的凭据)"
+        if (XLogScrub.ENABLED) {
+            "redaction : XLogScrub applied to every line; ${scan.scrubbed} line(s) hit " +
+                "(credentials in them were replaced with ${XLogScrub.MASK})"
+        } else {
+            // 如实写在文件开头:读者一眼就知道「这份是原样日志,可能带密钥」,不会误以为已脱敏。
+            "redaction : DISABLED - this file is the raw log, it may contain credentials " +
+                "such as API keys. Review it before sharing."
+        }
     )
     writer.newLine()
-    writer.write("总行数  : ${scan.lines}")
+    writer.write("lines     : ${scan.lines}")
     writer.newLine()
     // ⚠️ 此处**不能**写「以下为日志正文」:紧随其后的是文件自带的清单头,
     //    而清单头自己末尾才是那句「以下为日志正文」。两处都那么写会指错地方。
-    writer.write("${XDiagEnv.MARK} 以下为日志文件原文(已逐行脱敏) ${XDiagEnv.MARK}")
+    // ⚠️ 先算成 val,不要写成 `"…" + if (c) A else B + "…"` —— Kotlin 把那个表达式解析为
+    //    `if (c) A else (B + C)`,于是**真**分支会丢掉后面的尾巴。编译不报错,只在开关
+    //    打开时才看得出来(实测踩到过一次)。
+    val tail = if (XLogScrub.ENABLED) "redacted line by line" else "as-is"
+    writer.write("${XDiagEnv.MARK} raw log file follows ($tail) ${XDiagEnv.MARK}")
     writer.newLine()
     writer.newLine()
 }

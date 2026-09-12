@@ -21,6 +21,12 @@ import me.rerere.rikkahub.x.app.xAppLabel
  *
  * 故这里把「读日志前必须先知道的东西」集中成几行,由 [XLogcatCapture] 写在**捕获开始时**、
  * 导出时再补一段摘要。放在同一个对象里是为了让两处**同源** —— 分开写迟早会漂移。
+ *
+ * ## 为什么全用英文
+ *
+ * 这些字段是**日志的元数据**,不是界面文案:读者主要是日志分析工具与 AI,而它们处理英文键
+ * 更稳(避免编码/断词差异);混排中英还会让「冒号对齐」在不同宽度下散开。
+ * 界面文案走 `strings.xml`,与这里无关。
  */
 object XDiagEnv {
 
@@ -39,14 +45,14 @@ object XDiagEnv {
         val manufacturer = Build.MANUFACTURER ?: "unknown"
         val model = Build.MODEL ?: "unknown"
         return listOf(
-            "应用    : ${runCatching { app.xAppLabel() }.getOrDefault("RikkaHub X")} (${app.packageName})",
+            "app     : ${runCatching { app.xAppLabel() }.getOrDefault("RikkaHub X")} (${app.packageName})",
             // versionName 形如 `2.5.1+260912.598ce6d7` —— 已含构建日期与提交短号,
             // 故不必再单独取提交号(单一真源:build.gradle.kts 那边的 xBuildStamp)。
-            "版本    : ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-            "设备    : $manufacturer $model · Android ${Build.VERSION.SDK_INT} · $abi",
+            "version : ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            "device  : $manufacturer $model · Android ${Build.VERSION.SDK_INT} · $abi",
             // ⚠️ 这一项是刻意加的:实测日志里出现过两个 PID(本应用重启前后),
             //    若不点明自身 PID,读者会误读成「串了别的应用」。
-            "本进程  : PID ${Process.myPid()}",
+            "pid     : ${Process.myPid()}",
         )
     }
 
@@ -60,8 +66,8 @@ object XDiagEnv {
 
     /** 秒 → 人读的时长。清单头与结束标记共用,免得两处写法不一致。 */
     fun durationText(seconds: Double): String = when {
-        seconds >= 3600 -> String.format(Locale.US, "%.2f 小时", seconds / 3600)
-        seconds >= 60 -> String.format(Locale.US, "%.1f 分钟", seconds / 60)
-        else -> String.format(Locale.US, "%.1f 秒", seconds)
+        seconds >= 3600 -> String.format(Locale.US, "%.2f h", seconds / 3600)
+        seconds >= 60 -> String.format(Locale.US, "%.1f min", seconds / 60)
+        else -> String.format(Locale.US, "%.1f s", seconds)
     }
 }

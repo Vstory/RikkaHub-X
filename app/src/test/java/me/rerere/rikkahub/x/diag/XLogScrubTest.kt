@@ -20,6 +20,9 @@ import org.junit.Test
  * ② `Authorization: Bearer <长令牌>` 里令牌只被当「一个词」处理,主体留在后面;
  * ③ `secret_access_key` 的凭据词在中间、末尾是 `key`,不单列则整串都不匹配 ——
  *    而 AWS 密钥值**没有可识别前缀**,漏了就是真漏。
+ * ④ **「掩到行尾」在 JSON 载体上会把正文一起吃掉**(见下面那条用例)。这条是加了网络请求
+ *    记录之后才暴露的:同一个 `Authorization` 在 logcat 里独占一行,在网络日志里却与
+ *    请求体同处一行 —— 规则必须两种载体都对。
  */
 class XLogScrubTest {
 
@@ -39,11 +42,37 @@ class XLogScrubTest {
     // ────────────────────────────────────
 
     @Test
-    fun `authorization header masks to end of line`() {
+    fun `authorization header stops at quote, not end of line`() {
+        // 载体一:纯 logcat 行。没有引号 → 值一直掩到行尾(与改造前一致)。
         assertScrub(
             "Authorization: Bearer $JWT",
             "Authorization: ***",
-            "Authorization 后面整段都是凭据,应掩到行尾",
+            "logcat 行没有引号,整段都是凭据",
+        )
+        // 载体二:网络日志。同一行是**一整条 JSON** —— 掩到行尾会把请求正文一并吞掉,
+        // 而正文恰恰是最该留下的。值必须在引号处停。
+        assertScrub(
+            """{"headers":{"Authorization":"Bearer $JWT"},"body":"{\"prompt\":\"hi\"}"}""",
+            """{"headers":{"Authorization":"***"},"body":"{\"prompt\":\"hi\"}"}""",
+            "JSON 载体里正文必须活下来",
+        )
+    }
+
+    @Test
+    fun `cookies are masked in both directions`() {
+        // 会话令牌常放在 cookie 里,而 Authorization 规则管不到它。
+        assertScrub("Cookie: a=1; sessionid=deadbeef", "Cookie: ***", "请求带出去的 cookie")
+        assertScrub("Set-Cookie: sid=x; HttpOnly", "Set-Cookie: ***", "服务端下发的 cookie")
+        assertScrub(
+            """{"headers":{"Cookie":"sid=x"},"body":"keep me"}""",
+            """{"headers":{"Cookie":"***"},"body":"keep me"}""",
+            "JSON 载体里的 cookie 同样只掩值",
+        )
+        // 反向:不能被误伤 —— `charset` 里含 `set`,但不是 `Set-Cookie`。
+        assertScrub(
+            "Content-Type: application/json; charset=utf-8",
+            "Content-Type: application/json; charset=utf-8",
+            "charset 不该被 cookie 规则误伤",
         )
     }
 

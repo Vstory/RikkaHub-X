@@ -22,32 +22,32 @@ class XDiagEnvTest {
     @Test
     fun `duration switches unit at 60 seconds`() {
         // 边界本身:60.0 必须进「分钟」档(`>=`,不是 `>`)
-        assertEquals("恰好 60 秒应进分钟档", "1.0 分钟", XDiagEnv.durationText(60.0))
+        assertEquals("恰好 60 秒应进分钟档", "1.0 min", XDiagEnv.durationText(60.0))
         // 边界内侧:仍是秒
         assertTrue(
             "59.9 秒应留在秒档",
-            XDiagEnv.durationText(59.9).endsWith("秒"),
+            XDiagEnv.durationText(59.9).endsWith("s"),
         )
     }
 
     @Test
     fun `duration switches unit at one hour`() {
         // 边界本身:3600.0 必须进「小时」档
-        assertEquals("恰好 3600 秒应进小时档", "1.00 小时", XDiagEnv.durationText(3600.0))
+        assertEquals("恰好 3600 秒应进小时档", "1.00 h", XDiagEnv.durationText(3600.0))
         // 边界内侧:仍是分钟
         assertTrue(
             "3540 秒(59 分钟)应留在分钟档",
-            XDiagEnv.durationText(3540.0).endsWith("分钟"),
+            XDiagEnv.durationText(3540.0).endsWith("min"),
         )
     }
 
     @Test
     fun `duration formats short spans with one decimal`() {
-        assertEquals("0.0 秒", XDiagEnv.durationText(0.0))
-        assertEquals("45.2 秒", XDiagEnv.durationText(45.2))
+        assertEquals("0.0 s", XDiagEnv.durationText(0.0))
+        assertEquals("45.2 s", XDiagEnv.durationText(45.2))
         // ⚠️ 这条是手算时抓到我自己写错的断言:158.9 秒 ≥ 60,进的是**分钟**档,
         //    不是「158.9 秒」。留在这里当反例 —— 实测那份日志正是 158.9 秒。
-        assertEquals("158.9 秒应显示为分钟档", "2.6 分钟", XDiagEnv.durationText(158.9))
+        assertEquals("158.9 秒应显示为分钟档", "2.6 min", XDiagEnv.durationText(158.9))
     }
 
     @Test

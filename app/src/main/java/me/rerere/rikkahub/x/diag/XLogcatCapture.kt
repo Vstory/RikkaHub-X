@@ -75,6 +75,10 @@ object XLogcatCapture {
 
     private val lock = Any()
 
+    /** [install] 的幂等标志。 */
+    @Volatile
+    private var installed = false
+
     /** 当前会话;`null` = 未在捕获。 */
     @Volatile
     private var session: Session? = null
@@ -96,6 +100,7 @@ object XLogcatCapture {
         internal val linesAfterCap = AtomicLong(0L)
         internal val capped = AtomicBoolean(false)
 
+
         /** 已写入字节数。 */
         val bytes: Long get() = written.get()
 
@@ -115,7 +120,10 @@ object XLogcatCapture {
      */
     fun install(context: Context) {
         val app = context.applicationContext
-        XDiagnostics.attachCapture { enabled ->
+        // 幂等:重复调用不会重复注册(否则开关翻一次会起两个会话)。
+        if (installed) return
+        installed = true
+        XDiagnostics.addEnabledListener { enabled ->
             if (enabled) start(app) else stop()
         }
         // 开关在启动前就是「开」的(落盘读回来的)→ 立即开始。
@@ -213,7 +221,7 @@ object XLogcatCapture {
 
     /** 达到安全阀时写进日志文件的那一行 —— 让人一眼看到「后面没了」。 */
     internal const val CAP_MARKER =
-        "!!! [x-diag] 已达体积上限，后续应用日志未记录（文件到此为止）。见诊断页的『体积上限』状态。"
+        "!!! [x-diag] size cap reached, later log lines were not recorded (file ends here)."
 
     // ────────────────────────────────────
 
@@ -242,7 +250,7 @@ object XLogcatCapture {
                         drain(s, proc, out)
                     } finally {
                         // 结束标记放在 finally:捕获失败(异常)时也要留下「到此为止」的痕迹,
-                        // 否则读者无法判断这份是正常收尾还是被截断。
+                        // 否则读者会以为这份是正常收尾。
                         writeCaptureEnd(s, out)
                         runCatching { out.flush() }
                     }
@@ -338,18 +346,25 @@ object XLogcatCapture {
      */
     private fun writeCaptureHeader(s: Session, out: BufferedWriter, context: Context) {
         val lines = buildList {
-            add("${XDiagEnv.MARK} 清单头:本次捕获的自述 ${XDiagEnv.MARK}")
+            add("${XDiagEnv.MARK} capture info ${XDiagEnv.MARK}")
             addAll(XDiagEnv.appLines(context))
-            add("捕获开始: ${XDiagEnv.stamp(s.startedAt)}")
+            add("started : ${XDiagEnv.stamp(s.startedAt)}")
             // 措辞刻意避开「本文件…」:这一行会**跟着文件被导出**,而导出时已逐行脱敏 ——
             // 若写「本文件未脱敏」,它在导出物里就成了假话。改说「原始文件本身不脱敏」,
             // 那是关于原始文件的陈述,在两种载体里都成立。
-            add("脱敏    : 应用内导出时会逐行脱敏(原始文件本身不脱敏)")
-            add("体积上限: ${sizeText(s.maxBytes)}")
-            add("说明    : 本文件由应用自身读取本应用的 logcat 写入,因此只含本应用(及其进程内")
-            add("          框架)的日志,不含设备上其他应用。开头可能先出现 logd 缓冲区里")
-            add("          更早的内容(含上一次运行的痕迹),按时间顺序阅读即可。")
-            add("${XDiagEnv.MARK} 以下为日志正文 ${XDiagEnv.MARK}")
+            add(
+                "redaction: " + if (XLogScrub.ENABLED) {
+                    "applied line by line on in-app export"
+                } else {
+                    "DISABLED - exports are raw and may carry credentials such as API keys"
+                }
+            )
+            add("size cap: ${sizeText(s.maxBytes)}")
+            add("note    : written by the app itself from its own logcat, so it holds only this")
+            add("          app (plus its in-process framework logs), never other apps. Lines")
+            add("          before 'started' may come from the logd ring buffer, including the")
+            add("          previous run - read in time order.")
+            add("${XDiagEnv.MARK} log lines follow ${XDiagEnv.MARK}")
         }
         lines.forEach { out.write(it); out.newLine() }
         // 立刻落盘:头若留在缓冲里而进程马上被杀,就等于没写。
@@ -368,19 +383,21 @@ object XLogcatCapture {
         runCatching {
             out.newLine()
             out.write(
-                "${XDiagEnv.MARK} 捕获结束 ${XDiagEnv.stamp(now)} · 持续 " +
-                    "${XDiagEnv.durationText(seconds)} · ${s.lines} 行 / ${sizeText(s.bytes)} " +
+                "${XDiagEnv.MARK} capture ended ${XDiagEnv.stamp(now)} · lasted " +
+                    "${XDiagEnv.durationText(seconds)} · ${s.lines} lines / ${sizeText(s.bytes)} " +
                     "${XDiagEnv.MARK}"
             )
             out.newLine()
-            out.write(
-                "${XDiagEnv.MARK} 体积上限:" +
-                    if (s.isCapped) {
-                        "已达,超出未记录 ${s.droppedAfterCap} 行(行数统计因此不完整)"
-                    } else {
-                        "未达(未丢弃任何行)"
-                    } + " ${XDiagEnv.MARK}"
-            )
+            // ⚠️ 先算成 val:`"…" + if (c) A else B + "…"` 会被解析成 `if (c) A else (B + C)`,
+            //    于是**真**分支丢掉尾巴标记。编译不报错,只在「已达上限」时才看得出来 ——
+            //    而那条路径平时根本不走,属于最难发现的一类。
+            val capText = if (s.isCapped) {
+                "reached, ${s.droppedAfterCap} line(s) beyond it were not recorded " +
+                    "(so the line count is incomplete)"
+            } else {
+                "not reached (nothing dropped)"
+            }
+            out.write("${XDiagEnv.MARK} size cap: $capText ${XDiagEnv.MARK}")
             out.newLine()
         }
     }

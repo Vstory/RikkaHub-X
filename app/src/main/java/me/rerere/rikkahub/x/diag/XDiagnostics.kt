@@ -2,6 +2,7 @@
 package me.rerere.rikkahub.x.diag
 
 import me.rerere.rikkahub.x.diag.XLogRing.Level
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -92,15 +93,22 @@ object XDiagnostics {
     private var persist: ((Boolean) -> Unit)? = null
 
     /**
-     * 开关翻转时通知**日志捕获**的回调 —— 由 Android 侧接上（见 [attachCapture]）。
+     * 开关翻转时要通知的一方（实现方自己接上，见 [addEnabledListener]）。
      *
-     * 与 [persist] 分开、而不是让捕获模块自己来读开关:捕获是个会起子进程的副作用,
-     * 依赖「谁在什么时候读」不可靠 —— 开关翻转的**那一刻**才是准确的起停时机。
+     * ## 为什么是一个列表而不是单个回调
      *
-     * **可为 null**（JVM 单测里就是 null）：那时只有语义事件、没有 logcat 捕获,
-     * 与加入捕获之前的行为一致。
+     * 目前只有 logcat 捕获（[XLogcatCapture]）一个消费者;域文件落盘与上游请求日志
+     * 接入时也走这里。起初只有一个,故写成单个可空字段;眼下正要加第二个,若再添一个
+     * 字段,以后每加一个消费者就多一处「别忘了在这里也调一下」—— 那是最容易漏的地方。
+     *
+     * ## 为什么不让消费者自己来读开关
+     *
+     * 捕获会起子进程、请求记录会改 OkHttp 日志级别 —— 都是**副作用**,依赖「谁在什么时候读」
+     * 不可靠;开关翻转的**那一刻**才是准确的起停时机。
+     *
+     * 用 `CopyOnWriteArrayList`:注册发生在启动期,翻转发生在任意线程,而读多写极少。
      */
-    private var capture: ((Boolean) -> Unit)? = null
+    private val enabledListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
 
     /**
      * 启动期接上持久化，并把**上次的开关状态**读回来。
@@ -132,16 +140,19 @@ object XDiagnostics {
     }
 
     /**
-     * 接上日志捕获（见 [XLogcatCapture]）。
+     * 注册一个「开关翻转」的消费者。
      *
-     * 开关**打开**时捕获要开始、**关闭**时要结束 —— 故这里传的是翻转事件本身，
-     * 而不是让捕获模块轮询开关状态。
+     * 开关**打开**时它该开始、**关闭**时该结束 —— 故传的是翻转事件本身，
+     * 而不是让它轮询开关状态。
      *
-     * 捕获启停失败**不能**影响开关本身（用户要的是「开着」，捕获只是其中一个消费者）,
-     * 但也不能静默:记进关键失败留存,诊断页上能看到。
+     * 某个消费者起停失败**不能**影响开关本身（用户要的是「开着」，它只是其中一个消费者），
+     * 但也不能静默:记一条警告,诊断页上能看到。
+     *
+     * 幂等:同一个实例重复注册只会生效一次（`addIfAbsent` 按实例判等）。
+     * 这让各模块的 `install()` 可以放心地重复调用。
      */
-    fun attachCapture(onEnabledChanged: (Boolean) -> Unit) {
-        capture = onEnabledChanged
+    fun addEnabledListener(listener: (Boolean) -> Unit) {
+        enabledListeners.addIfAbsent(listener)
     }
 
     private val rings: Map<XDomain, XLogRing> =
@@ -174,14 +185,14 @@ object XDiagnostics {
                 )
             }
         }
-        // 日志捕获随开关起停。放在落盘之后:捕获失败要记的关键失败本身也要能落盘。
-        capture?.let { notify ->
+        // 各消费者随开关起停。放在落盘之后:起停失败要记的警告本身也得能落盘。
+        enabledListeners.forEach { notify ->
             runCatching { notify(enabled) }.onFailure { error ->
                 record(
                     domain = XDomain.CORE,
                     level = XLogRing.Level.WARN,
                     event = "diag.capture.toggle_fail",
-                    message = "日志捕获起停失败：" + error,
+                    message = "诊断消费者起停失败：" + error,
                     error = error,
                 )
             }

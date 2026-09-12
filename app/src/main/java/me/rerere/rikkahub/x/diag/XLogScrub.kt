@@ -22,6 +22,12 @@ package me.rerere.rikkahub.x.diag
  *   只会被按「一个词」处理,主体留在后面;
  * - 长厂商前缀必须早于短前缀(`sk-ant-` 先于 `sk-`),否则短规则吃掉长前缀的前一段、留下尾巴。
  *
+ * **②b 值必须在「引号/换行」处停,不能一律吃到行尾。** 这一条是准备接上游请求日志**时
+ * 才暴露的:`Authorization: Bearer x` 在 logcat 里确实独占一行,掩到行尾没问题;但请求日志里
+ * 同样一行是**一整条 JSON**(`{"headers":{"Authorization":"Bearer x"},"body":"…"}`),
+ * 掩到行尾会把**同一行的请求正文一起吞掉** —— 那正是最该留下的内容。
+ * 故这两条规则的值都收在 `[^"\r\n]*`:两种载体都对。
+ *
  * **② 值不能吃结构字符。** 值用 `[^\s&"'}\],;)]+` 而不是 `\S+` —— 否则
  * `{"api_key": "sk-x"}` 的收尾 `"}`、`?api_key=x&page=2` 的 `&page=2` 都会被一并吃掉。
  * (两处都是离线验算时才发现的。)
@@ -48,12 +54,33 @@ object XLogScrub {
      */
     private const val VALUE = "[^\\s&\"'}\\],;)]+"
 
+    /**
+     * 导出时是否应用脱敏。**当前为 `false`(暂时关闭)**。
+     *
+     * ## 为什么关掉
+     *
+     * 先把手头功能做完,隐私保护之后单独处理。开着它会把导出物里的凭据换成 [MASK],
+     * 而调试期经常正需要看到原文。关掉后导出物是**原样日志**。
+     *
+     * ## 关掉意味着什么(不是"以后再说的小事")
+     *
+     * 导出物里会**原样带着** `Authorization: Bearer <key>`、请求体里的 `api_key` 等。
+     * 而这个导出物的去向通常是**聊天/AI** —— 也就是把密钥交出去了。故:
+     * 分享前请自己过一眼;别把导出物提交进仓库(见下面那条注释)。
+     *
+     * ## 恢复办法
+     *
+     * 把这个常量改回 `true` 即可 —— 规则与单测都还在,`XLogScrubTest` 一直会跑。
+     */
+    const val ENABLED: Boolean = false
+
     private class Rule(val regex: Regex, val replacement: String)
 
     private val RULES: List<Rule> = listOf(
         // ① Authorization 头:后面整段都是凭据,掩到行尾。必须最先(见类注释 ①)。
+        // 值取到**行尾或最近的引号**为止,不能无条件吃到行尾 —— 见类注释 ②b。
         Rule(
-            Regex("(?i)(\\bauthorization\\b\\s*[=:]\\s*)(.*)"),
+            Regex("(?i)(\\bauthorization\\b[\"']?\\s*[=:]\\s*[\"']?)([^\"\\r\\n]*)"),
             "\$1" + MASK,
         ),
 
@@ -78,6 +105,14 @@ object XLogScrub {
 
         // ④ Bearer 令牌(可能不在 Authorization 头里:正文、URL、代码片段)。
         Rule(Regex("(?i)\\bBearer\\s+" + VALUE), "Bearer " + MASK),
+
+        // ④b Cookie 与 Set-Cookie。**这条是补记请求头/响应头时才加的** ——
+        //     会话令牌常放在 cookie 里,而 `Authorization` 规则管不到它。
+        //     两个方向都掩:`Cookie:` 是发出去的,`Set-Cookie:` 是服务端下发的。
+        Rule(
+            Regex("(?i)\\b(Set-Cookie|Cookie)([\"']?\\s*:\\s*[\"']?)([^\"\\r\\n]*)"),
+            "\$1\$2" + MASK,
+        ),
 
         // ⑤ 键值形式。凭据词紧贴分隔符(故 `token_count=5` 不匹配)、且后面不跟 s
         //    (故 `max_tokens=1000` 不匹配)。分隔符两侧允许引号,以覆盖 JSON。
