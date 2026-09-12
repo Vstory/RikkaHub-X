@@ -16,9 +16,11 @@ import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -31,8 +33,8 @@ import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
@@ -48,6 +50,11 @@ import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.utils.UiState
 import me.rerere.rikkahub.utils.UpdateChecker
 import me.rerere.rikkahub.x.chat.ChatDraftStore
+import me.rerere.rikkahub.x.chat.ConversationModelPickStore
+import me.rerere.rikkahub.x.chat.XChatEvents
+import me.rerere.rikkahub.x.chat.getConversationChatModel
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
 import java.util.Locale
 import kotlin.uuid.Uuid
 
@@ -75,6 +82,10 @@ class ChatVM(
     private val chatDraftStore = ChatDraftStore(context)
     private var draftDebounceJob: Job? = null
 
+    // [X-custom] 会话级模型选择的兜底持久化：新会话在首条消息之前不落库,
+    // 那次选择只活在内存里(空闲回收/进程退出即丢),故另存一份(见该类注释)。
+    private val modelPickStore = ConversationModelPickStore(context)
+
     val voiceSession = VoiceSessionController(viewModelScope, context::getString) {
         chatService.enqueueVoiceMessage(_conversationId, it)
     }
@@ -100,6 +111,10 @@ class ChatVM(
         // 初始化对话
         viewModelScope.launch {
             chatService.initializeConversation(_conversationId)
+            // [X-custom] 初始化之后补一次:新建会话尚未落库,库里没有会话级模型,
+            // 用持久化的上次选择补上(否则选好模型离开再回来,选择就丢了)。
+            // 必须排在本调用**之后** —— 否则会被上面的新建分支覆盖掉。
+            restoreModelPickIfNeeded()
         }
 
         // 记住对话ID, 方便下次启动恢复
@@ -154,8 +169,12 @@ class ChatVM(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 当前模型
-    val currentChatModel = settings.map { settings ->
-        settings.getCurrentChatModel()
+    // [X-custom] 与生成侧同源:会话级覆盖 → 会话绑定助手 → 全局默认。
+    // 原先读 getCurrentChatModel()(只看助手级/全局),只选了会话级模型时此处判为 null,
+    // 而 ChatService 与模型选择器都已认得它 —— 发送按钮的闸门正基于此处,
+    // 表现为「明明选了模型,点发送却说请先选择模型」。口径见 ConversationAssistantScope.kt。
+    val currentChatModel = combine(settings, conversation) { current, conv ->
+        current.getConversationChatModel(conv)
     }.stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     // 错误状态
@@ -214,6 +233,34 @@ class ChatVM(
                 conversationId = conversationId,
                 modelId = model.id
             )
+            // [X-custom] 会话尚未落库时,上面那条 UPDATE 是**静默 0 行**
+            // (saveConversation 的规则:新会话且为空时不保存) —— 只改内存,
+            // 空闲回收或进程退出即丢。故此处另存一份兜底。
+            if (!conversationRepo.existsConversationById(conversationId)) {
+                modelPickStore.save(conversationId, model.id)
+            }
+        }
+    }
+
+    /**
+     * [X-custom] 会话未落库时,用持久化的上次选择恢复会话级模型。
+     *
+     * 只在「会话不在库里」时参与 —— 一旦会话已落库,数据库就是权威,
+     * 同时把兜底数据清掉(避免无限累积)。模型若已被删除(provider 变更),
+     * `findModelById` 返回 null,**静默跳过** —— 与「不认识就忽略」的口径一致。
+     */
+    private suspend fun restoreModelPickIfNeeded() {
+        val picked = modelPickStore.load(_conversationId) ?: return
+        if (conversationRepo.existsConversationById(_conversationId)) {
+            modelPickStore.delete(_conversationId)
+            return
+        }
+        // 本次已经选好了(用户手速快,或上面保留了内存态) → 无需恢复
+        if (chatService.getConversationFlow(_conversationId).value.modelId != null) return
+        val model = settingsStore.settingsFlowRaw.first().findModelById(picked) ?: return
+        setChatModel(_conversationId, model)
+        XLog.info(XDomain.CHAT, XChatEvents.MODEL_PICK_RESTORED) {
+            "已恢复该会话上次选择的模型"
         }
     }
 

@@ -45,6 +45,14 @@ on:
       # 优先读取 / 会话切换消息保持 / 生成过程自动保存),此前整体不在守护范围内 ——
       # 改它不会触发本工作流,等于这些定制没有回归网。登记后其改动必过一遍 x 包守护测试。
       - 'app/src/main/java/me/rerere/rikkahub/service/ChatService.kt'
+      # 2026-09-12 补登:会话页与它的 VM 承载 X 的会话级模型定制(模型闸门口径、
+      # 初始化不再抹掉会话级模型)。此前整体不在守护范围内 —— 改它们不会触发本工作流,
+      # 而这些定制若被同步上游时冲掉,表现是「在会话里选了模型却发不出去」。
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt'
+      # 2026-09-12 补登:语音模式的模型闸门改用会话感知口径(原先读全局口径,只配了会话级
+      # 模型时会误报「请先选择聊天模型」)。该文件此前不含 X 定制,自此次改动起承载 X 行为。
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/chat/VoiceMode.kt'
   workflow_dispatch:
 
 permissions:

@@ -92,6 +92,7 @@ import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
 // [X-custom] 压缩执行健壮性(merge 上游时保留):.x 独立包,合并上游零冲突
 import me.rerere.rikkahub.x.chat.GenerationAutosave
+import me.rerere.rikkahub.x.chat.XChatEvents
 import me.rerere.rikkahub.x.compress.CompressBudget
 import me.rerere.rikkahub.x.compress.MAX_MERGE_ROUNDS
 import me.rerere.rikkahub.x.compress.chunkMessagesForCompress
@@ -99,6 +100,8 @@ import me.rerere.rikkahub.x.compress.chunkPlainTexts
 import me.rerere.rikkahub.x.compress.summarizeWithContextRetry
 import me.rerere.rikkahub.x.compress.truncateHeadUtf16Safe
 import me.rerere.rikkahub.x.context.ContextWindowRepository
+import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XLog
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -396,7 +399,25 @@ class ChatService(
                 assistantId = assistant.id,
                 newConversation = true
             ).updateCurrentMessages(assistant.presetMessages)
-            updateConversation(conversationId, newConversation)
+            // [X-custom] 本次新建**不得抹掉**内存态里已选的会话级模型。
+            //
+            // 本方法由 ChatVM.init 异步触发,而首次打开会话要等库打开回调跑完
+            // (解压分词词典 + 建 FTS) —— 用户在等待期间就可能已经点好模型。
+            // 此时若无条件用 Conversation.ofId(modelId 默认 null) 覆盖,那次选择会被抹掉:
+            // 发送时报「没有选择模型」,而助手未配默认模型时更是一条都发不出去。
+            //
+            // 对照:上面「会话已存在」分支本来就有同类守卫(hasInMemoryActivity) ——
+            // 那次是防 DB 旧版覆盖流式态,这次是防新建覆盖已选模型,同一个道理。
+            val pickedModelId = session.state.value.modelId
+            val seeded = if (pickedModelId != null) {
+                XLog.info(XDomain.CHAT, XChatEvents.MODEL_PICK_KEPT) {
+                    "新建会话保留了内存态已选模型"
+                }
+                newConversation.copy(modelId = pickedModelId)
+            } else {
+                newConversation
+            }
+            updateConversation(conversationId, seeded)
         }
     }
 
@@ -721,7 +742,14 @@ class ChatService(
             initialConversation.modelId          // 会话级覆盖
                 ?: assistant.chatModelId         // 助手级
                 ?: settings.chatModelId          // 全局默认
-        ) ?: throw IllegalStateException("No chat model selected")
+        ) ?: run {
+            // [X-custom] 这条失败以前只变成一句 "Message send failed",看不出原因;
+            // 而消息此时**已经落库**,用户看到的是「发出去了却永远没有回复」。
+            XLog.warn(XDomain.CHAT, XChatEvents.MODEL_NONE) {
+                "会话 / 助手 / 全局都没有可用的聊天模型,无法生成回复"
+            }
+            throw IllegalStateException("No chat model selected")
+        }
 
         val senderName = if (assistant.useAssistantAvatar) {
             assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }

@@ -75,7 +75,6 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.x.chat.getConversationAssistant
 import me.rerere.rikkahub.x.chat.getConversationChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedASRProvider
@@ -309,7 +308,7 @@ private fun ChatPageContent(
         onAttachmentAdded = { showFilesSheet = false },
     )
     val allowAudioVideoAttachments =
-        setting.getCurrentChatModel()?.findProvider(setting.providers) is ProviderSetting.Google
+        setting.getConversationChatModel(conversation)?.findProvider(setting.providers) is ProviderSetting.Google
 
     val completionProviders = remember(assistant.workspaceId, conversation.workspaceCwd, workspaceRepository) {
         assistant.workspaceId?.let { workspaceId ->
@@ -373,7 +372,7 @@ private fun ChatPageContent(
                     enableSearch = enableWebSearch,
                     onUpdateSearchMode = { mode ->
                         val current = setting.getCurrentAssistant()
-                        val model = setting.getCurrentChatModel()
+                        val model = setting.getConversationChatModel(conversation)
                         vm.updateSettings(
                             setting.copy(
                                 assistants = setting.assistants.map { assistant ->
