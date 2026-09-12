@@ -25,7 +25,13 @@ Guard 只管它自己列的文件),改它**不会触发任何工作流** —— 
    - 历史解析必须给出 4 段(时间/短号/架构/完整名);
 4. 清理的 `jq` 正则必须**同时**匹配新名与旧名(旧名要能被选中 → 才能被清理掉);
 5. 旧命名必须**解析不出** `key_of`(否则旧资产会被当成有效组而永留);
-6. 两处下载链接都必须把空格编码成 `%20`(不编码 → Markdown 链接被空格截断)。
+6. 产物名前缀必须**把空白折成一个点**。GitHub 在**上传时**就把资产名里的空格改写成点,
+   于是**按本地文件名拼出的链接必然 404**(2026-09-12 实测:nightly 页面「最新构建」
+   表格里那几个链接就是这么坏的,而「历史构建」那一段因为是从 API 的真实资产名反解、
+   反倒正常)。故正解是**提前做平台本就会做的改写**:本地名与真实资产名从一开始就一致,
+   链接直接拼即可 —— 断言两步都定义了同一个 `to_prefix`、且链接用裸文件名变量,
+   不再依赖 `%20` 编码。选折点而非去空格,是为了与已上传的历史资产格式一致。
+   ⚠️ 本判据此前恰好写反:它**要求**链接里有 `%20` —— 那正是 bug 本身。
 
 ## 用法
 
@@ -76,6 +82,10 @@ def main() -> int:
         m = re.search(rf'<string name="{res}">([^<]+)</string>', strings)
         return m.group(1).strip() if m else ""
 
+    def to_prefix(s: str) -> str:
+        """与工作流里的 `to_prefix()` 同义:去首尾空白,中间空白(含连续)折成一个点。"""
+        return re.sub(r"\s+", ".", s.strip())
+
     label_release, label_nightly = label_of("app_name"), label_of("app_name_nightly")
     if not label_release or not label_nightly:
         print("❌ 读不到 strings.xml 的 app_name / app_name_nightly —— 拒绝在错误前提上判定")
@@ -124,7 +134,9 @@ def main() -> int:
     key_expr, hist_expr, jq_expr = m_key.group(1), m_hist.group(1), m_jq.group(1)
 
     # ── 判据 3:真跑两个表达式 ──
-    for channel, prefix in (("nightly", label_nightly), ("release", label_release)):
+    for channel, label in (("nightly", label_nightly), ("release", label_release)):
+        # 产物名里的前缀是**空白折点**后的(见判据 6),样例名必须照此构造
+        prefix = to_prefix(label)
         if channel not in wf:
             fail(f"工作流里看不到渠道 {channel}")
             continue
@@ -148,27 +160,42 @@ def main() -> int:
     if sed_once(key_expr, legacy):
         fail(f"旧命名能被 key_of 解析出键({sed_once(key_expr, legacy)!r})—— 旧资产会被当成有效组而永留")
 
-    # ── 判据 6:链接的空格编码 ──
-    for label, needle in (("最新构建下载链接", "${BASE}/${f// /%20}"),
-                          ("历史构建下载链接", "${BASE}/${pfull// /%20}")):
-        if needle not in body_run:
-            fail(f"{label}没有把空格编码成 %20 —— 应用名含空格,链接会被截断")
+    # ── 判据 6:产物名前缀「空白折点」(否则下载链接必然 404) ──
+    #
+    # 实测 2026-09-12:GitHub 上传时把资产名里的空格改写成点
+    # (`RikkaHub X Nightly_….apk` → `RikkaHub.X.Nightly_….apk`)。按本地文件名拼出的
+    # 链接因此必然 404;而「历史构建」那一段是从 API 的真实资产名反解,反倒正常。
+    # 故正解是**提前做平台本就会做的改写**,而不是去编码空格。
+    collapse_needle = "s/[[:space:]]+/./g"
+    for step_name, step_text in (("重命名", rename_run), ("正文", body_run)):
+        if "to_prefix() {" not in step_text:
+            fail(f"{step_name}那一步没有定义 to_prefix —— 前缀没做空白折点,链接会与真实资产名不符")
+        if collapse_needle not in step_text:
+            fail(f"{step_name}那一步的 to_prefix 没把空白折成点(缺 `{collapse_needle}`)")
+        if 'LABEL_RELEASE="$(to_prefix' not in step_text:
+            fail(f"{step_name}那一步没有对 LABEL_RELEASE 调用 to_prefix")
+    for label, bad in (("最新构建", "${f// /%20}"), ("历史构建", "${pfull// /%20}")):
+        if bad in body_run:
+            fail(f"{label}链接仍在做空格编码({bad})—— 它永远对不上被平台改写后的资产名")
+    for label, good in (("最新构建", "${BASE}/${f}"), ("历史构建", "${BASE}/${pfull}")):
+        if good not in body_run:
+            fail(f"{label}链接没有直接使用裸文件名变量({good})")
 
     # ── 附加:正文里的文件名模板要与重命名一致 ──
     m_f = re.search(r'f="\$\{PREFIX\}_\$\{TS\}_\$\{abi\}_\$\{CHANNEL\}_\$\{SHA\}\.apk"', body_run)
     if not m_f:
         fail("正文里的产物名模板与重命名规则不一致(改了一处漏了另一处)")
 
-    print(f"产物命名自检:前缀「{label_release}」/「{label_nightly}」· "
+    print(f"产物命名自检:前缀「{to_prefix(label_release)}」/「{to_prefix(label_nightly)}」· "
           f"两渠道 × {len(ABIS)} 架构的样例名均能反解,旧命名{len(ABIS)} 个架构可被清理选中且解析不出键")
     if failures:
         print()
         for item in failures:
             print(f"  ❌ {item}")
         print()
-        print("  这五处必须同步改;daily-build.yml 不在任何 CI 的 paths 内,改了不会触发工作流。")
+        print("  产物命名规则散在多处,必须同步改;daily-build.yml 不在任何 CI 的 paths 内,改了不会触发工作流。")
         return 1
-    print("  ✅ 无问题(重命名 / 下载链接 / 历史解析 / 清理匹配 / 清理键 五处自洽)")
+    print("  ✅ 无问题(重命名 / 空白折点 / 下载链接 / 历史解析 / 清理匹配 / 清理键 六处自洽)")
     return 0
 
 
