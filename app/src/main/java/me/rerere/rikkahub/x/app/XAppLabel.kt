@@ -17,7 +17,9 @@ import me.rerere.rikkahub.R
  * 说明:这是 Android 框架查询、不是纯函数,故没有 JVM 单测 ——
  * 由产物核对(`aapt2 dump badging` 看 `application-label`)与真机确认。
  */
-fun Context.xAppLabel(): CharSequence {
+fun Context.xAppLabel(): String {
     val label = runCatching { packageManager.getApplicationLabel(applicationInfo) }.getOrNull()
-    return label?.takeIf { it.isNotBlank() } ?: getString(R.string.app_name)
+    // 返回 String 而非 CharSequence:Material3 的 Text 只接受 String / AnnotatedString,
+    // 用 CharSequence 会在调用点编译失败(返回类型一变,调用方不一定还能编过)。
+    return label?.takeIf { it.isNotBlank() }?.toString() ?: getString(R.string.app_name)
 }
