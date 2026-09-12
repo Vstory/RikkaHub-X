@@ -889,6 +889,9 @@
   <string name="diagnostic_export_redacted_desc">Saves to a file. Paths shortened and hashes masked, but it may still hold credentials — check it before sharing.</string>
   <string name="diagnostic_export_full">Export record (full)</string>
   <string name="diagnostic_export_full_desc">Keeps full paths and hashes. It may also hold credentials — check it before sharing.</string>
+  <string name="diagnostic_export_bundle">Export diagnostic bundle</string>
+  <string name="diagnostic_export_bundle_desc">Everything in one archive: the app log, every domain record and the network requests. Best for handing to an AI.</string>
+  <string name="diagnostic_export_bundle_none">Nothing recorded yet — turn the switch on above to start recording.</string>
   <string name="diagnostic_export_logcat">Export app log</string>
   <string name="diagnostic_export_logcat_desc">Full log of this app, upstream and framework logs included. Exported as-is with no masking, so it may contain credentials such as API keys — review it before sharing.</string>
   <string name="diagnostic_export_logcat_none">No log file yet — turn the switch on above to start recording.</string>

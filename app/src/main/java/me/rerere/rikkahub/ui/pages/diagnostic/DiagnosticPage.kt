@@ -52,6 +52,8 @@ import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.diag.XDiagClear
 import me.rerere.rikkahub.x.diag.XDiagEnv
+import me.rerere.rikkahub.x.diag.XDiagSession
+import me.rerere.rikkahub.x.diag.XDiagZip
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLogRing
@@ -128,12 +130,15 @@ fun DiagnosticPage() {
     var pending by remember { mutableStateOf<PendingExport?>(null) }
 
     // 走系统的「创建文档」让用户自己选存到哪。不再用剪贴板:它装不下完整日志,也留不下文件。
-    val saveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain")
-    ) { uri ->
+    //
+    // ⚠️ 位置选完之后真正落盘的那段**两个 launcher 共用**:MIME 只能在**构造时**定死,
+    //    而我们要两种(`text/plain` 给文本、`application/zip` 给压缩包)——
+    //    若只用一个通用 MIME,选文件时系统就不给对应的默认后缀,用户很容易存出一个
+    //    打不开的名字。故注册两个,落盘逻辑只写一份。
+    fun onPicked(uri: Uri?) {
         val payload = pending
         pending = null
-        if (uri == null || payload == null) return@rememberLauncherForActivityResult
+        if (uri == null || payload == null) return
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching { writeExport(context, uri, payload) }.getOrDefault(false)
@@ -147,11 +152,26 @@ fun DiagnosticPage() {
         }
     }
 
+    val saveText = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri -> onPicked(uri) }
+
+    val saveZip = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri -> onPicked(uri) }
+
+    /** 记下内容并弹出保存位置选择。带时间戳,多次导出不会互相覆盖。 */
+    fun exportZip(prefix: String, payload: PendingExport) {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(System.currentTimeMillis())
+        pending = payload
+        saveZip.launch("rikkahub-x-" + prefix + "-" + stamp + ".zip")
+    }
+
     /** 记下内容并弹出保存位置选择。带时间戳,多次导出不会互相覆盖。 */
     fun export(prefix: String, ext: String, payload: PendingExport) {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(System.currentTimeMillis())
         pending = payload
-        saveLauncher.launch("rikkahub-x-" + prefix + "-" + stamp + "." + ext)
+        saveText.launch("rikkahub-x-" + prefix + "-" + stamp + "." + ext)
     }
 
     // 捕获中时每秒刷新一次体积（见 tick 的注释）。enabled 变化时重启这个循环。
@@ -359,6 +379,21 @@ fun DiagnosticPage() {
                     title = { Text(stringResource(R.string.diagnostic_export_title)) },
                 ) {
                     item(
+                        headlineContent = { Text(stringResource(R.string.diagnostic_export_bundle)) },
+                        supportingContent = { Text(stringResource(R.string.diagnostic_export_bundle_desc)) },
+                        onClick = {
+                            // 停止之后也允许导出 —— 「先关掉开关,再把刚录的那段导出来」是很自然的顺序。
+                            val dir = XDiagSession.latest(context)
+                            // 写成 if/else 而不是 `hasContent(dir)` + `dir!!`:后者那个 `!!`
+                            // 是在向类型系统撒谎(内容非空不等于目录非 null),这里让它自然收窄。
+                            if (dir == null || !XDiagZip.hasContent(dir)) {
+                                toaster.show(message = context.getString(R.string.diagnostic_export_bundle_none))
+                            } else {
+                                exportZip("diag", PendingExport.SessionZip(dir))
+                            }
+                        },
+                    )
+                    item(
                         headlineContent = { Text(stringResource(R.string.diagnostic_export_redacted)) },
                         supportingContent = { Text(stringResource(R.string.diagnostic_export_redacted_desc)) },
                         onClick = {
@@ -463,10 +498,13 @@ fun DiagnosticPage() {
 /**
  * 待导出的内容。
  *
- * 分两种形态是必要的:诊断记录是一小段文本,而**应用日志可能有几百 MB** ——
- * 后者必须流式读文件、逐行处理,不能先拼成一个字符串(那样内存直接爆掉)。
+ * 分三种形态是必要的:诊断记录是一小段文本、会话目录是一堆文件、而**日志可能有几百 MB** ——
+ * 后两者必须流式处理,不能先拼成一个字符串(那样内存直接爆掉)。
  */
 private sealed interface PendingExport {
+    /** 整次会话:全部文件打进一个压缩包(见 [XDiagZip])。 */
+    data class SessionZip(val dir: File) : PendingExport
+
     /** 小段文本(诊断记录、失败详情)。 */
     data class Text(val text: String) : PendingExport
 
@@ -490,6 +528,11 @@ private fun writeExport(
     payload: PendingExport,
 ): Boolean = context.contentResolver.openOutputStream(uri)?.use { out ->
     when (payload) {
+        // 压缩包**不逐行过脱敏**(与文本导出一致:脱敏当前是关的),但包里放了一份清单
+        // 说清「这是原样导出、可能含凭据」—— 由 XDiagZip 写。
+        is PendingExport.SessionZip ->
+            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir)
+
         is PendingExport.Text -> {
             OutputStreamWriter(out, Charsets.UTF_8).use { it.write(payload.text) }
             true

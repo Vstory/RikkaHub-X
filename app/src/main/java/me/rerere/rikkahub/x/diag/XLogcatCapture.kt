@@ -55,7 +55,12 @@ object XLogcatCapture {
     private const val LOGCAT = "/system/bin/logcat"
 
     // 会话根目录与目录名前缀住在 XDiagSession —— 目录由它唯一创建(见该类注释)。
-    private const val LOG_NAME = "logcat.log"
+
+    /**
+     * 捕获文件名。**公开**：打包时的清单要按它判断「这是 logcat,不是某个域的文件」，
+     * 各处再各写一份字面量迟早漂移(改了一处、另一处静默失配)。
+     */
+    const val LOG_NAME = "logcat.log"
 
     /** 攒够这么多字节就 flush 一次;另有 [FLUSH_INTERVAL_MS] 兜住低速时段。 */
     private const val FLUSH_BYTES = 64 * 1024
