@@ -50,6 +50,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.x.diag.XDiagEnv
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLogRing
@@ -477,8 +478,15 @@ private fun writeExport(
             //
             // 脱敏用 XLogScrub(正则换掉凭据)、不用 XRedaction:后者是为 X 的事件文本写的
             // (缩路径、掩哈希),而 logcat 是任意文本,要防的是凭证泄漏。见 XLogScrub 的类注释。
-            BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
-                BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
+            //
+            // ⚠️ 先预扫一遍再写正文:摘要要落在**文件开头**(读者第一眼就该看到「脱敏跑了没、
+            //    跑了多少」),而命中数只有读完全文才知道 —— 单遍做不到这件事。
+            //    代价是两遍顺序读:实测单份日志是 KB 级可忽略;即便 200MB 的极端情况,
+            //    也多不过「让人对着文件猜脱敏有没有生效」的代价。
+            val scan = scanForExport(payload.file)
+            BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
+                writeExportSummary(writer, scan)
+                BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
                         writer.write(XLogScrub.scrub(line))
@@ -490,3 +498,51 @@ private fun writeExport(
         }
     }
 } ?: false
+
+/** 预扫结果:总行数、被脱敏器**实际改过**的行数。 */
+private class ExportScan(val lines: Long, val scrubbed: Long)
+
+/**
+ * 预扫一遍日志,取「导出摘要」要的两个数。
+ *
+ * 判「这一行被脱敏过」用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,
+ * 而不是另写一套规则去猜哪些行"应该"被掩。两套判据迟早会漂移。
+ */
+private fun scanForExport(file: File): ExportScan {
+    var lines = 0L
+    var scrubbed = 0L
+    BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { reader ->
+        while (true) {
+            val line = reader.readLine() ?: break
+            lines++
+            if (XLogScrub.scrub(line) != line) scrubbed++
+        }
+    }
+    return ExportScan(lines, scrubbed)
+}
+
+/**
+ * 导出摘要 —— 让「脱敏到底跑了没」**可被证伪**。
+ *
+ * 这是实测分析里点出的缺口之一:原先掩了凭据,但文件里一个字不说,读者无从判断。
+ * 现在若这一行写着「命中 0 行」而正文里明显挂着 `Authorization:`,那就是脱敏没生效 ——
+ * 一眼看得出来。**可被证伪比「静默地掩掉」有用得多。**
+ */
+private fun writeExportSummary(writer: BufferedWriter, scan: ExportScan) {
+    writer.write("${XDiagEnv.MARK} 导出摘要 ${XDiagEnv.MARK}")
+    writer.newLine()
+    writer.write("导出时间: ${XDiagEnv.stamp(System.currentTimeMillis())}")
+    writer.newLine()
+    writer.write(
+        "脱敏    : 已逐行应用 XLogScrub;命中 ${scan.scrubbed} 行" +
+            "(这些行里含被替换成 ${XLogScrub.MASK} 的凭据)"
+    )
+    writer.newLine()
+    writer.write("总行数  : ${scan.lines}")
+    writer.newLine()
+    // ⚠️ 此处**不能**写「以下为日志正文」:紧随其后的是文件自带的清单头,
+    //    而清单头自己末尾才是那句「以下为日志正文」。两处都那么写会指错地方。
+    writer.write("${XDiagEnv.MARK} 以下为日志文件原文(已逐行脱敏) ${XDiagEnv.MARK}")
+    writer.newLine()
+    writer.newLine()
+}

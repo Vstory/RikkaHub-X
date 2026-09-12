@@ -166,7 +166,12 @@ object XLogcatCapture {
         }
 
         val logFile = File(dir, LOG_NAME)
-        val s = Session(dir = dir, logFile = logFile, startedAt = System.currentTimeMillis(), maxBytes = DEFAULT_MAX_BYTES)
+        val s = Session(
+            dir = dir,
+            logFile = logFile,
+            startedAt = System.currentTimeMillis(),
+            maxBytes = DEFAULT_MAX_BYTES,
+        )
 
         val proc = try {
             ProcessBuilder(listOf(LOGCAT, "-v", "threadtime")).redirectErrorStream(true).start()
@@ -181,7 +186,10 @@ object XLogcatCapture {
         }
 
         session = s
-        Thread({ runSession(s, proc) }, "x-logcat-capture").apply { isDaemon = true }.start()
+        // applicationContext 交给捕获线程:清单头要取应用名,而那是 PackageManager 查询,
+        // 不该压在 Application.onCreate 的主线程上(这条路径的目标是「启动尽量别变慢」)。
+        val app = context.applicationContext
+        Thread({ runSession(s, proc, app) }, "x-logcat-capture").apply { isDaemon = true }.start()
         return s
     }
 
@@ -209,7 +217,7 @@ object XLogcatCapture {
 
     // ────────────────────────────────────
 
-    private fun runSession(s: Session, proc: Process) {
+    private fun runSession(s: Session, proc: Process, context: Context) {
         try {
             FileOutputStream(s.logFile, /* append = */ true).use { fos ->
                 BufferedWriter(OutputStreamWriter(fos, Charsets.UTF_8), FLUSH_BYTES).use { out ->
@@ -227,8 +235,17 @@ object XLogcatCapture {
                         runCatching { proc.destroyForcibly() }
                     }, "x-logcat-capture-watchdog").apply { isDaemon = true }.start()
 
-                    drain(s, proc, out)
-                    runCatching { out.flush() }
+                    // 头**先写**:它要在任何一行日志之前落盘 —— 这样即使进程随后被强杀,
+                    // 「这是什么、从哪开始」也还在。反过来(导出时补)就丢掉了当时的设备/版本。
+                    writeCaptureHeader(s, out, context)
+                    try {
+                        drain(s, proc, out)
+                    } finally {
+                        // 结束标记放在 finally:捕获失败(异常)时也要留下「到此为止」的痕迹,
+                        // 否则读者无法判断这份是正常收尾还是被截断。
+                        writeCaptureEnd(s, out)
+                        runCatching { out.flush() }
+                    }
                 }
             }
         } catch (e: Throwable) {
@@ -302,6 +319,69 @@ object XLogcatCapture {
                     lastFlush = now
                 }
             }
+        }
+    }
+
+    /**
+     * 清单头:这次捕获的**自述**。
+     *
+     * ## 它解决什么
+     *
+     * 真机实测(2026-09-12)里,一份 1232 行的日志**没有任何自我描述** —— 读者只能猜版本、设备,
+     * 更关键的是**猜不出「这份是不是完整的」**。而那份日志里还出现了**两个 PID**,不知情者会
+     * 以为串了别的应用,实际是「本应用重启前后」。
+     *
+     * ## 为什么写在文件头而不是导出时补
+     *
+     * 导出可能发生在另一次运行里(甚至另一个进程) —— 那时再取设备/版本,拿到的是**当时的**,
+     * 不是产生这份日志时的。写在头里则与内容同源同时。
+     */
+    private fun writeCaptureHeader(s: Session, out: BufferedWriter, context: Context) {
+        val lines = buildList {
+            add("${XDiagEnv.MARK} 清单头:本次捕获的自述 ${XDiagEnv.MARK}")
+            addAll(XDiagEnv.appLines(context))
+            add("捕获开始: ${XDiagEnv.stamp(s.startedAt)}")
+            // 措辞刻意避开「本文件…」:这一行会**跟着文件被导出**,而导出时已逐行脱敏 ——
+            // 若写「本文件未脱敏」,它在导出物里就成了假话。改说「原始文件本身不脱敏」,
+            // 那是关于原始文件的陈述,在两种载体里都成立。
+            add("脱敏    : 应用内导出时会逐行脱敏(原始文件本身不脱敏)")
+            add("体积上限: ${sizeText(s.maxBytes)}")
+            add("说明    : 本文件由应用自身读取本应用的 logcat 写入,因此只含本应用(及其进程内")
+            add("          框架)的日志,不含设备上其他应用。开头可能先出现 logd 缓冲区里")
+            add("          更早的内容(含上一次运行的痕迹),按时间顺序阅读即可。")
+            add("${XDiagEnv.MARK} 以下为日志正文 ${XDiagEnv.MARK}")
+        }
+        lines.forEach { out.write(it); out.newLine() }
+        // 立刻落盘:头若留在缓冲里而进程马上被杀,就等于没写。
+        runCatching { out.flush() }
+    }
+
+    /**
+     * 结束标记:让「这份日志到哪为止」**自证**。
+     *
+     * 与 [CAP_MARKER] 的分工:那条是**达上限那一刻**写在正文里的,这条是**收尾时**写在末尾的。
+     * 前者回答「后面为什么没了」,后者回答「这份什么时候结束的、有没有丢行」。
+     */
+    private fun writeCaptureEnd(s: Session, out: BufferedWriter) {
+        val now = System.currentTimeMillis()
+        val seconds = (now - s.startedAt) / 1000.0
+        runCatching {
+            out.newLine()
+            out.write(
+                "${XDiagEnv.MARK} 捕获结束 ${XDiagEnv.stamp(now)} · 持续 " +
+                    "${XDiagEnv.durationText(seconds)} · ${s.lines} 行 / ${sizeText(s.bytes)} " +
+                    "${XDiagEnv.MARK}"
+            )
+            out.newLine()
+            out.write(
+                "${XDiagEnv.MARK} 体积上限:" +
+                    if (s.isCapped) {
+                        "已达,超出未记录 ${s.droppedAfterCap} 行(行数统计因此不完整)"
+                    } else {
+                        "未达(未丢弃任何行)"
+                    } + " ${XDiagEnv.MARK}"
+            )
+            out.newLine()
         }
     }
 
