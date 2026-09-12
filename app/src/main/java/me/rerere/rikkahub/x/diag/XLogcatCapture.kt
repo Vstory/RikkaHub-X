@@ -131,6 +131,22 @@ object XLogcatCapture {
     fun isRunning(): Boolean = session != null
 
     /**
+     * 最近一次会话的日志文件 —— **即使当前未在捕获**。
+     *
+     * 停止之后仍然要能导出:用户很自然会「先关掉开关，再把刚录的那段导出来」,
+     * 若只在运行中可取,那段现场等于白录。会话目录名带时间戳,故按名字取最大即最近一次。
+     */
+    fun latestLogFile(context: Context): File? {
+        current()?.let { return it.logFile }
+        val root = File(context.filesDir, ROOT_DIR)
+        return root.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith(SESSION_PREFIX) }
+            ?.maxByOrNull { it.name }
+            ?.let { File(it, LOG_NAME) }
+            ?.takeIf { it.isFile && it.length() > 0L }
+    }
+
+    /**
      * 开始捕获。已在捕获则原样返回当前会话(幂等 —— 重复开不会产生两个 logcat 进程)。
      */
     fun start(context: Context): Session? = synchronized(lock) {

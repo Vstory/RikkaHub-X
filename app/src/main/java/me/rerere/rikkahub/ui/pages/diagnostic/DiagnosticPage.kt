@@ -1,8 +1,9 @@
 package me.rerere.rikkahub.ui.pages.diagnostic
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,13 +29,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
+import java.io.BufferedReader
+import java.io.BufferedWriter
+import java.io.File
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
@@ -45,44 +53,57 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
 import me.rerere.rikkahub.x.diag.XLogRing
-import me.rerere.rikkahub.x.diag.XLogcatProbe
+import me.rerere.rikkahub.x.diag.XLogcatCapture
+import me.rerere.rikkahub.x.diag.XRedaction
 
 /**
- * X 定制诊断页。
+ * 诊断页 —— **本应用的**运行记录与完整日志。
  *
  * ## 它解决什么问题
  *
- * X 的功能都在上游代码的夹缝里（存储层、压缩、容量表、同步…），出问题时**没有办法在现场取证**：
- * 用户能拿到的只有「不好使」三个字。本页把 X 自己的运行记录摊开，让用户当场看到
- * 「账本记了多少条、去重命中几次、哪一步失败了」，并能一键复制出来。
+ * X 的功能都长在上游代码的夹缝里（存储层、压缩、容量表、同步…），出问题时**没有办法在现场取证**：
+ * 用户能拿到的往往只有「不好使」三个字。本页把现场摊开，让用户当场看到发生了什么，
+ * 并**导出一个文件**交给开发者。
  *
- * ## 为什么和上游的日志页不合并
+ * ## 覆盖面:整个应用,而不是只有 X（2026-09-12 纠偏）
  *
- * 上游那个页读的是 logcat，是**全量**系统日志，几千行里翻 X 的几行不现实；
- * 而这里只装 X 自己的事件，且**关掉开关时一条不记**（见 [XDiagnostics] 的开关语义）。
- * 两者互补而非重复：本页看「X 做了什么」，上游页看「系统发生了什么」。
+ * 早先这页只记 X 定制自己的语义事件，注释里甚至写着「本页看『X 做了什么』，
+ * 上游页看『系统发生了什么』」。**那个划分是错的** —— 真机实测（2026-09-12）证明
+ * 零权限就能读到本 UID 的全部日志，也就是**整个应用做过什么本来就能拿到**。
+ * 于是现在有两层:
+ *
+ * | 层 | 来源 | 覆盖 |
+ * |---|---|---|
+ * | 广度 | [XLogcatCapture] | 上游 206 处 `Log.*` + 框架日志（OkHttp/Room/Coil/Compose）+ 崩溃栈 + 本进程内的 OEM 框架日志 |
+ * | 深度 | [XDiagnostics] | logcat 表达不出来的:去重命中数、字节数、阶段耗时、关键失败留存 |
+ *
+ * 只看 X 那几十处埋点，等于把「应用实际做了什么」丢掉了一大半。
+ *
+ * ## 导出为什么是文件而不是剪贴板
+ *
+ * 完整日志有几十到几百 MB，**剪贴板装不下**，而且剪贴板留不下东西 —— 用户还得再找地方粘贴。
+ * 现在点一下走系统的「创建文档」，用户自己选存到哪（下载目录、文件管理器任意位置）。
+ * 应用日志在写出前**逐行脱敏**（文件本身不脱敏，交给用户时才过一遍）。
  *
  * ## 数据从哪来
  *
  * 直接读 [XDiagnostics] —— 它是进程内单例，不是 Flow。只有本页会改它（开关、清空），
  * 故用一个本地版本号触发重读即可，不必为它引入状态流（那会让每次埋点都走一次 Flow 派发）。
+ * 捕获体积是唯一会持续变化的量，另用一个每秒 +1 的 tick 驱动刷新。
  */
 @Composable
 fun DiagnosticPage() {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val toaster = LocalToaster.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scope = rememberCoroutineScope()
 
-    // 本地版本号：开关与清空之后 +1，以下所有快照随之重算
+    // 本地版本号：开关与清空之后 +1，以下所有快照随之重算。
+    // tick 是另一回事 —— 日志体积会持续增长，靠它每秒 +1 让页面上的数字跟着动，
+    // 否则「看得见体积」只是句空话。
     var revision by remember { mutableIntStateOf(0) }
+    var tick by remember { mutableIntStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
-
-    // ⚠️ 临时（logcat 自读验证 spike）—— 验完与本文件末尾那张卡片、
-    // 以及 XLogcatProbe.kt 一起删除。
-    val probeScope = rememberCoroutineScope()
-    var probing by remember { mutableStateOf(false) }
-    var probeSummary by remember { mutableStateOf<String?>(null) }
 
     val enabled = remember(revision) { XDiagnostics.isEnabled() }
     val total = remember(revision) { XDiagnostics.totalCount() }
@@ -95,10 +116,47 @@ fun DiagnosticPage() {
     // 命令与 tag 都来自同一处常量，不会出现「照着敲却一条看不到」
     val logcatHint = remember { XDiagnostics.logcatHint() }
     val sticky = remember(revision) { XDiagnostics.stickyFailure() }
+    val capture = remember(revision, tick) { XLogcatCapture.current() }
+    val captureFile = remember(revision, tick) { XLogcatCapture.latestLogFile(context) }
 
-    fun copy(text: String) {
-        clipboard.setText(AnnotatedString(text))
-        toaster.show(message = context.getString(R.string.diagnostic_copied), type = ToastType.Success)
+    val filesRoot = remember(context) { context.filesDir.absolutePath }
+
+    // 待导出的内容。先记下内容、再让用户挑保存位置 —— 反过来会先去算一遍内容（可能很大）。
+    var pending by remember { mutableStateOf<PendingExport?>(null) }
+
+    // 走系统的「创建文档」让用户自己选存到哪。不再用剪贴板:它装不下完整日志,也留不下文件。
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val payload = pending
+        pending = null
+        if (uri == null || payload == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { writeExport(context, uri, payload, filesRoot) }.getOrDefault(false)
+            }
+            toaster.show(
+                message = context.getString(
+                    if (ok) R.string.diagnostic_export_done else R.string.diagnostic_export_failed
+                ),
+                type = if (ok) ToastType.Success else ToastType.Error,
+            )
+        }
+    }
+
+    /** 记下内容并弹出保存位置选择。带时间戳,多次导出不会互相覆盖。 */
+    fun export(prefix: String, ext: String, payload: PendingExport) {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(System.currentTimeMillis())
+        pending = payload
+        saveLauncher.launch("rikkahub-x-" + prefix + "-" + stamp + "." + ext)
+    }
+
+    // 捕获中时每秒刷新一次体积（见 tick 的注释）。enabled 变化时重启这个循环。
+    LaunchedEffect(enabled) {
+        while (true) {
+            delay(1000)
+            if (XLogcatCapture.isRunning()) tick += 1
+        }
     }
 
     Scaffold(
@@ -142,8 +200,16 @@ fun DiagnosticPage() {
                                 )
                             },
                             trailingContent = {
-                                TextButton(onClick = { copy(failure.detail ?: failure.message) }) {
-                                    Text(stringResource(R.string.diagnostic_sticky_copy))
+                                TextButton(
+                                    onClick = {
+                                        val detail = failure.detail ?: failure.message
+                                        export(
+                                            "failure", "txt",
+                                            PendingExport.Text(XRedaction.redact(detail, filesRoot)),
+                                        )
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.diagnostic_sticky_export))
                                 }
                             },
                         )
@@ -167,6 +233,47 @@ fun DiagnosticPage() {
                                     revision += 1
                                 },
                             )
+                        },
+                    )
+                }
+            }
+
+            // ── 应用日志捕获 ──
+            //
+            // 放在开关之后、概况之前:它回答的是「除了上面那些语义事件,应用本身还发生了什么」。
+            // 这一层是 2026-09-12 之后才有的 —— 此前本页只看得到 X 自己的埋点。
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text(stringResource(R.string.diagnostic_capture_title)) },
+                ) {
+                    item(
+                        headlineContent = {
+                            Text(
+                                stringResource(
+                                    if (capture != null) R.string.diagnostic_capture_running
+                                    else R.string.diagnostic_capture_stopped
+                                )
+                            )
+                        },
+                        supportingContent = {
+                            Column {
+                                val size = capture?.bytes ?: (captureFile?.length() ?: 0L)
+                                val lines = capture?.lines ?: 0L
+                                Text(
+                                    stringResource(
+                                        R.string.diagnostic_capture_size,
+                                        XLogcatCapture.sizeText(size),
+                                        lines,
+                                    )
+                                )
+                                if (capture?.isCapped == true) {
+                                    Text(
+                                        text = stringResource(R.string.diagnostic_capture_capped),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
                         },
                     )
                 }
@@ -234,39 +341,41 @@ fun DiagnosticPage() {
                     title = { Text(stringResource(R.string.diagnostic_export_title)) },
                 ) {
                     item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_copy_redacted)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_copy_redacted_desc)) },
+                        headlineContent = { Text(stringResource(R.string.diagnostic_export_redacted)) },
+                        supportingContent = { Text(stringResource(R.string.diagnostic_export_redacted_desc)) },
                         onClick = {
-                            val text = XDiagnostics.dumpMerged(
-                                full = false,
-                                filesRoot = context.filesDir.absolutePath,
-                            )
+                            val text = XDiagnostics.dumpMerged(full = false, filesRoot = filesRoot)
                             if (text == XDiagnostics.EMPTY_DUMP) {
                                 toaster.show(message = context.getString(R.string.diagnostic_summary_empty))
                             } else {
-                                copy(text)
+                                export("diag", "txt", PendingExport.Text(text))
                             }
                         },
                     )
                     item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_copy_full)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_copy_full_desc)) },
+                        headlineContent = { Text(stringResource(R.string.diagnostic_export_full)) },
+                        supportingContent = { Text(stringResource(R.string.diagnostic_export_full_desc)) },
                         onClick = {
-                            val text = XDiagnostics.dumpMerged(
-                                full = true,
-                                filesRoot = context.filesDir.absolutePath,
-                            )
+                            val text = XDiagnostics.dumpMerged(full = true, filesRoot = filesRoot)
                             if (text == XDiagnostics.EMPTY_DUMP) {
                                 toaster.show(message = context.getString(R.string.diagnostic_summary_empty))
                             } else {
-                                copy(text)
+                                export("diag-full", "txt", PendingExport.Text(text))
                             }
                         },
                     )
                     item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_copy_logcat)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_copy_logcat_desc)) },
-                        onClick = { copy(logcatHint) },
+                        headlineContent = { Text(stringResource(R.string.diagnostic_export_logcat)) },
+                        supportingContent = { Text(stringResource(R.string.diagnostic_export_logcat_desc)) },
+                        onClick = {
+                            // 停止之后也允许导出 —— 用户很自然会「先关掉开关,再把刚录的那段导出来」。
+                            val file = XLogcatCapture.latestLogFile(context)
+                            if (file == null) {
+                                toaster.show(message = context.getString(R.string.diagnostic_export_logcat_none))
+                            } else {
+                                export("logcat", "log", PendingExport.LogcatFile(file))
+                            }
+                        },
                     )
                 }
             }
@@ -278,44 +387,6 @@ fun DiagnosticPage() {
                         headlineContent = { Text(stringResource(R.string.diagnostic_clear)) },
                         supportingContent = { Text(stringResource(R.string.diagnostic_clear_desc)) },
                         onClick = { confirmClear = true },
-                    )
-                }
-            }
-
-            // ⚠️ 临时：logcat 自读验证（spike）。见 XLogcatProbe 的类注释。
-            // 它回答的是「诊断框架能否靠 logcat 白捡上游与框架日志」，
-            // 从而决定后面是「插桩为主」还是「捕获为主」。验完整块删除。
-            item {
-                CardGroup(
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    title = { Text("⚠️ 临时探针（验完删除）") },
-                ) {
-                    item(
-                        headlineContent = {
-                            Text(if (probing) "正在读取 logcat…" else "验证 logcat 自读")
-                        },
-                        supportingContent = {
-                            Text(
-                                probeSummary
-                                    ?: "读取本进程的 logcat（一次性 dump + 崩溃缓冲 + 限时流读），结果复制到剪贴板"
-                            )
-                        },
-                        onClick = {
-                            if (!probing) {
-                                probing = true
-                                probeScope.launch {
-                                    val declared = declaresReadLogs(context)
-                                    val report = withContext(Dispatchers.IO) {
-                                        XLogcatProbe.run(declared).report()
-                                    }
-                                    probeSummary = report.lineSequence().firstOrNull {
-                                        it.startsWith("✅") || it.startsWith("❌") || it.startsWith("⚠️")
-                                    }
-                                    copy(report)
-                                    probing = false
-                                }
-                            }
-                        },
                     )
                 }
             }
@@ -365,15 +436,54 @@ fun DiagnosticPage() {
 }
 
 /**
- * ⚠️ 临时（随探针一起删除）：Manifest 里是否声明了 `READ_LOGS`。
+ * 待导出的内容。
  *
- * 报告里要如实体现代码的声明状态：本次验证的正是「不声明也能读自己 UID 的日志」，
- * 若哪天有人误加了该权限声明，结论会变得不可解释 —— 所以这一项必须打出来。
+ * 分两种形态是必要的:诊断记录是一小段文本,而**应用日志可能有几百 MB** ——
+ * 后者必须流式读文件、逐行处理,不能先拼成一个字符串(那样内存直接爆掉)。
  */
-@Suppress("DEPRECATION")
-private fun declaresReadLogs(context: Context): Boolean = runCatching {
-    context.packageManager
-        .getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
-        .requestedPermissions
-        ?.contains(Manifest.permission.READ_LOGS) == true
-}.getOrDefault(false)
+private sealed interface PendingExport {
+    /** 小段文本(诊断记录、失败详情)。 */
+    data class Text(val text: String) : PendingExport
+
+    /**
+     * 应用日志文件。
+     *
+     * ⚠️ 原文件是**未脱敏**的(捕获时不做脱敏:那是热路径,而且文件本身在应用私有目录)。
+     * 交出去之前必须逐行过一遍 [XRedaction] —— 导出物的去向是聊天/AI,带出一个凭证就是泄漏。
+     */
+    data class LogcatFile(val file: File) : PendingExport
+}
+
+/**
+ * 把待导出内容写进用户选定的位置。
+ *
+ * @return 是否真的写出了内容。`false` 意味着没能打开目标(极少见:权限或存储问题)。
+ */
+private fun writeExport(
+    context: Context,
+    uri: Uri,
+    payload: PendingExport,
+    filesRoot: String,
+): Boolean = context.contentResolver.openOutputStream(uri)?.use { out ->
+    when (payload) {
+        is PendingExport.Text -> {
+            OutputStreamWriter(out, Charsets.UTF_8).use { it.write(payload.text) }
+            true
+        }
+
+        is PendingExport.LogcatFile -> {
+            // 逐行:读一行 → 脱敏一行 → 写一行。内存占用与文件大小无关,
+            // 故几百 MB 的日志也能导出而不会 OOM。
+            BufferedReader(InputStreamReader(payload.file.inputStream(), Charsets.UTF_8)).use { reader ->
+                BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        writer.write(XRedaction.redact(line, filesRoot, full = false))
+                        writer.newLine()
+                    }
+                }
+            }
+            true
+        }
+    }
+} ?: false
