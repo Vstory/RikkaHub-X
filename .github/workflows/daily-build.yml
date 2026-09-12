@@ -255,21 +255,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'nightly' }}"
-          if [ "$BUILD_TYPE" != "release" ]; then
-            {
-              echo "tag=nightly"
-              echo "name=Nightly Build"
-              echo "prerelease=true"
-              echo "make_latest=false"
-              echo "is_nightly=true"
-              echo "channel=nightly"
-              echo "version="
-            } >> "$GITHUB_OUTPUT"
-            echo "nightly → 固定 tag nightly（预发布，随机临时签名）"
-            exit 0
-          fi
 
-          # tag 固定，但页面要显示当前版本，故仍从**构建产物**读 versionName（权威）。
+          # 从**构建产物**读 versionName（权威）—— 两条渠道都要读，故两页显示的都是**本次构建
+          # 产物自己的**版本号。versionName 形如 `2.5.1+<构建日期>.<提交短号>`，短号取自本次
+          # 检出的 HEAD，故用不同代码构建时两页的版本号天然不同，不会互相覆盖。
           APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk 2>/dev/null | head -1)"
           AAPT2="$(command -v aapt2 || true)"
           for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
@@ -288,6 +277,20 @@ jobs:
             echo "⚠️ aapt2 不可用或找不到产物，versionName 改从 app/build.gradle.kts 读取: ${FULL}"
           fi
           echo "版本: ${FULL:-（读不到）}"
+          if [ "$BUILD_TYPE" != "release" ]; then
+            {
+              echo "tag=nightly"
+              echo "name=Nightly Build"
+              echo "prerelease=true"
+              echo "make_latest=false"
+              echo "is_nightly=true"
+              echo "channel=nightly"
+              echo "version=${FULL}"
+            } >> "$GITHUB_OUTPUT"
+            echo "nightly → 固定 tag nightly（预发布，随机临时签名）"
+            exit 0
+          fi
+
 
           {
             echo "tag=release"
@@ -411,11 +414,6 @@ jobs:
               echo "> [!CAUTION]"
               echo "> **本页面为自动构建的开发测试版,功能不稳定,仅供开发者测试功能使用,请勿下载。**"
               echo
-              # 链接文字用短号（与 APK 里的 versionName、产物文件名末尾的短号一致，
-              # 便于肉眼对照），链接目标仍是完整 SHA —— 点开即看是哪次提交。
-              echo "自动构建 · commit [\`${SHA}\`](https://github.com/${REPO}/commit/${{ github.sha }})"
-              echo
-              echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             else
               # Release Build：签名固定、可覆盖升级，但仍是派生自用版本，不声称稳定。
               # 与 nightly 的声明保持同一句式（定位 → 状态 → 适用 → 禁令），只换四个词：
@@ -424,10 +422,15 @@ jobs:
               echo "> [!CAUTION]"
               echo "> **本页面为自动构建的尝鲜版,功能仍在快速迭代,仅供尝鲜体验,请勿用于重要场景。**"
               echo
-              echo "自动构建 · \`${VERSION}\` · commit [\`${SHA}\`](https://github.com/${REPO}/commit/${{ github.sha }})"
-              echo
-              echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             fi
+            echo
+            # 「版本 · commit」行两页完全相同（格式对称）—— 链接文字用短号（与 APK 里的
+            # versionName、产物文件名末尾的短号一致，便于肉眼对照），链接目标仍是完整 SHA，
+            # 点开即看是哪次提交。版本号取自**本次构建产物**，故用不同代码构建时两页的值
+            # 天然不同，不会互相覆盖（同码构建则相同，那也是对的：本就是同一份代码）。
+            echo "自动构建 · \`${VERSION}\` · commit [\`${SHA}\`](https://github.com/${REPO}/commit/${{ github.sha }})"
+            echo
+            echo "## 📥 最新构建 · ${PRETTY}(北京时间)"
             echo
             echo "| 架构 | 适用 | 下载 |"
             echo "|---|---|---|"
