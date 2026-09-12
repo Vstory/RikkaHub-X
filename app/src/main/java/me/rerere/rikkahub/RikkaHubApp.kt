@@ -40,6 +40,7 @@ import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
 import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
+import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.WorkspaceManager
@@ -65,11 +66,14 @@ class RikkaHubApp : Application() {
         //   ① 开关状态**同步读回** —— 本项目最需要取证的恰恰是**启动期**的事(存量回填在开机时跑、
         //      启动健壮性查的就是「打不开 App」),而开关若活不过启动期,那批日志永远不会被记录。
         //      (详见 DiagnosticSwitchStore 的类注释 —— 那里记着这条硬缺陷的来由。)
-        //   ② 应用 logcat 捕获随开关起停 —— 同样要尽早,否则启动期那一段日志拿不到,
+        //   ② 会话目录建立 —— 三个写入者(logcat / 请求记录 / 域文件)必须落进同一个目录,
+        //      故由 XDiagSession **唯一**创建,且必须早于它们(见它的类注释)。
+        //   ③ 应用 logcat 捕获随开关起停 —— 同样要尽早,否则启动期那一段日志拿不到,
         //      而那一段正是最难复现、最需要现场的一段。
         //
-        // ⚠️ 顺序要紧:先装持久化(它给出开关初值),再装捕获(它按初值决定是否立即开始)。
+        // ⚠️ 顺序要紧:先持久化(给出开关初值)→ 再建会话目录(给出落盘位置)→ 最后捕获。
         DiagnosticSwitchStore.install(this)
+        XDiagSession.install(this)
         XLogcatCapture.install(this)
 
         // Restore files and settings before eager Koin singletons or workers can access them.

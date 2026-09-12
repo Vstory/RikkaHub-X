@@ -9,7 +9,6 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,9 +41,9 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ## 落盘位置与生命周期
  *
- * 每次「开关关→开」= 一个新 session 目录(`filesDir/x-diag/session-<时间>/logcat.log`)。
- * 关闭开关 = 结束本次 session(文件保留)。**不随进程退出而删除** ——
- * 要取证的常常正是「上一个进程里发生了什么」。
+ * 每次「开关关 → 开」= 一个新会话目录,日志落在其中的 `logcat.log`。
+ * 目录由 [XDiagSession] **唯一**创建;同目录下还有请求记录与各域的语义事件文件
+ * (文件名即域名)。关闭开关 = 结束本次会话,**文件保留、不随进程退出而删除** ——
  *
  * ## 与 [XLog] 的关系
  *
@@ -55,10 +54,7 @@ object XLogcatCapture {
 
     private const val LOGCAT = "/system/bin/logcat"
 
-    /** 会话根目录(位于应用私有目录,导出时才脱敏后交给用户)。 */
-    private const val ROOT_DIR = "x-diag"
-
-    private const val SESSION_PREFIX = "session-"
+    // 会话根目录与目录名前缀住在 XDiagSession —— 目录由它唯一创建(见该类注释)。
     private const val LOG_NAME = "logcat.log"
 
     /** 攒够这么多字节就 flush 一次;另有 [FLUSH_INTERVAL_MS] 兜住低速时段。 */
@@ -146,10 +142,7 @@ object XLogcatCapture {
      */
     fun latestLogFile(context: Context): File? {
         current()?.let { return it.logFile }
-        val root = File(context.filesDir, ROOT_DIR)
-        return root.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith(SESSION_PREFIX) }
-            ?.maxByOrNull { it.name }
+        return XDiagSession.latest(context)
             ?.let { File(it, LOG_NAME) }
             ?.takeIf { it.isFile && it.length() > 0L }
     }
@@ -160,15 +153,15 @@ object XLogcatCapture {
     fun start(context: Context): Session? = synchronized(lock) {
         session?.let { return it }
 
-        val root = File(context.filesDir, ROOT_DIR)
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(System.currentTimeMillis())
-        val dir = File(root, SESSION_PREFIX + stamp)
-        if (!dir.exists() && !dir.mkdirs()) {
-            // 建不出目录 → 记一条关键失败(它会一直显示到用户清空)，不静默。
+        // 目录由 XDiagSession **唯一**创建:三个写入者(logcat / 请求记录 / 域文件)必须
+        // 落进同一个目录,各自造会因「跨没跨过一秒」分裂成两个 —— 那种分裂很隐蔽。
+        // 故这里**只取不造**;取不到就明确失败并留存,而不是自己另造一个目录。
+        val dir = XDiagSession.current()
+        if (dir == null) {
             XDiagnostics.recordStickyFailure(
                 domain = XDomain.CORE,
                 event = CAPTURE_FAIL_EVENT,
-                message = "日志目录创建失败，本次不记录应用日志:" + dir.absolutePath,
+                message = "诊断会话目录未建立,本次不记录应用日志(接线顺序有误)",
             )
             return null
         }
@@ -212,8 +205,7 @@ object XLogcatCapture {
     /** 清空全部会话目录(用户点「清空」时一并调用)。 */
     fun clearSessions(context: Context) {
         stop()
-        val root = File(context.filesDir, ROOT_DIR)
-        runCatching { root.listFiles()?.forEach { it.deleteRecursively() } }
+        XDiagSession.clearAll(context)
     }
 
     /** 捕获失败的事件名(三段点分隔,由 check_x_event_names.py 机检)。 */
