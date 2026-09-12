@@ -84,14 +84,20 @@ object XDiagFileStore {
     fun install() {
         if (installed) return
         installed = true
-        XDiagnostics.setLineSink { domain, line -> append(domain, line) }
+        XDiagnostics.setLineSink { domain, line -> writeLine(domain, line) }
         // 开关一动就收掉全部 writer:关闭是收尾,开启则要丢掉上一个会话的目录
         // (新目录由 XDiagSession 建好,下次写入时惰性打开)。
         XDiagnostics.addEnabledListener { closeAll() }
     }
 
-    /** 落一行。**不可写时静默返回** —— 见类注释里关于体积阀与无会话的说明。 */
-    private fun append(domain: XDomain, line: String) {
+    /**
+     * 落一行。**不可写时静默返回** —— 见类注释里关于体积阀与无会话的说明。
+     *
+     * 两个调用者:语义事件(经 [XDiagnostics] 的 lineSink)与请求记录(见 [XRequestLog])。
+     * 后者自带字段结构,不经 `XDiagLine` 的通用事件格式,故需要一个直接入口 ——
+     * 但**规格与约束相同**:一行一条、每行都是合法 JSON、同一个体积阀。
+     */
+    fun writeLine(domain: XDomain, line: String) {
         // 没有会话目录 = 开关关着,或目录建不出来(后者已记关键失败留存)。
         val dir = XDiagSession.current() ?: return
         val sink = synchronized(lock) { sinkFor(domain, dir) } ?: return

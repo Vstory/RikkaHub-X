@@ -71,6 +71,8 @@ on:
       # 而 App 行为看起来完全正常,只是「出问题时没有任何现场」。
       # ⚠️ 该文件此前**已带 [X-custom] 标记**(压缩结果通知定制)却一直没登记,属既有缺口,一并补上。
       - 'app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt'
+      # 承载 X 接线:诊断框架的请求记录旁路回调挂在这里(见 Logging.setRequestLogSink)
+      - 'common/src/main/java/me/rerere/common/android/Logging.kt'
   workflow_dispatch:
 
 permissions:

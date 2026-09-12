@@ -27,6 +27,17 @@ enum class XDomain(val key: String, val label: String) {
     COMPRESS("compress", "上下文压缩"),
     CONTEXT("context", "容量表与用量"),
     CHAT("chat", "会话"),
+
+    /**
+     * 网络请求记录（请求头 + **请求体** + 响应头，2026-09-12 加）。
+     *
+     * 单列一个域而不是并进「会话」：它记的不是「X 做了什么」，而是**应用往外发了什么**，
+     * 来源也不同（上游 `RequestLoggingInterceptor`）。混进会话域会让「chat.* 是 X 的会话埋点」
+     * 这条约定变得含糊。
+     *
+     * 它是这份诊断里**唯一带请求正文**的地方 —— logcat 那条路上 OkHttp 只打 `Content-Length`。
+     */
+    NET("net", "网络请求"),
     WORKSPACE("workspace", "工作区"),
     SYNC("sync", "备份同步"),
     MCP("mcp", "MCP"),

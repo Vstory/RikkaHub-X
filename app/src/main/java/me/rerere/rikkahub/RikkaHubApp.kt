@@ -43,6 +43,7 @@ import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
 import me.rerere.rikkahub.x.diag.XDiagFileStore
 import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XLogcatCapture
+import me.rerere.rikkahub.x.diag.XRequestLog
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
@@ -73,13 +74,14 @@ class RikkaHubApp : Application() {
         //      而那一段正是最难复现、最需要现场的一段。
         //
         //   ④ 语义事件按域落盘 —— 落盘位置由会话目录给出,故排在它之后。
+        //   ⑤ 上游请求记录落 net.log —— 它经 XDiagFileStore 写,故排在它之后。
         //
-        // ⚠️ 顺序要紧:先持久化(给出开关初值)→ 再建会话目录(给出落盘位置)→ 最后捕获
-        //   与落盘(两者都要往那个目录里写)。
+        // ⚠️ 顺序要紧:持久化(开关初值)→ 会话目录(落盘位置)→ 捕获 → 域落盘 → 请求记录。
         DiagnosticSwitchStore.install(this)
         XDiagSession.install(this)
         XLogcatCapture.install(this)
         XDiagFileStore.install()
+        XRequestLog.install()
 
         // Restore files and settings before eager Koin singletons or workers can access them.
         try {
