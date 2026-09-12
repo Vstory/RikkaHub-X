@@ -61,6 +61,11 @@ on:
       # SettingAboutPage.kt 此前就有 [X-custom] 标记却一直没登记,属既有缺口。
       - 'app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingAboutPage.kt'
       - 'app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt'
+      # 2026-09-12 补登(诊断框架独立化):X 的诊断页与它的路由挂载点。
+      # 这两者此前只在 storage 分支上,现独立成 diag/consolidate —— 上游重写路由会
+      # 让诊断页变成不可达,而 App 行为**看不出异常**,只是「出问题时没有现场可查」。
+      - 'app/src/main/java/me/rerere/rikkahub/RouteActivity.kt'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic/DiagnosticPage.kt'
   workflow_dispatch:
 
 permissions:
