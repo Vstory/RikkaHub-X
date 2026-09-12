@@ -49,6 +49,16 @@ class XLogRing(val capacity: Int = DEFAULT_CAPACITY) {
         }
 
         /**
+         * 给消息附上错误的**类型与消息**（不写堆栈 —— 理由见 [record]）。
+         *
+         * 放在 companion 里让「内存环」与「落盘行」共用：两处各写一份，迟早在某一种
+         * 错误上漂移，于是同一件事在诊断页与文件里长得不一样 —— 而排查时正是靠两处对读。
+         */
+        fun textWithError(message: String, error: Throwable?): String =
+            if (error == null) message
+            else "$message | ${error::class.java.simpleName}: ${error.message.orEmpty()}"
+
+        /**
          * `HH:mm:ss.SSS` 时间文本。
          *
          * 放在 companion 里供**表头与正文共用** —— 两处格式若不一致，
@@ -79,11 +89,7 @@ class XLogRing(val capacity: Int = DEFAULT_CAPACITY) {
      * 真需要堆栈时 logcat 里有完整版本。
      */
     fun record(level: Level, event: String, message: String, error: Throwable? = null) {
-        val text = if (error == null) {
-            message
-        } else {
-            "$message | ${error::class.java.simpleName}: ${error.message.orEmpty()}"
-        }
+        val text = textWithError(message, error)
         synchronized(entries) {
             entries.add(Entry(at = System.currentTimeMillis(), level = level, event = event, message = text))
             // 超出上限时从**最旧**一端丢弃 → 缓冲里永远是最新的 capacity 条

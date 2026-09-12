@@ -93,6 +93,24 @@ object XDiagnostics {
     private var persist: ((Boolean) -> Unit)? = null
 
     /**
+     * 把每条记录**落盘**的回调 —— 由 Android 侧接上（见 [XDiagFileStore]）。
+     *
+     * 做成可注入而不是直接依赖文件，理由与 [persist] 相同：这一层保持纯 Kotlin，
+     * 于是「开关会不会持久化」「落盘行长什么样」这类事能在 JVM 单测里验，
+     * 而不必装机去看。
+     *
+     * **可为 null**（JVM 单测里就是 null）：那时只有内存环，与落盘之前的行为一致。
+     * 传的是「域 + 已组好的一行」—— 组行的逻辑在 [XDiagLine]（也是纯函数）。
+     */
+    @Volatile
+    private var lineSink: ((XDomain, String) -> Unit)? = null
+
+    /** 接上落盘；传 `null` 摘掉。 */
+    fun setLineSink(value: ((XDomain, String) -> Unit)?) {
+        lineSink = value
+    }
+
+    /**
      * 开关翻转时要通知的一方（实现方自己接上，见 [addEnabledListener]）。
      *
      * ## 为什么是一个列表而不是单个回调
@@ -211,6 +229,12 @@ object XDiagnostics {
     /** 记录一条。**调用方一般用 [XLog] 而不是直接调这里**。 */
     fun record(domain: XDomain, level: Level, event: String, message: String, error: Throwable? = null) {
         rings.getValue(domain).record(level, event, message, error)
+        // 再落一份盘。放在这个**底层入口**而不是 XLog：框架自身的失败路径也走这里，
+        // 而那些正是「需要在文件里看到」的。
+        // 开关的闸门在 XLog（info / warn 各自判断），故关掉开关时这里不会被调用。
+        lineSink?.let { sink ->
+            sink(domain, XDiagLine.format(level, domain, event, XLogRing.textWithError(message, error)))
+        }
     }
 
     fun entries(domain: XDomain): List<XLogRing.Entry> = rings.getValue(domain).recent()
@@ -286,6 +310,11 @@ object XDiagnostics {
                 at = System.currentTimeMillis(),
             )
         )
+        // 关键失败与开关无关，落盘同样如此 —— 它正是「用户开开关之前就发生、而必须
+        // 留下现场」的那一类。目录未建立时 sink 自己会跳过（那时已另有留存）。
+        lineSink?.let { sink ->
+            sink(domain, XDiagLine.format(Level.WARN, domain, event, XLogRing.textWithError(message, error)))
+        }
     }
 
     /** 清掉关键失败留存。 */

@@ -32,10 +32,12 @@ class XDiagnosticsTest {
     fun setUp() {
         XDiagnostics.clearAll()
         XDiagnostics.setEnabled(false)
+        XDiagnostics.setLineSink(null)
     }
 
     @After
     fun tearDown() {
+        XDiagnostics.setLineSink(null)
         XDiagnostics.clearAll()
         XDiagnostics.setEnabled(false)
     }
@@ -258,6 +260,51 @@ class XDiagnosticsTest {
         XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "新一轮")
         assertEquals(1, XDiagnostics.totalCount())
         assertTrue(XDiagnostics.windowStartMillis() != null)
+    }
+
+    // ---- 落盘钩子 ----
+
+    @Test
+    fun `record forwards one line to the sink`() {
+        val seen = mutableListOf<Pair<XDomain, String>>()
+        XDiagnostics.setLineSink { domain, line -> seen += domain to line }
+        XDiagnostics.record(XDomain.CHAT, Level.INFO, "chat.model_pick.kept", "保留了会话模型")
+
+        assertEquals("一条记录只应落一行", 1, seen.size)
+        assertEquals(XDomain.CHAT, seen.single().first)
+        assertTrue("行里应带事件名", seen.single().second.contains("chat.model_pick.kept"))
+    }
+
+    @Test
+    fun `sink is optional so record still works without it`() {
+        // JVM 单测里没有文件系统 —— lineSink 为 null 时行为必须与落盘之前一致
+        XDiagnostics.setLineSink(null)
+        XDiagnostics.record(XDomain.CORE, Level.INFO, "a.b.c", "x")
+        assertEquals(1, XDiagnostics.countOf(XDomain.CORE))
+    }
+
+    @Test
+    fun `sink line folds the error in the same way as the ring`() {
+        // 两处若各写一份拼法,迟早在某一种错误上漂移 —— 而排查时正是靠两处对读
+        val seen = mutableListOf<String>()
+        XDiagnostics.setLineSink { _, line -> seen += line }
+        XDiagnostics.record(XDomain.CORE, Level.WARN, "a.b.c", "出事了", IllegalStateException("炸了"))
+
+        val ringText = XDiagnostics.entries(XDomain.CORE).single().message
+        assertTrue("环里应带异常类型", ringText.contains("IllegalStateException"))
+        assertTrue("落盘行应带同样的异常类型", seen.single().contains("IllegalStateException"))
+    }
+
+    @Test
+    fun `sticky failure reaches the sink although the switch is off`() {
+        // 关键失败与开关无关(它常发生在用户开开关**之前**),落盘必须同样不受开关管 ——
+        // 否则最该留下的那条恰恰是唯一没留下的一条。
+        val seen = mutableListOf<String>()
+        XDiagnostics.setLineSink { _, line -> seen += line }
+        XDiagnostics.recordStickyFailure(XDomain.CORE, "diag.session.fail", "目录建不出来")
+
+        assertEquals(1, seen.size)
+        assertTrue(seen.single().contains("diag.session.fail"))
     }
 
     // ---- 域清单 ----
