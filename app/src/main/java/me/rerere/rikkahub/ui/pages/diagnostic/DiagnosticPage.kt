@@ -780,7 +780,11 @@ private fun writeExport(
         // 打包与脱敏都在 XDiagZip 里,进度由它上报(读两遍:先扫、后写)。
         // dir 为 null 不是错误(没有会话、只有存活层),故不在这里报失败 ——
         // XDiagZip 以「到底打进了什么」为准返回,空包才 false。
-        is PendingExport.SessionZip ->
+        // ⚠️ **分支体必须带花括号**:它不是单表达式(里面有一个 `val`)。省掉花括号是
+        //    编译错,而报错信息会指向 `when` 整体(「must be exhaustive」「Add the 'is Text'
+        //    branch」)—— 看起来完全不像是「少了一对括号」。这个 `when` 已经在这上面
+        //    栽过三次,故这里写明白:往这个分支里加任何语句,先确认有花括号。
+        is PendingExport.SessionZip -> {
             // 快照**已经在入口处抓好并挂在这个载荷上了**(见导出卡片那段注释),
             // 这里只管写、不再自己抓一次:再抓一次会得到**第二份**、而且时机晚于
             // 用户选保存位置 —— 「导出那一刻」就不再是同一个时刻了。
@@ -789,6 +793,7 @@ private fun writeExport(
             // 纯逻辑(它不碰 XDiagnostics)。
             val header = XDiagEnv.appLines(context) + listOfNotNull(XDiagnostics.clockNote())
             XDiagZip.write(header, out, payload.dir, progress, payload.extra)
+        }
 
         is PendingExport.Text -> {
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出
