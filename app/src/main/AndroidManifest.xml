@@ -26,6 +26,28 @@
   <uses-permission android:name="android.permission.READ_CALENDAR" />
   <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
+  <!--
+    [X-custom] 移除依赖带入的广告 ID 权限(2026-09-13)。
+
+    上游源码**没有**声明这三条:它们是 manifest 合并时由
+    `play-services-measurement-impl` / `play-services-measurement-api`
+    (firebase-analytics 的传递依赖)带进来的。本应用不做广告、不做归因,
+    自签分发的 APK 里挂着「读取广告 ID」的权限与定位不符。
+
+    用 `tools:node="remove"` 在合并阶段删掉,而不是去 exclude 依赖 ——
+    删依赖会让 `Firebase.analytics` 的 Koin 注册在启动时崩
+    (那属于「方案 B」,要同时改代码)。
+  -->
+  <uses-permission
+    android:name="com.google.android.gms.permission.AD_ID"
+    tools:node="remove" />
+  <uses-permission
+    android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION"
+    tools:node="remove" />
+  <uses-permission
+    android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
+    tools:node="remove" />
+
   <uses-feature
     android:name="android.hardware.camera"
     android:required="false" />
@@ -63,6 +85,46 @@
     android:theme="@style/Theme.Rikkahub"
     android:usesCleartextTraffic="true"
     tools:targetApi="33">
+
+    <!--
+      [X-custom] 关闭 Google 统计的**数据采集**(2026-09-13)。
+
+      ## 为什么关
+
+      上游只埋了 5 个**无参**事件(全在 ChatVM,`ai_send_message` 之类),对自用 fork
+      没有任何决策价值;依赖却会带进广告 ID 权限(见上面的 remove 段)。
+      X 自己的诊断框架(`x/diag`)已经能给出更贴需求的现场,且是本地落盘 + 可导出。
+
+      ## 这两条各管什么
+
+      · `firebase_analytics_collection_enabled` —— GA4 采集总开关。
+      · `firebase_crashlytics_collection_enabled` —— Crashlytics 在
+        `FirebaseInitProvider` 初始化时**默认 true**,故必须显式置 false
+        (`CrashlyticsInitProvider` 读的正是这一条)。置 false 后 SDK 推迟到
+        `setCrashlyticsCollectionEnabled(true)` 才启用 —— 而本应用从不调用它。
+
+      ## 实测依据(2026-09-13 真机日志)
+
+      `E FirebaseCrashlytics: Settings request failed.`
+      `java.io.FileNotFoundException: https://firebase-settings.crashlytics.com/.../1:000000000000:...`
+      —— 即便用的是**全 0 占位的 google-services.json**,Crashlytics 照样初始化、
+      照样往外发请求(拿到 404 才没送出去,但 12 行噪声与一次外网往返是实打实的)。
+
+      ## 只关采集,不动「能力」
+
+      依赖、插件、`FirebaseInitProvider`、`AppModule` 的 Koin 注册**一律保留**:
+      `Firebase.analytics` 是 lazy 注册而 ChatVM 构造时会 `get()` 它,
+      若把 provider 一并 remove,每次打开会话会抛
+      `IllegalStateException: Default FirebaseApp is not initialized`。
+      将来要接自家 Firebase 做崩溃收集,删掉这两条 meta-data 即可恢复。
+    -->
+    <meta-data
+      android:name="firebase_analytics_collection_enabled"
+      android:value="false" />
+    <meta-data
+      android:name="firebase_crashlytics_collection_enabled"
+      android:value="false" />
+
     <activity
       android:name=".ui.activity.SafeModeActivity"
       android:exported="false"

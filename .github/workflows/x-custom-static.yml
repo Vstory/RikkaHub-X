@@ -19,6 +19,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_string_resources.py` | 字符串资源里未转义的撇号与重名 | aapt2 拒收 → 资源编译失败,整条 CI 中断 |
 # | `check_x_diag_layout.py` | 诊断域枚举 ↔ 文件名 ↔ 目录名是否自洽 | 域文件在包里被标成 `unrecognised` / 清空扫不到旧目录 |
 # | `check_x_diag_redaction.py` | 每种导出形态是否都过脱敏、规则顺序、每条规则有无样例 | 新增导出路径**静默**不带脱敏(2026-09-12 实测发生过) |
+# | `check_x_manifest.py` | AndroidManifest 上的四处 X 声明(采集开关/广告权限/应用名占位符/接线点) | 采集**静默恢复**、权限重新声明、诊断接线全不执行 —— 都看不出来 |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -58,6 +59,11 @@ on:
       - 'scripts/check_x_diag_layout.py'
       - 'scripts/check_x_diag_redaction.py'
       - 'scripts/check_x_diag_redaction_rev.py'
+      - 'scripts/check_x_manifest.py'
+      - 'scripts/check_x_manifest_rev.py'
+      # manifest 检查器的输入。**必须登**:上游会持续改这个文件,而 X 在上面挂的四件事
+      # 丢了都不报错(采集恢复、广告权限回来、nightly 少后缀、诊断接线不执行)。
+      - 'app/src/main/AndroidManifest.xml'
       # 两个诊断检查器的输入(域枚举 / 落盘 / 打包 / 诊断页 / 脱敏规则与它的用例)。
       # 用通配而不是逐个列文件:新增诊断文件时不必回来登记 —— 漏登记正是「改了
       # 却不在检查范围内」这类静默缺口。
@@ -141,3 +147,14 @@ jobs:
       # 故留在 CI 里当回归网 —— 代价是 11 次子进程,秒级。
       - name: 诊断脱敏检查器的反向验证
         run: python3 scripts/check_x_diag_redaction_rev.py
+
+      # AndroidManifest 上的 X 定制:两条 firebase 采集开关、三条广告 ID 权限的 remove、
+      # 应用名占位符、以及 RikkaHubApp 这个诊断接线点。
+      # ⚠️ `.kt` 之外的定制**不在标签存活检查的射程内**(Audit 只扫 *.kt 且只在 src/main),
+      #    而这几件事被上游 merge 冲掉后都是静默改行为,故只能靠这里守。
+      - name: AndroidManifest 定制
+        run: python3 scripts/check_x_manifest.py
+
+      # 同上,检查器自己的反向验证(9 种破坏逐一断言被报出)
+      - name: manifest 检查器的反向验证
+        run: python3 scripts/check_x_manifest_rev.py
