@@ -347,6 +347,39 @@ class XDiagZipTest {
         assertTrue("应写明它与开关无关", text.contains("does NOT depend on the recording switch"))
     }
 
+    // ────────────────────────────────────
+    // 关键词索引(2026-09-13)
+    //
+    // 读者「搜关键词就能定位」所依赖的那份名单。它**从数据里数**,而不是维护一份会过期的
+    // 清单 —— 故这几条同时守着「完整」与「不撒谎」。
+    // ────────────────────────────────────
+
+    @Test
+    fun `the manifest carries a keyword index built from the packed data`() {
+        file(
+            EVENTS,
+            """{"at":"00:00:00.000","lvl":"I","domain":"chat","event":"chat.message.sent","msg":"x"}""" + "\n",
+        )
+
+        val text = manifestOf(pack())
+
+        assertTrue("应有索引段", text.contains("keyword index"))
+        assertTrue("应列出实际出现过的事件名", text.contains("chat.message.sent"))
+        assertTrue("应按域分组(域是「哪个功能」)", text.contains("domain=chat"))
+    }
+
+    @Test
+    fun `logcat lines never leak into the keyword index`() {
+        // logcat 是**任意文本**,行里没有 domain/event 字段。数它只会白读一遍,
+        // 更要紧的是「什么都不该数出来」—— 于是索引段整段不写。
+        file("logcat.log", "01-01 00:00:00.000  1234  1234 I XCustom: chat chat.message.sent 随便\n")
+
+        val text = manifestOf(pack())
+
+        assertFalse("没有可索引的事件时,整段不写(写空标题会让读者以为索引坏了)", text.contains("keyword index"))
+        assertFalse("logcat 里的词不该被当成事件名", text.contains("domain=chat"))
+    }
+
     @Test
     fun `hasContent treats missing empty and blank dirs alike`() {
         assertFalse("null 视为没有内容", XDiagZip.hasContent(null))

@@ -106,15 +106,19 @@ object XDiagZip {
         // 先预扫一遍取「每个文件掩了几处」:那个数只有读完才知道,而清单要落在**最前**。
         // 代价是两遍顺序读 —— 与单文件文本导出同一套取舍(见 DiagnosticPage 的注释)。
         // 报告成 ANALYSING 阶段,好在界面上与「写入」区分开 —— 否则进度条会先走满一遍再重来。
-        val hits = if (redacted) {
-            files.associate { f ->
-                f.name to countHits(f) { n ->
-                    read += n
-                    progress.report(XExportPhase.ANALYSING, read, total)
-                }
+        // 预扫**一律跑**(2026-09-13 起不再只在开脱敏时跑):它现在同时产出两样东西 ——
+        // 每个文件被掩的行数,以及**关键词索引**(读者按图索骥的那份)。索引必须无论
+        // 脱敏开关如何都存在,否则「关掉脱敏就没有索引」这种事没人会想到。
+        //
+        // ⚠️ logcat.log **不进索引**:它是任意文本,行里没有 `domain`/`event` 字段,
+        //    数它只会白读一遍。索引的输入是那些「一行一条 JSON」的文件。
+        val keywords = XEventIndex.Counter()
+        val hits = files.associate { f ->
+            val indexable = f.name != XLogcatCapture.LOG_NAME
+            f.name to preScan(f, indexable, keywords) { n ->
+                read += n
+                progress.report(XExportPhase.ANALYSING, read, total)
             }
-        } else {
-            emptyMap()
         }
 
         // ⚠️ **必须归零**:上面预扫已经把 read 累加到了 total。不归零的话写入阶段会从
@@ -129,8 +133,14 @@ object XDiagZip {
             // 没有会话时(只导出存活层)也要给清单一个说得过去的 session 名,
             // 而不是空串或 `null` —— 清单是读包时的唯一指引,那一行不能含糊。
             zip.write(
-                manifest(header, dir?.name ?: "(no session recorded)", files, redacted, hits)
-                    .toByteArray(Charsets.UTF_8),
+                manifest(
+                    header = header,
+                    sessionName = dir?.name ?: "(no session recorded)",
+                    files = files,
+                    redacted = redacted,
+                    hits = hits,
+                    keywords = XEventIndex.render(keywords.result()),
+                ).toByteArray(Charsets.UTF_8),
             )
             zip.closeEntry()
 
@@ -175,18 +185,30 @@ object XDiagZip {
     }
 
     /**
-     * 数一个文件里有多少行被脱敏器**动过**。
+     * 预扫一个文件:**一遍读盘产出两样东西** —— 被脱敏器动过的行数,以及(可选)关键词索引。
      *
      * 判据用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,而不是另写一套规则去猜
      * 哪些行「应该」被掩。两套判据迟早漂移(这条与单文件导出用的是同一套判据)。
+     *
+     * 合在一遍里是有意的:拆成两遍就是把大文件读两回,而这一层刻意做到「几百 MB 也压得动」。
+     *
+     * @param indexable `false` 表示本文件不进索引(如 logcat.log —— 它是任意文本,行里
+     *   没有 `domain`/`event` 字段,数它只会白读一遍)。
+     * @return 被掩的行数。
      */
-    private fun countHits(file: File, onRead: (Long) -> Unit = {}): Long {
+    private fun preScan(
+        file: File,
+        indexable: Boolean,
+        indexInto: XEventIndex.Counter,
+        onRead: (Long) -> Unit = {},
+    ): Long {
         var n = 0L
         val source = countingStream(file.inputStream(), onRead)
         BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
                 if (XLogScrub.scrub(line) != line) n++
+                if (indexable) indexInto.add(line)
             }
         }
         return n
@@ -199,6 +221,7 @@ object XDiagZip {
      * @param redacted 本次是否真的过了脱敏。清单必须**如实**说,不能一边脱敏一边写「原样导出」,
      *   也不能反过来 —— 后者会让人以为已经安全了。
      * @param hits 文件 → 被掩的行数。仅 [redacted] 为真时有意义。
+     * @param keywords [XEventIndex.render] 的结果;`null` = 包里没有可索引的事件(整段不写)。
      */
     internal fun manifest(
         header: List<String>,
@@ -206,6 +229,7 @@ object XDiagZip {
         files: List<File>,
         redacted: Boolean,
         hits: Map<String, Long> = emptyMap(),
+        keywords: String? = null,
     ): String = buildString {
         appendLine("${XDiagEnv.MARK} RikkaHub X diagnostic bundle ${XDiagEnv.MARK}")
         appendLine()
@@ -255,6 +279,12 @@ object XDiagZip {
         appendLine("  folder and is kept across sessions until you clear diagnostics.")
         appendLine("  Its lines may carry an extra field, detail, holding a full stack trace.")
         appendLine()
+        if (keywords != null) {
+            appendLine("${XDiagEnv.MARK} keyword index ${XDiagEnv.MARK}")
+            appendLine()
+            appendLine(keywords)
+            appendLine()
+        }
         appendRedactionNote(this, redacted)
     }
 
