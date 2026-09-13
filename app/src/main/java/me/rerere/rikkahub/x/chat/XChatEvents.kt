@@ -38,10 +38,51 @@ object XChatEvents {
      */
     const val MODEL_NONE = "chat.model.none"
 
+    // ── 用户动作计数（2026-09-13 从 Firebase Analytics 迁入）──
+    //
+    // ## 为什么要迁
+    //
+    // 上游原本用 `FirebaseAnalytics.logEvent` 记这 5 个动作（各 5 处，全在 ChatVM）。
+    // 那是**唯一**在统计「用户实际怎么用这个应用」的地方。X 决定整体移除 Firebase
+    // （2026-09-13，用户定：既然走诊断日志这条路，Firebase 就全部去掉），
+    // 于是这些计数**必须有人接** —— 否则「工具审批用了多少次」这类问题从此无从回答。
+    //
+    // ## 与上游那套的两处差别（刻意，非疏漏）
+    //
+    // ① 落点是 `chat.log`（诊断域文件），**受诊断开关管辖**：开关关着就是零记录。
+    //    上游那套是无条件上报的 —— 而 X 的口径一直是「关掉诊断 = 与上游一致的静默」。
+    // ② 事件名跟着本域的命名规则走（`域.动作.结果`），不再是 `ai_send_message` 这种
+    //    下划线式。检索时按 `chat.message.` 前缀即可一网打尽。
+    //
+    // ## 这 5 条只记「动作发生」，不带任何参数
+    //
+    // 与上游一致：它们是**计数**，不是内容。聊天正文一律不进日志
+    // （见 `X-CUSTOM.md` §日志与诊断约定的「不记自由文本」）。
+
+    /** 用户发出了一条消息。 */
+    const val MESSAGE_SENT = "chat.message.sent"
+
+    /** 用户编辑并提交了某条消息。 */
+    const val MESSAGE_EDITED = "chat.message.edited"
+
+    /** 用户在某条消息处触发了重新生成。 */
+    const val MESSAGE_REGENERATED = "chat.message.regenerated"
+
+    /** 用户对工具调用做了审批（同意或拒绝）。 */
+    const val TOOL_APPROVED = "chat.tool.approved"
+
+    /** 用户回答了工具调用（把结果填回去）。 */
+    const val TOOL_ANSWERED = "chat.tool.answered"
+
     /** 全部事件名：单测据此校验命名规则与唯一性。 */
     val ALL: List<String> = listOf(
         MODEL_PICK_KEPT,
         MODEL_PICK_RESTORED,
         MODEL_NONE,
+        MESSAGE_SENT,
+        MESSAGE_EDITED,
+        MESSAGE_REGENERATED,
+        TOOL_APPROVED,
+        TOOL_ANSWERED,
     )
 }

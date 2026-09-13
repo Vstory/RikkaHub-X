@@ -638,6 +638,35 @@ jobs:
           echo "=== 生成的 release 说明 ==="
           cat "$BODY"
 
+      # [X-custom] 保留 R8 mapping（2026-09-13）—— 接住 Firebase Crashlytics 的**符号化**职责。
+      #
+      # ## 为什么必须有这一步
+      #
+      # Crashlytics 做两件事：收崩溃栈 + **用 mapping.txt 把混淆后的栈还原成类名**。
+      # X 整体移除 Firebase 之后，第一件由上游 CrashHandler 与诊断框架接住
+      # （见 `x/diag/XCrashReport`），而**第二件在应用内无解** —— release 是 R8 混淆的
+      # （`optimization { enable = true }`），解混淆必须要有**构建期**产出的 mapping。
+      #
+      # 不保留它，崩溃栈会退化成 `at a.b.c.d(Unknown Source:12)`：看得见有崩溃，
+      # 看不出在哪 —— 那等于「能收到报警却读不懂」。
+      #
+      # ## 为什么放 artifact 而不是 release 资产
+      #
+      # 它是**构建期调试材料**，不是给用户下载的东西：artifact 有过期时间（90 天，
+      # 与「出问题时回头查一两周内的崩溃」的用法匹配），也不占 release 页面。
+      #
+      # 用法：`java -jar retrace.jar mapping.txt crash.txt`
+      - name: Keep R8 mapping for crash deobfuscation
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r8-mapping-${{ github.ref_name }}-${{ github.sha }}
+          path: |
+            app/build/outputs/mapping/release/mapping.txt
+            app/build/outputs/mapping/release/configuration.txt
+          if-no-files-found: warn
+          retention-days: 90
+
       # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压。
       # tag 固定 nightly 只保留一条「最新构建」入口；文件名带短提交号所以 asset 不断追加、不覆盖。
       # 说明用 body_path 传入（动态生成、最新在前），见上一步。

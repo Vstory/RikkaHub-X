@@ -289,6 +289,7 @@ class ChatVM(
     fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
+        XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_SENT) { "发送消息" }
 
         chatService.sendMessage(_conversationId, content, answer)
     }
@@ -296,6 +297,7 @@ class ChatVM(
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
         analytics.logEvent("ai_edit_message", null)
+        XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_EDITED) { "编辑消息" }
 
         viewModelScope.launch {
             chatService.editMessage(_conversationId, messageId, parts)
@@ -339,6 +341,7 @@ class ChatVM(
         regenerateAssistantMsg: Boolean = true
     ) {
         analytics.logEvent("ai_regenerate_at_message", null)
+        XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_REGENERATED) { "重新生成" }
         chatService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
     }
 
@@ -348,6 +351,11 @@ class ChatVM(
         reason: String = ""
     ) {
         analytics.logEvent("ai_tool_approval", null)
+        // 审批是同意还是拒绝,是这两个动作里唯一有信息量的差别 —— 故记进 msg。
+        // 工具名与调用 id 不记:它们属于内容侧,而本域的约定是不记自由文本。
+        XLog.info(XDomain.CHAT, XChatEvents.TOOL_APPROVED) {
+            if (approved) "工具调用已同意" else "工具调用已拒绝"
+        }
         chatService.handleToolApproval(_conversationId, toolCallId, approved, reason)
     }
 
@@ -356,6 +364,7 @@ class ChatVM(
         answer: String,
     ) {
         analytics.logEvent("ai_tool_answer", null)
+        XLog.info(XDomain.CHAT, XChatEvents.TOOL_ANSWERED) { "工具调用已由用户作答" }
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
     }
 

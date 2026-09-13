@@ -40,6 +40,7 @@ import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
 import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
+import me.rerere.rikkahub.x.diag.XCrashReport
 import me.rerere.rikkahub.x.diag.XDiagFileStore
 import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XLogcatCapture
@@ -75,6 +76,7 @@ class RikkaHubApp : Application() {
         //
         //   ④ 语义事件按域落盘 —— 落盘位置由会话目录给出,故排在它之后。
         //   ⑤ 上游请求记录落 net.log —— 它经 XDiagFileStore 写,故排在它之后。
+        //      (另有一条:上一次运行的崩溃也在这里带进诊断,见 ⑥。)
         //
         // ⚠️ 顺序要紧:持久化(开关初值)→ 会话目录(落盘位置)→ 捕获 → 域落盘 → 请求记录。
         DiagnosticSwitchStore.install(this)
@@ -82,6 +84,12 @@ class RikkaHubApp : Application() {
         XLogcatCapture.install(this)
         XDiagFileStore.install()
         XRequestLog.install()
+        //   ⑥ 上一次运行的崩溃带进诊断(2026-09-13)。
+        //      排在最后是**必须的**:它要往 CORE 域文件里写栈,而写口由 ④ 接好。
+        //      顺序反了就只剩 sticky(诊断页看得到),打包时却没有那段栈。
+        //      背景:移除 Firebase Crashlytics 后,崩溃只剩「上游 CrashHandler(只给安全模式
+        //      当场看)」与「logcat 捕获(开关关着就没有)」两条路 —— 这段补的是那个缺口。
+        XCrashReport.install(this)
 
         // Restore files and settings before eager Koin singletons or workers can access them.
         try {
