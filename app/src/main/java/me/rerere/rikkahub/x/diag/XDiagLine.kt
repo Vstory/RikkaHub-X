@@ -23,9 +23,14 @@ import kotlinx.serialization.json.put
  *
  * ## 为什么带 `domain`
  *
- * 文件名已经是域名,看似冗余。但事件名的首段**并不等于**域名 —— 存储域的事件名一律以
- * `asset.` 开头(`XStorageEventsTest` 钉住了这条),而域键是 `storage`。于是从文件里
- * 复制一行出去(贴进聊天是最常见的用法)就不再自明,故每行都带上。
+ * ⚠️ 这条的理由在 2026-09-13 **变了**:原先所有域各占一个文件,域名从文件名就能看出来,
+ * 那时带上它只是「复制一行出去(贴进聊天)时自明」的便利。合并成一条时间线之后,
+ * **它是区分这条记录属于谁的唯一手段** —— 按域挑记录只剩读取端过滤这条路
+ * (`grep '"domain":"storage"'`),某一行漏了 `domain` 就永远分不出属于谁,
+ * 而它不会有任何编译或运行时报错。故 `check_x_diag_layout.py` 现在专门守着这条。
+ *
+ * 另:事件名的首段**并不等于**域名 —— 存储域的事件名一律以 `asset.` 开头
+ * (`XStorageEventsTest` 钉住了这条),而域键是 `storage`。这条仍然成立。
  *
  * ## 为什么时间只到 `HH:mm:ss.SSS`
  *
@@ -45,11 +50,17 @@ object XDiagLine {
         event: String,
         message: String,
         at: Long = System.currentTimeMillis(),
+        detail: String? = null,
     ): String = buildJsonObject {
         put("at", XLogRing.timeText(at))
         put("lvl", if (level == XLogRing.Level.WARN) "W" else "I")
         put("domain", domain.key)
         put("event", event)
         put("msg", message)
+        // 可选的长文本(崩溃栈、异常栈)。**不截断**:栈被裁掉一半就失去了定位价值,
+        // 而总量由调用方的体积阀兜底(见 XSurvivorLog.MAX_BYTES)。
+        // 换行由 JSON 转义,故「一条记录恰好占一行」这条硬约束不受影响 —— 那正是
+        // 当初选「一行紧凑 JSON」的理由(见类注释的对照表)。
+        detail?.let { put("detail", it) }
     }.toString()
 }

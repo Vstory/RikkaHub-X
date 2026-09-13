@@ -25,8 +25,11 @@
 1. `XDomain` 枚举解析出的条目数与 key 形态(小写、无路径分隔符、不重复);
 2. 文件名**单点定义**:`events.log` 派生自 `XDiagFileStore.EVENTS_FILE`、
    `logcat.log` 派生自 `XLogcatCapture.LOG_NAME`,不许在别处再写一份字面量;
-3. 全仓每个 `xxx.log` 文件名引用都必须落在上面两个之内
-   (否则 `XDiagZip.describe()` 会把它写成 `unrecognised file`);
+3. 全仓每个 `xxx.log` 文件名引用都必须落在上面**三个**之内
+   (否则 `XDiagZip.describe()` 会把它写成 `unrecognised file`)。
+   ⚠️ **注释不算引用** —— 详见文件内 `comment_ranges` 的注释:首版没跳过注释,
+   把「对比 LSPosed 的 modules.log」这种正当叙述也报了,属误报;
+4. `XDiagZip.describe()` 必须引用上面三个常量(而不是硬编码文件名);
 4. `XDiagLine` 与 `XNetLine` 都必须写出 `domain` 字段(见上「头号判据」);
 5. `x-diag` / `session-` 两个目录字面量只许出现在 `XDiagSession.kt` 一处。
 
@@ -66,6 +69,7 @@ SESSION_FILE = DIAG_DIR + "XDiagSession.kt"
 FILE_STORE_FILE = DIAG_DIR + "XDiagFileStore.kt"
 ZIP_FILE = DIAG_DIR + "XDiagZip.kt"
 LOGCAT_FILE = DIAG_DIR + "XLogcatCapture.kt"
+SURVIVOR_FILE = DIAG_DIR + "XSurvivorLog.kt"
 
 # 两个组行函数 —— 判据 4 的对象。它们是「每行带 domain」这条不变量的**唯一**责任方。
 LINE_FORMATTERS = (
@@ -87,6 +91,25 @@ LOG_NAME_RE = re.compile(r'(?<![\w.])([a-z][a-z0-9_\-]*)\.log\b')
 # 常量定义处 —— 判据 2 从这里取「唯一真源」的名字。
 EVENTS_CONST_RE = re.compile(r'const val EVENTS_FILE\s*=\s*"([^"]+)"')
 LOG_NAME_CONST_RE = re.compile(r'const val LOG_NAME\s*=\s*"([^"]+)"')
+SURVIVORS_CONST_RE = re.compile(r'const val SURVIVORS_FILE\s*=\s*"([^"]+)"')
+
+
+def comment_ranges(text: str) -> list:
+    """注释区间 —— 判据 3 **刻意跳过它们**(见模块注释「注释不算引用」)。
+
+    ⚠️ `//` 的识别带一个引号启发:`https://…` 这种字符串里的双斜杠不该被当成注释起点
+    (否则同一行后面的真字面量会被连带跳过)。数一下 `//` 之前的引号个数即可 ——
+    奇数说明在字符串里。够用,且失效方向是「多报」而不是「漏报」。
+    """
+    ranges = []
+    for m in re.finditer(r"/\*.*?\*/", text, re.S):
+        ranges.append((m.start(), m.end()))
+    for m in re.finditer(r"//[^\n]*", text):
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        if text.count('"', line_start, m.start()) % 2 == 1:
+            continue  # 在字符串里,不是注释
+        ranges.append((m.start(), m.end()))
+    return ranges
 
 # 目录字面量(带引号,精确匹配 —— XDiagEnv 的标记 `===== [x-diag]` 是另一回事,不该被算进来)
 ROOT_DIR_RE = re.compile(r'"x-diag"')
@@ -184,26 +207,47 @@ def check(root: Path) -> list[str]:
         raise Problem(f"{LOGCAT_FILE}:找不到 `const val LOG_NAME` 常量")
     logcat_name = m.group(1)
 
+    survivor_text = read(root, SURVIVOR_FILE)
+    m = SURVIVORS_CONST_RE.search(survivor_text)
+    if not m:
+        raise Problem(f"{SURVIVOR_FILE}:找不到 `const val SURVIVORS_FILE` 常量")
+    survivors_name = m.group(1)
+
     if events_name == logcat_name:
         problems.append(
             f"{FILE_STORE_FILE}:EVENTS_FILE ('{events_name}')与 {LOGCAT_FILE} 的 LOG_NAME "
             f"重名 —— 事件时间线会把原始 logcat 覆盖掉。"
         )
 
-    allowed = {events_name, logcat_name}
+    allowed = {events_name, logcat_name, survivors_name}
 
-    # ── 判据 3:每个文件名引用都必须落在允许集合里 ──
+    # ── 判据 3:代码里每个文件名引用都必须落在允许集合里(注释不算引用) ──
+    #
+    # ⚠️ **刻意跳过注释**。这条判据守的是「代码里有没有一个会产生文件名的字面量」——
+    # 那种字面量会与常量漂移,于是 describe() 认不出文件。而**注释里的文件名不会产生任何
+    # 行为**,它只会出现在两种正当场合:解释历史(「原先独占一个文件」)与对比其它项目
+    # (「LSPosed 的 modules.log / verbose.log 也是重叠的」)。
+    #
+    # 首版没有跳过,于是把后一种也报了出来(实测一次 10 处里有 2 处是 LSPosed 的名字)——
+    # 这类误报会被容忍到「没人再信这个检查」,比不检查更坏。
+    #
+    # 代价(诚实记下):**过时的文档不再被守**。比如注释里还写着早已并入 events.log 的
+    # 旧文件名,这里不会报 —— 那是文档漂移,与「包打不对」不是一类,故接受。
     for path in files:
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root)
+        comments = comment_ranges(text)
         for match in LOG_NAME_RE.finditer(text):
             name = match.group(0)
             if name in allowed:
                 continue
+            if any(start <= match.start() < end for start, end in comments):
+                continue
             # 常量定义那一行本身就是真源,不算「别处又写一份」。
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_text = text[line_start:text.find("\n", match.start())]
-            if "const val EVENTS_FILE" in line_text or "const val LOG_NAME" in line_text:
+            if "const val EVENTS_FILE" in line_text or "const val LOG_NAME" in line_text \
+                    or "const val SURVIVORS_FILE" in line_text:
                 continue
             line = text.count("\n", 0, match.start()) + 1
             problems.append(
@@ -234,6 +278,11 @@ def check(root: Path) -> list[str]:
     if "XLogcatCapture.LOG_NAME" not in zip_text:
         problems.append(
             f"{ZIP_FILE}:describe() 没有引用 `XLogcatCapture.LOG_NAME` —— 同上。"
+        )
+    if "XSurvivorLog.SURVIVORS_FILE" not in zip_text:
+        problems.append(
+            f"{ZIP_FILE}:describe() 没有引用 `XSurvivorLog.SURVIVORS_FILE` —— "
+            f"存活层是**唯一跨会话**的文件(独立于开关),清单必须能说明它是什么。"
         )
 
     # ── 判据 6:目录字面量单点定义 ──

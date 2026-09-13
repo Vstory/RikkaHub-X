@@ -314,18 +314,27 @@ object XDiagnostics {
         event: String,
         message: String,
         error: Throwable? = null,
+        detail: String? = null,
     ) {
+        val stackText = detail ?: error?.stackTraceToString()
         sticky.set(
             StickyFailure(
                 domain = domain,
                 event = event,
                 message = message,
-                detail = error?.stackTraceToString(),
+                detail = stackText,
                 at = System.currentTimeMillis(),
             )
         )
-        // 关键失败与开关无关，落盘同样如此 —— 它正是「用户开开关之前就发生、而必须
-        // 留下现场」的那一类。目录未建立时 sink 自己会跳过（那时已另有留存）。
+
+        // ── 落点 ①:存活层(常开、跨会话) ──
+        // 这是**不能少的那一处**:另外两处都可能留不住 —— 内存槽进程一死就没,
+        // 而 events.log 要会话目录(只在开关开着时才有)。见 XSurvivorLog 的类注释。
+        XSurvivorLog.append(domain = domain, event = event, message = message, detail = stackText)
+
+        // ── 落点 ②:会话事件时间线(开关开着时才有) ──
+        // 与上面**刻意重复**,但服务不同读法:这里是「什么时候发生了什么」(顺序即信息),
+        // 存活层是「哪些事不能丢」(清单)。目录未建立时 sink 自己会跳过 —— 那时已有 ① 兜住。
         lineSink?.let { sink ->
             sink(domain, XDiagLine.format(Level.WARN, domain, event, XLogRing.textWithError(message, error)))
         }

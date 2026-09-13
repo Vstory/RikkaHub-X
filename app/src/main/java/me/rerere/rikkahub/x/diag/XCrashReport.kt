@@ -60,20 +60,20 @@ object XCrashReport {
 
     private fun record(stack: String?) {
         val detail = stack?.takeIf { it.isNotBlank() } ?: "(上游未留下栈文本)"
-        // 双落点,理由与其它关键失败一致:
-        //  · sticky —— 诊断页上**一眼看得到**,且与开关无关;
-        //  · 域文件 —— 打包给 AI 时能带上完整栈。
-        // 两者不是重复:前者是「有没有」,后者是「细节」。
+        // ⚠️ 栈**走 detail 参数**进关键失败留存(2026-09-13 改)。
+        //
+        // 此前这里还额外调了一次 `XDiagnostics.record(...)` 把栈写进 CORE 域,而那条路
+        // **受开关管辖** —— 开关关着时它什么都不写,也就是「崩溃之后才想起开开关」那个
+        // 最常见的情形下,栈一个字都留不下。而崩溃恰恰是本项目里最不能丢的一种现场。
+        //
+        // 现在只有一个落点,且是**常开**的那一个:XDiagnostics.recordStickyFailure 会把
+        // 消息与栈一并交给 XSurvivorLog(根目录下的 survivors.log,跨会话保留),
+        // 同时仍在开关开着时把一条摘要写进会话时间线。两者的分工见 XSurvivorLog 的类注释。
         XDiagnostics.recordStickyFailure(
             domain = XDomain.CORE,
             event = EVENT,
-            message = "上次运行发生了崩溃(栈见 CORE 域记录)",
-        )
-        XDiagnostics.record(
-            domain = XDomain.CORE,
-            level = XLogRing.Level.WARN,
-            event = EVENT,
-            message = detail,
+            message = "上次运行发生了崩溃",
+            detail = detail,
         )
     }
 

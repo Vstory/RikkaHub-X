@@ -43,8 +43,12 @@ object XDiagClear {
         XDiagFileStore.closeAll()
 
         // ② 删文件 + 清内存 + 清关键失败留存(它也是「已记录的内容」)。
+        //    ⚠️ 存活层必须在这里一起清:它在**根目录**、跨会话保留,不在 XDiagSession
+        //       管的那些 session-* 里 —— 漏了它,用户点了「清空」而崩溃记录仍在,
+        //       正是这一页最不该出现的那种自相矛盾。
         XDiagSession.clearAll(app)
         XDiagSession.close()
+        XSurvivorLog.clear()
         XDiagnostics.clearAll()
 
         // ③ 开关开着 → 起新的一轮。目录必须先建好,捕获与域文件都往它里面写。

@@ -78,8 +78,14 @@ class RikkaHubApp : Application() {
         //   ⑤ 上游请求记录落 net.log —— 它经 XDiagFileStore 写,故排在它之后。
         //      (另有一条:上一次运行的崩溃也在这里带进诊断,见 ⑥。)
         //
-        // ⚠️ 顺序要紧:持久化(开关初值)→ 会话目录(落盘位置)→ 捕获 → 域落盘 → 请求记录。
+        // ⚠️ 顺序要紧:持久化(开关初值)→ **存活层** → 会话目录(落盘位置) → 捕获
+        //    → 事件落盘 → 请求记录。
+        //
+        // 存活层排在会话目录**之前是硬要求**:XDiagSession 在建不出目录时会记一条关键失败
+        // 留存,而那条记录要落到 survivors.log —— 顺序反了,「目录建不出来」这件事本身就
+        // 留不下痕迹,而那正是最需要它的一次。它只记下根目录、不建目录不开文件,故够轻。
         DiagnosticSwitchStore.install(this)
+        XSurvivorLog.install(this)
         XDiagSession.install(this)
         XLogcatCapture.install(this)
         XDiagFileStore.install()
