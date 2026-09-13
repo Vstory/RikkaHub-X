@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.ComposeFoundationFlags
@@ -40,6 +41,7 @@ import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
 import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
+import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XCrashReport
 import me.rerere.rikkahub.x.diag.XDiagFileStore
 import me.rerere.rikkahub.x.diag.XDiagSession
@@ -86,6 +88,9 @@ class RikkaHubApp : Application() {
         // 存活层排在会话目录**之前是硬要求**:XDiagSession 在建不出目录时会记一条关键失败
         // 留存,而那条记录要落到 survivors.log —— 顺序反了,「目录建不出来」这件事本身就
         // 留不下痕迹,而那正是最需要它的一次。它只记下根目录、不建目录不开文件,故够轻。
+        //   ⓪ 单调时钟源(2026-09-13):时间线靠它才发现「墙上时钟被改过」。
+        //      排在最早 —— 越早接上,越早能发现跳变(那之后的时间线才可信)。
+        XDiagnostics.installClockSource { SystemClock.elapsedRealtime() }
         DiagnosticSwitchStore.install(this)
         XSurvivorLog.install(this)
         XDiagSession.install(this)

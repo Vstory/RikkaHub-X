@@ -2,6 +2,7 @@
 package me.rerere.rikkahub.x.diag
 
 import android.content.Context
+import android.os.SystemClock
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -542,6 +543,9 @@ object XLogcatCapture {
             add("${XDiagEnv.MARK} capture info ${XDiagEnv.MARK}")
             addAll(XDiagEnv.appLines(context))
             add("started : ${XDiagEnv.stamp(s.startedAt)}")
+            // 单调锚点:与上一行同时取,但**不受改时间影响**。读者若怀疑时间线乱序,
+            // 拿这两行一比就能看出当时有没有被改过(检测与理由见 XClockWatch)。
+            add("monotonic: ${SystemClock.elapsedRealtime()} ms since boot")
             // 措辞刻意避开「本文件…」:这一行会**跟着文件被导出**,而导出时已逐行脱敏 ——
             // 若写「本文件未脱敏」,它在导出物里就成了假话。改说「原始文件本身不脱敏」,
             // 那是关于原始文件的陈述,在两种载体里都成立。

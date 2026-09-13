@@ -784,7 +784,11 @@ private fun writeExport(
             // 快照**已经在入口处抓好并挂在这个载荷上了**(见导出卡片那段注释),
             // 这里只管写、不再自己抓一次:再抓一次会得到**第二份**、而且时机晚于
             // 用户选保存位置 —— 「导出那一刻」就不再是同一个时刻了。
-            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress, payload.extra)
+            // 时间跳变那句话挂在**头部行**里(而不是新加一个参数):头部行本来就是
+            // 「关于这次记录的元信息」,而跳变正是这样一种信息 —— 且这样 XDiagZip 仍是
+            // 纯逻辑(它不碰 XDiagnostics)。
+            val header = XDiagEnv.appLines(context) + listOfNotNull(XDiagnostics.clockNote())
+            XDiagZip.write(header, out, payload.dir, progress, payload.extra)
 
         is PendingExport.Text -> {
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出

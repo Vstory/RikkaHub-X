@@ -242,6 +242,7 @@ object XDiagnostics {
 
     /** 记录一条。**调用方一般用 [XLog] 而不是直接调这里**。 */
     fun record(domain: XDomain, level: Level, event: String, message: String, error: Throwable? = null) {
+        watchClock()
         rings.getValue(domain).record(level, event, message, error)
         // 再落一份盘。放在这个**底层入口**而不是 XLog：框架自身的失败路径也走这里，
         // 而那些正是「需要在文件里看到」的。
@@ -249,6 +250,26 @@ object XDiagnostics {
         lineSink?.let { sink ->
             sink(domain, XDiagLine.format(level, domain, event, XLogRing.textWithError(message, error)))
         }
+    }
+
+    /**
+     * 顺手看一眼时钟是否被改过。**与记录同频** —— 开销是一次减法加一次比较。
+     *
+     * 发现跳变时进**关键失败留存**:它属于「会让现场静默失效」那一类 ——
+     * 时间线从此不能按顺序信,而这件事如果不写下来,读的人只会觉得「这日志怎么乱的」。
+     * (留存是跨会话、与开关无关的,故「开关关着时时间被改」也留得下。)
+     */
+    private fun watchClock() {
+        val clock = monoClock ?: return
+        val jump = runCatching { clockWatch.observe(System.currentTimeMillis(), clock()) }
+            .getOrNull() ?: return
+        val text = XClockWatch.describe(jump)
+        lastClockJump = text
+        recordStickyFailure(
+            domain = XDomain.CORE,
+            event = XClockWatch.JUMP_EVENT,
+            message = text,
+        )
     }
 
     fun entries(domain: XDomain): List<XLogRing.Entry> = rings.getValue(domain).recent()
@@ -295,6 +316,48 @@ object XDiagnostics {
     )
 
     private val sticky = AtomicReference<StickyFailure?>(null)
+
+    // ────────────────────────────────────
+    // 时间跳变检测(2026-09-13 加)
+    // ────────────────────────────────────
+    //
+    // 事件行上的 `at` 是**墙上时钟**,而它可以被改(用户手动改时间 / NTP 步进 / 切时区)。
+    // 一旦它往回跳,时间线的顺序就不再等于真实先后 —— 而读的人正是**按顺序**推因果的。
+    // 这正是仓库里那条既有判断:「**乱序比缺时间更坏**」。
+    //
+    // 单调时钟不会跳,故同时读两个、比较增量差(理由与阈值见 [XClockWatch])。
+    //
+    // ⚠️ 单调时钟由外部**注入**,而不是直接调 `SystemClock`:那样这个类就碰了 Android,
+    //    而它有 JVM 单测(`XDiagnosticsTest`)—— 在 JVM 里 `SystemClock` 会抛。
+    //    注入的是 lambda;单测不注入 = 这条路完全不触发 ✓。
+    @Volatile
+    private var monoClock: (() -> Long)? = null
+
+    private val clockWatch = XClockWatch.Watch()
+
+    /** 最近一次时钟跳变的人话描述;没有则 `null`。 */
+    @Volatile
+    private var lastClockJump: String? = null
+
+    /**
+     * 接上单调时钟源。**在 `Application.onCreate` 里调用**(可重复调用,幂等)。
+     *
+     * 不接也没关系 —— 那就只是没有跳变检测,其余一切照旧。
+     */
+    fun installClockSource(clock: () -> Long) {
+        monoClock = clock
+    }
+
+    /** 已发现的时钟跳变次数(0 = 没发现)。 */
+    fun clockJumps(): Int = clockWatch.jumps
+
+    /**
+     * 给包内清单用的一句话;没发现跳变则返回 `null`(**整段不写** —— 与关键词索引同一个口径:
+     * 没有内容就不留空标题,否则读者会以为那段坏了)。
+     */
+    fun clockNote(): String? = lastClockJump?.let { desc ->
+        "$desc(本次记录共发现 ${clockWatch.jumps} 次)"
+    }
 
     /** 最近一次关键失败；没有则为 `null`。 */
     fun stickyFailure(): StickyFailure? = sticky.get()
