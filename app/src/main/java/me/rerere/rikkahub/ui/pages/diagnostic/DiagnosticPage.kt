@@ -156,13 +156,6 @@ fun DiagnosticPage() {
     // 它要回答的问题只有一个:「磁盘上到底有没有留存」。
     val survivorBytes = remember(revision, tick) { XSurvivorLog.file()?.takeIf { it.isFile }?.length() ?: 0L }
 
-    // 事件列表的数据。与其它快照同一口径(随 revision/tick 重算)。
-    // ⚠️ 筛选规则全在 [XEventFilter] 里(纯逻辑 + 单测):搜哪些字段、大小写、域与关键字
-    //    的关系 —— 每一处判错了都只表现为「明明有却搜不到」,而那与「没记录」长得一样。
-    val allRows = remember(revision, tick) { XEventFilter.buildRows { XDiagnostics.entries(it) } }
-    val matchedRows = remember(allRows, query, onlyDomain) { XEventFilter.apply(allRows, query, onlyDomain) }
-    val shownRows = remember(matchedRows) { matchedRows.take(XEventFilter.MAX_ROWS) }
-
     val filesRoot = remember(context) { context.filesDir.absolutePath }
 
     // 待导出的内容。先记下内容、再让用户挑保存位置 —— 反过来会先去算一遍内容（可能很大）。
@@ -178,6 +171,13 @@ fun DiagnosticPage() {
     // 展开中的那一条(键见下面 items 的注释)。**只允许展开一条** —— 长文本同时展开几段
     // 就又要滚半天,而那与「一眼定位」的初衷相反。
     var expandedKey by remember { mutableStateOf<String?>(null) }
+
+    // 事件列表的数据。与其它快照同一口径(随 revision/tick 重算)。
+    // ⚠️ 筛选规则全在 [XEventFilter] 里(纯逻辑 + 单测):搜哪些字段、大小写、域与关键字
+    //    的关系 —— 每一处判错了都只表现为「明明有却搜不到」,而那与「没记录」长得一样。
+    val allRows = remember(revision, tick) { XEventFilter.buildRows { XDiagnostics.entries(it) } }
+    val matchedRows = remember(allRows, query, onlyDomain) { XEventFilter.apply(allRows, query, onlyDomain) }
+    val shownRows = remember(matchedRows) { matchedRows.take(XEventFilter.MAX_ROWS) }
 
     // 走系统的「创建文档」让用户自己选存到哪。不再用剪贴板:它装不下完整日志,也留不下文件。
     //
