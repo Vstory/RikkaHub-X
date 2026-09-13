@@ -739,6 +739,24 @@ jobs:
       # 与「出问题时回头查一两周内的崩溃」的用法匹配），也不占 release 页面。
       #
       # 用法：`java -jar retrace.jar mapping.txt crash.txt`
+      # 断言**产物的 R8 输出里,ML Kit 那三个 ComponentRegistrar 的无参构造还在**。
+      #
+      # 这是 2026-09-13 那次「扫码静默失效」的回归哨兵。故障链(已用真机日志确认):
+      #   firebase-common 被移除 → firebase-components 解析掉回 16.1.0
+      #   → 而「保 ComponentRegistrar 无参构造」的 consumer 规则只在 19.x 里
+      #   → R8 削掉三个 registrar 的 <init>
+      #   → 启动时 `ComponentDiscovery: Invalid component registrar`(NoSuchMethodException)
+      #   → 组件注册失败 → BarcodeScanning.getClient() 拿到 null → 扫码 NPE
+      #
+      # 为什么要看 mapping:它记着 R8 输出里**实际存在**的成员 —— 构造被削掉,那一行就不在。
+      # 这是「不用跑真机也能拦住」的那一层。mapping 由上面的构建步骤产生。
+      - name: Assert ML Kit component registrars keep their constructors
+        if: success()
+        run: |
+          MAPPING=app/build/outputs/mapping/release/mapping.txt
+          [ -f "$MAPPING" ] || { echo "❌ 找不到 R8 mapping,无法断言"; exit 1; }
+          python3 scripts/check_x_mlkit_registrar_keep.py --mapping "$MAPPING"
+
       - name: Keep R8 mapping for crash deobfuscation
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

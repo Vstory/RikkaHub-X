@@ -50,6 +50,7 @@ import argparse
 import re
 import sys
 import xml.etree.ElementTree as ET
+import re
 from pathlib import Path
 
 MANIFEST = "app/src/main/AndroidManifest.xml"
@@ -144,6 +145,17 @@ def check(root: Path) -> list[str]:
         if not target.is_file():
             continue
         text = target.read_text(encoding="utf-8")
+        # ⚠️ **注释不算依赖**(2026-09-13 加)。判据守的是「有没有引入 Firebase 的依赖/插件」,
+        #    而注释里解释「为什么不许引入」时必然要提到 firebase —— 注释不可能引入依赖,
+        #    把它算进来只会逼着后来人不敢写清楚原因。
+        text = re.sub(r"(?m)//.*$", "", text)
+        text = re.sub(r"(?m)^\s*#.*$", "", text)
+        # ⚠️ **一处刻意的例外**:把 firebase-components 钉版本(见 app/build.gradle.kts 那段注释)
+        #    —— 它是 ML Kit 的传递依赖、只带 firebase-annotations,且**必须**定版本才能保住
+        #    ComponentRegistrar 的无参构造(否则扫码坏)。故只放行这一个坐标,别的 firebase
+        #    依赖照旧会被报出来。
+        text = re.sub(r"(?m)^\s*(firebaseComponents\s*=.*|firebase-components\s*=\s*\{.*|"
+                      r"implementation\(libs\.firebase\.components\))\s*$", "", text)
         for needle in ("firebase", "google-services", "crashlytics"):
             if needle in text.lower():
                 problems.append(

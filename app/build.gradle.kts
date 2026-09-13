@@ -367,6 +367,27 @@ dependencies {
     // quickie (qrcode scanner)
     implementation(libs.quickie.bundled)
     implementation(libs.barcode.scanning)
+    // [X-custom] 把 firebase-components 钉在 19.0.0(2026-09-13 修一次真机故障)。
+    //
+    // 故障现象:扫码弹 `QRError(NullPointerException: ... zzg.zza on a null object reference
+    // in getClient(BarcodeScannerOptions))`。
+    //
+    // 根因(已用真机日志 + 产物双向确认):ML Kit 的组件注册**靠反射** —— manifest 的
+    // meta-data 里写着三个 ComponentRegistrar 的类名,运行时
+    // `getDeclaredConstructor().newInstance()` 实例化。而「保类名 + 保无参构造」靠的是
+    // **consumer 规则**:
+    //     -keep class * implements com.google.firebase.components.ComponentRegistrar { void <init>(); }
+    // 这条规则**只在 firebase-components 19.x 里有**,16.x 没有。
+    //
+    // 19.x 此前是**被 firebase-common 拉高的**(22.2.0 → components 19.0.0)。移除
+    // firebase-common 后依赖解析掉回 ML Kit 要求的下限 **16.1.0** → 规则消失 → R8 把三个
+    // registrar 的 `<init>` 削掉 → 启动时 `ComponentDiscovery: Invalid component registrar`
+    // (`NoSuchMethodException: <init> []`)→ 组件注册不进去 → `getClient` 拿到 null → 扫码 NPE。
+    // ⚠️ 这一路**不崩、不报错**,只在 logcat 里留三行 W —— 正是最容易漏掉的那种静默失效。
+    //
+    // 这里只**定版本**:19.0.0 只依赖 firebase-annotations,**不会**把 Firebase 运行时带回来,
+    // 而它本来就是 ML Kit 的传递依赖(一直在包里)。
+    implementation(libs.firebase.components)
     implementation(libs.androidx.camera.core)
 
     // Room

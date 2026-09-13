@@ -1,6 +1,10 @@
 [versions]
 agp = "9.3.1"
 barcodeScanning = "17.3.0"
+# [X-custom] 钉死 firebase-components(2026-09-13)。见 app/build.gradle.kts 那段注释:
+# 保「ComponentRegistrar 无参构造」的那条 consumer 规则只在 19.x 里有,而 19.x 此前是被
+# firebase-common 拉高的;移除 firebase-common 后会掉回 16.1.0 → 扫码坏。
+firebaseComponents = "19.0.0"
 cameraCore = "1.6.2"
 dom4j = "2.2.0"
 jlatexmath = "1.5"
@@ -75,6 +79,7 @@ androidx-media3-common = { module = "androidx.media3:media3-common", version.ref
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
 barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcodeScanning" }
+firebase-components = { module = "com.google.firebase:firebase-components", version.ref = "firebaseComponents" }
 dom4j = { module = "org.dom4j:dom4j", version.ref = "dom4j" }
 jlatexmath = { module = "com.github.rikkahub.jlatexmath-android:jlatexmath", version.ref = "jlatexmath" }
 jlatexmath-font-greek = { module = "com.github.rikkahub.jlatexmath-android:jlatexmath-font-greek", version.ref = "jlatexmath" }
