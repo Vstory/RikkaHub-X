@@ -10,10 +10,15 @@ import java.util.Locale
  * 一次诊断会话的目录 —— 「开关关 → 开」对应一个新目录，里面按**用途**分文件：
  *
  * ```
- * x-diag/session-20260912-173001/
- *   logcat.log    ← 原始 logcat（另一个写入者，见 XLogcatCapture）
- *   events.log    ← 事件时间线：语义事件 + 网络元数据，一条一行 JSON
+ * x-diag/
+ *   survivors.log            ← 常开、跨会话（不在任何 session 里，见 XSurvivorLog）
+ *   session-20260912-173001/
+ *     logcat_1.log …          ← 原始 logcat，分片轮转（见 XLogcatCapture / XLogcatParts）
+ *     events.log              ← 事件时间线：语义事件 + 网络元数据，一条一行 JSON
  * ```
+ *
+ * ⚠️ **旧会话目录会被自动清掉**（只留最近几个，见 [XDiagRotate]）——
+ * 因为导出只取最新的那一个，更早的留着只是占磁盘。
  *
  * ⚠️ **只有这两个文件，而这是刻意的**（2026-09-13 简化：原先按来源分 11 个域文件）。
  * 排查时最常问的恰恰是**跨域因果**（「发消息 → 写失败 → 同步起来了 → 崩了」），
@@ -100,8 +105,59 @@ object XDiagSession {
             return null
         }
         dir = target
+        // 清理旧会话目录。**放到后台线程**:递归删掉上百 MB 是几百毫秒到数秒的 IO,
+        // 而 open() 是从「用户拨开关」那条路上来的(主线程)—— 压在那里就是一次 ANR,
+        // 而罪魁祸首是我们自己的日志清理,很难看。
+        rotateAsync(context.applicationContext)
         return target
     }
+
+    /**
+     * 清理超限的旧会话目录(策略见 [XDiagRotate])。**不阻塞调用方**。
+     *
+     * 失败一律吞掉:清理是「顺手做的事」,失败不该影响诊断本身 —— 真失败了也只是磁盘
+     * 多占一点,下次开开关还会再试。**不记关键失败留存**:那类留存是给「会让功能静默
+     * 失效、事后无法补救」的失败用的(见 [XSurvivorLog]),而这里现场仍在,只是多了
+     * 几个旧目录。
+     */
+    private fun rotateAsync(context: Context) {
+        Thread({
+            runCatching {
+                val root = File(context.filesDir, ROOT_DIR)
+                val sessions = root.listFiles()
+                    ?.filter { it.isDirectory && it.name.startsWith(SESSION_PREFIX) }
+                    // 名字带时间戳,故**降序即最新在前**(见 XDiagRotate.selectToDelete 的 @param)
+                    ?.sortedByDescending { it.name }
+                    ?.map { XDiagRotate.Entry(it.name, sizeOf(it)) }
+                    .orEmpty()
+
+                val doomed = XDiagRotate.selectToDelete(sessions)
+                if (doomed.isEmpty()) return@runCatching
+
+                var freed = 0L
+                doomed.forEach { name ->
+                    val victim = File(root, name)
+                    freed += sizeOf(victim)
+                    victim.deleteRecursively()
+                }
+                // 记一条**普通事件**(不是关键失败留存):这是正常清理,该在时间线里看得见 ——
+                // 否则「怎么早先那次会话不见了」会变成一个只能猜的问题。
+                XDiagnostics.record(
+                    domain = XDomain.CORE,
+                    level = XLogRing.Level.INFO,
+                    event = XDiagRotate.ROTATE_EVENT,
+                    message = "清理了 ${doomed.size} 个旧会话目录(约 ${XLogcatCapture.sizeText(freed)})," +
+                        "只保留最近 ${XDiagRotate.KEEP_SESSIONS} 个 —— 旧会话不会被导出带出",
+                )
+            }
+        }, "x-diag-rotate").apply { isDaemon = true }.start()
+    }
+
+    /** 一个目录(含子目录)的占用字节。算不出来按 0 计 —— 那只会让它更容易被留下。 */
+    private fun sizeOf(file: File): Long = runCatching {
+        if (file.isFile) file.length()
+        else file.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(0L)
 
     /** 结束本次会话（目录与文件保留）。 */
     fun close() {
