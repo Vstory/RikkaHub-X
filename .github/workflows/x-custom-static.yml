@@ -17,6 +17,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_model_resolution.py` | UI 侧是否用了全局模型口径 | 只配了会话级模型时误报「请先选择聊天模型」 |
 # | `pangu_format_resources.py` | 中文文案的盘古之白是否已格式化 | 排版回退,得人工重跑脚本 |
 # | `check_x_string_resources.py` | 字符串资源里未转义的撇号与重名 | aapt2 拒收 → 资源编译失败,整条 CI 中断 |
+# | `check_x_diag_layout.py` | 诊断域枚举 ↔ 文件名 ↔ 目录名是否自洽 | 域文件在包里被标成 `unrecognised` / 清空扫不到旧目录 |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -53,6 +54,12 @@ on:
       - 'scripts/check_x_model_resolution.py'
       - 'scripts/pangu_format_resources.py'
       - 'scripts/check_x_string_resources.py'
+      - 'scripts/check_x_diag_layout.py'
+      # 诊断布局检查器的输入(域枚举 / 会话目录 / 落盘 / 打包 / 诊断页)。
+      # 用通配而不是逐个列文件:新增诊断文件时不必回来登记 —— 漏登记正是「改了
+      # 却不在检查范围内」这类静默缺口。
+      - 'app/src/main/java/me/rerere/rikkahub/x/diag/**'
+      - 'app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic/**'
       # 检查器的输入。用**通配**而不是逐个列模块:盘古检查器会扫**所有 Gradle 模块**的
       # values-zh(实测:app / oauth / search 共 3 个 —— `collect_files` 遍历
       # `*/src/main/res`),逐个手写模块名极易漏,而漏掉的后果正是「改了那个模块的文案、
@@ -108,3 +115,10 @@ jobs:
       # 故把那条规则前移到这里;同时查同一文件里的重名(aapt2 也会因此失败)。
       - name: 字符串资源写法
         run: python3 scripts/check_x_string_resources.py
+
+      # 诊断日志的布局自洽:域枚举(key)↔ 落盘文件名 ↔ 打包时的说明 ↔ 会话目录名。
+      # 这几处**编译期毫无约束**,漂移了也不会报错 —— 只在读懂导出的包时才暴露:
+      # 域文件被写成 `unrecognised file`(看不出属于谁),或改了目录名导致「清空」
+      # 扫不到旧目录(点了清空却没清)。
+      - name: 诊断日志布局
+        run: python3 scripts/check_x_diag_layout.py
