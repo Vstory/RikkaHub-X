@@ -1389,7 +1389,12 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_summary_window_none">无记录</string>
   <string name="diagnostic_domains_title">分域条数</string>
   <string name="diagnostic_domain_entries">%1$d</string>
-  <string name="diagnostic_export_title">导出</string>
+    <string name="diagnostic_events_search">搜事件名或内容</string>
+  <string name="diagnostic_events_all">全部</string>
+  <string name="diagnostic_events_empty">还没有记录——打开上面的开关才开始记。</string>
+  <string name="diagnostic_events_scope">只搜每域最近 %1$d 条;完整内容在导出的包里。</string>
+  <string name="diagnostic_events_count">显示 %1$d / %2$d</string>
+<string name="diagnostic_export_title">导出</string>
   <string name="diagnostic_export_bundle">导出诊断包</string>
   <string name="diagnostic_export_bundle_desc">一次导出全部:原始应用日志、事件时间线(语义事件与网络记录),外加一份说明文件,打成压缩包,适合交给 AI。凭据会被掩掉,但日志里仍可能含你个人的内容,分享前请先过目。</string>
   <string name="diagnostic_export_bundle_none">还没有记录 —— 打开上面的开关,从那一刻起才会开始记录。</string>

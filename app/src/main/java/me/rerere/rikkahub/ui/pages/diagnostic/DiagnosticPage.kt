@@ -6,12 +6,18 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -31,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
 import java.io.File
@@ -56,6 +63,7 @@ import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XDiagZip
 import me.rerere.rikkahub.x.diag.XDiagnostics
 import me.rerere.rikkahub.x.diag.XDomain
+import me.rerere.rikkahub.x.diag.XEventFilter
 import me.rerere.rikkahub.x.diag.XExportPhase
 import me.rerere.rikkahub.x.diag.XExportProgress
 import me.rerere.rikkahub.x.diag.XLogRing
@@ -148,6 +156,13 @@ fun DiagnosticPage() {
     // 它要回答的问题只有一个:「磁盘上到底有没有留存」。
     val survivorBytes = remember(revision, tick) { XSurvivorLog.file()?.takeIf { it.isFile }?.length() ?: 0L }
 
+    // 事件列表的数据。与其它快照同一口径(随 revision/tick 重算)。
+    // ⚠️ 筛选规则全在 [XEventFilter] 里(纯逻辑 + 单测):搜哪些字段、大小写、域与关键字
+    //    的关系 —— 每一处判错了都只表现为「明明有却搜不到」,而那与「没记录」长得一样。
+    val allRows = remember(revision, tick) { XEventFilter.buildRows { XDiagnostics.entries(it) } }
+    val matchedRows = remember(allRows, query, onlyDomain) { XEventFilter.apply(allRows, query, onlyDomain) }
+    val shownRows = remember(matchedRows) { matchedRows.take(XEventFilter.MAX_ROWS) }
+
     val filesRoot = remember(context) { context.filesDir.absolutePath }
 
     // 待导出的内容。先记下内容、再让用户挑保存位置 —— 反过来会先去算一遍内容（可能很大）。
@@ -156,6 +171,13 @@ fun DiagnosticPage() {
     // 导出入口「正在抓缓冲快照」的标志。抓快照要起一次 logcat 进程(几十到几百毫秒),
     // 期间重复点会抓两份、并弹两次保存位置。故挡住。
     var preparing by remember { mutableStateOf(false) }
+
+    // 「事件」区的搜索与筛选。默认全空 = 看全部。
+    var query by remember { mutableStateOf("") }
+    var onlyDomain by remember { mutableStateOf<XDomain?>(null) }
+    // 展开中的那一条(键见下面 items 的注释)。**只允许展开一条** —— 长文本同时展开几段
+    // 就又要滚半天,而那与「一眼定位」的初衷相反。
+    var expandedKey by remember { mutableStateOf<String?>(null) }
 
     // 走系统的「创建文档」让用户自己选存到哪。不再用剪贴板:它装不下完整日志,也留不下文件。
     //
@@ -466,6 +488,114 @@ fun DiagnosticPage() {
                             )
                         }
                     }
+                }
+            }
+
+            // ── 事件(可搜可筛)──
+            //
+            // 用户对这一页的原话是「**搜关键词就能定位**」—— 这一区就是那条路。
+            // 在此之前,这一页只显示「各域多少条」,而**看不到任何一条内容**:
+            // 想确认某个埋点到底有没有触发,只能先导出、再解压、再翻文件。
+            //
+            // ⚠️ 两处刻意的取舍(写在这里,免得被当成疏漏):
+            //  · 只搜**最近一批**(每域 XEventFilter.PER_DOMAIN_TAKE 条、最多显示 MAX_ROWS 行)
+            //    —— 列表不可能把几万条全渲染出来;
+            //  · 而「要看全量」的正当去处是**导出的包**(一条不漏、还能交给 AI)。
+            //    故下面那行计数**必须把「只在最近一批里搜」说出来**,否则用户搜不到早先
+            //    那条时会以为日志漏了 —— 那正是这一类页面最不该造成的误解。
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.diagnostic_events_search)) },
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = onlyDomain == null,
+                            onClick = { onlyDomain = null },
+                            label = { Text(stringResource(R.string.diagnostic_events_all)) },
+                        )
+                        perDomain.forEach { (domain, _) ->
+                            FilterChip(
+                                selected = onlyDomain == domain,
+                                // 再点一下同一个 = 取消筛选(比再去找「全部」顺手)
+                                onClick = { onlyDomain = if (onlyDomain == domain) null else domain },
+                                label = { Text(domain.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (allRows.isEmpty()) {
+                            stringResource(R.string.diagnostic_events_empty)
+                        } else {
+                            stringResource(
+                                R.string.diagnostic_events_scope,
+                                XEventFilter.PER_DOMAIN_TAKE,
+                            ) + " · " + stringResource(
+                                R.string.diagnostic_events_count,
+                                shownRows.size,
+                                matchedRows.size,
+                            )
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+            }
+
+            // ⚠️ 不用 `key = {...}`:两条事件完全可能**同一毫秒、同域、同事件名**
+            //    (循环里连发就是这么回事),而 LazyColumn 的 key 必须唯一 —— 撞了会直接崩,
+            //    且只在真出现重复那一刻才崩。用位置作键即可(列表本来就会整体重建)。
+            items(shownRows) { row ->
+                val key = row.domain.key + "|" + row.entry.at + "|" + row.entry.event
+                val expanded = expandedKey == key
+                CardGroup(modifier = Modifier.padding(horizontal = 8.dp)) {
+                    item(
+                        onClick = { expandedKey = if (expanded) null else key },
+                        overlineContent = {
+                            Text(row.entry.timeText() + " · " + row.domain.label)
+                        },
+                        headlineContent = {
+                            Text(
+                                text = row.entry.event,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        supportingContent = {
+                            Text(
+                                text = row.entry.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                // 长行折叠:默认两行,点一下展开整段。
+                                // 「一条到底」在诊断页上很常见(路径、JSON 片段),
+                                // 全展开会把列表拉得没法扫。
+                                maxLines = if (expanded) Int.MAX_VALUE else 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        trailingContent = {
+                            Text(
+                                text = if (row.entry.level == XLogRing.Level.WARN) "W" else "I",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (row.entry.level == XLogRing.Level.WARN) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        },
+                    )
                 }
             }
 
