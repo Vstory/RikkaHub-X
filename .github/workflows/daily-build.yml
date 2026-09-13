@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: '构建类型: nightly=随机临时签名测试版(默认) / release=正式固定签名(需配置 KEY_BASE64 等 secrets)'
+        description: '构建类型: nightly=测试版(独立包名 .nightly,与正式版同签名,可共存) / release=正式版'
         required: true
         default: nightly
         type: choice
@@ -162,51 +162,43 @@ jobs:
           X_SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           X_SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           X_SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-          X_GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'nightly' }}"
-          if [ "$BUILD_TYPE" = "release" ]; then
-            # 选了正式构建却缺 secret → **直接失败**，不静默回退到随机签名。
-            # 回退的后果是：产物看着"构建成功"，签名却不对，要等用户安装时才发现升不了级。
-            missing=""
-            for v in X_KEY_BASE64 X_SIGNING_STORE_PASSWORD X_SIGNING_KEY_ALIAS X_SIGNING_KEY_PASSWORD; do
-              [ -n "${!v}" ] || missing="$missing $v"
-            done
-            if [ -n "$missing" ]; then
-              echo "❌ 选择了 release 构建，但以下 secret 为空:$missing"
-              echo "   拒绝回退到随机签名（那会让产物无法与后续正式包互相覆盖安装）。"
-              exit 1
-            fi
-            # 正式构建(release)且已提供密钥:解码正式 keystore → 固定正式签名,接真实 Firebase
-            echo "正式构建:使用正式密钥固定签名(commit ${{ github.sha }})"
-            printf '%s' "$X_KEY_BASE64" | base64 -d > app/app.key
-            # storeFile 由 runner 现场拼（GITHUB_WORKSPACE），与 nightly 分支同一来源 ——
-            # 不写死仓库在 runner 上的路径名，改名/换布局都不会失配。
-            printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/app/app.key" > local.properties
-            printf 'storePassword=%s\n' "$X_SIGNING_STORE_PASSWORD" >> local.properties
-            printf 'keyAlias=%s\n' "$X_SIGNING_KEY_ALIAS" >> local.properties
-            printf 'keyPassword=%s\n' "$X_SIGNING_KEY_PASSWORD" >> local.properties
-            printf '%s\n' "$X_GOOGLE_SERVICES_JSON" > app/google-services.json
-          else
-            # 其余(nightly 默认 / 未提供密钥):每次构建生成一次性随机临时 keystore 签名。
-            # 随机口令 + 随机 dname → 每次产物签名指纹不同,仅供测试分发,升级需重装。
-            # (即使仓库配了密钥,只要没主动选 release,仍走随机签名——2026-09-10 用户确认)
-            # 注意:keytool 生成时【不要】单独 -keypass,JKS 中 key 密码默认=store 密码;
-            # 若 keypass≠storepass,AGP 用 storePassword 解 key 会报 "Given final block not properly padded"。
-            echo "nightly 构建:每次随机临时签名(commit ${{ github.sha }})"
-            SP="$(openssl rand -hex 16)"
-            DN="CN=RikkaHubX Nightly $(date +%s), O=RikkaHubX Dev, C=CN"
-            keytool -genkeypair -v -keystore app/app.key \
-              -storepass "$SP" \
-              -alias rikkahub \
-              -keyalg RSA -keysize 2048 -validity 3650 \
-              -dname "$DN" >/dev/null 2>&1
-            echo "storeFile=${GITHUB_WORKSPACE}/app/app.key" > local.properties
-            echo "storePassword=$SP" >> local.properties
-            echo "keyAlias=rikkahub" >> local.properties
-            echo "keyPassword=$SP" >> local.properties
-            cp .github/google-services.placeholder.json app/google-services.json
+
+          # ⚠️ **两种构建都用同一把正式密钥**(2026-09-13 用户定:nightly 与正式版一个签名)。
+          #
+          # 为什么这件事值:随机签名的 nightly **每次构建签名都不同**,于是每次装都要先卸载
+          # (数据全丢)。改用固定密钥后,**连续两次 nightly 之间可以直接覆盖升级** ——
+          # 这正是「测试包」最该有的性质。
+          #
+          # ⚠️ 代价(写在这里,免得后来人以为是漏了):nightly 不再有「随便哪个分支都能出包」
+          #    的便利 —— 它现在**必须**有正式密钥的 secrets,而 nightly 可以从任意分支触发
+          #    (release 那条 `refs/heads/main` 的守卫**不**管它)。真要止损就轮换密钥。
+          #
+          # 缺 secret → **直接失败**,不静默回退到随机签名:那会让产物看着"构建成功"、
+          # 签名却不对,而用户要等安装时才发现升不了级。
+          missing=""
+          for v in X_KEY_BASE64 X_SIGNING_STORE_PASSWORD X_SIGNING_KEY_ALIAS X_SIGNING_KEY_PASSWORD; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "❌ 缺少签名密钥:$missing"
+            echo "   nightly 与 release 用同一把密钥,故两者都需要它。"
+            echo "   拒绝回退到随机签名 —— 那会让产物与后续包无法互相覆盖安装。"
+            exit 1
           fi
+
+          echo "使用固定正式密钥签名(channel=${BUILD_TYPE}, commit ${{ github.sha }})"
+          printf '%s' "$X_KEY_BASE64" | base64 -d > app/app.key
+          # storeFile 由 runner 现场拼（GITHUB_WORKSPACE）—— 不写死仓库在 runner 上的路径名，
+          # 改名/换布局都不会失配。
+          printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/app/app.key" > local.properties
+          printf 'storePassword=%s\n' "$X_SIGNING_STORE_PASSWORD" >> local.properties
+          printf 'keyAlias=%s\n' "$X_SIGNING_KEY_ALIAS" >> local.properties
+          printf 'keyPassword=%s\n' "$X_SIGNING_KEY_PASSWORD" >> local.properties
+          # ⚠️ 这里原先还写两份 `google-services.json`(正式版写 secret、nightly 拷占位文件)
+          #    —— Firebase 于 2026-09-13 整体移除,`google-services` 插件也不在了,
+          #    故那两行与 `GOOGLE_SERVICES_JSON` secret 都成了死代码,一并删掉。
 
       # 计算短提交号与构建时间戳(北京时间)。须在构建**之前**完成 —— 时间戳要作为
       # -Px.build.info 传给 Gradle,用于 versionCode 与 versionName(见 app/build.gradle.kts)。
@@ -351,7 +343,8 @@ jobs:
       # 决定本次产物发到哪个 Release。两类构建各用**一个固定 tag**，下载入口长期稳定。
       # 两者必须是不同的 Release：共用同一个 tag 时，后一次构建的说明会整段覆盖前一次 ——
       # 实测正式包的说明把 nightly 页面的免责声明刷掉了。
-      #   nightly → tag `nightly`，随机临时签名（装前须卸载）
+      #   nightly → tag `nightly`，独立包名 `…x.nightly` + **与正式版同一把密钥**，
+      #             故连续两次 nightly 之间可直接覆盖升级（装前不必卸载）
       #   release → tag `release`（页面名 `Release Build`），固定密钥签名（可直接覆盖升级）
       # 两者都标记为预发布：本仓库是自用派生版本，不对外声称稳定正式版。
       - name: Resolve release target
@@ -392,7 +385,7 @@ jobs:
               echo "channel=nightly"
               echo "version=${FULL}"
             } >> "$GITHUB_OUTPUT"
-            echo "nightly → 固定 tag nightly（预发布，随机临时签名）"
+            echo "nightly → 固定 tag nightly（预发布，独立包名 + 与正式版同签名）"
             exit 0
           fi
 
@@ -425,11 +418,10 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ steps.target.outputs.is_nightly }}" = "true" ]; then
-            echo "nightly → 按设计使用随机临时签名，跳过固定签名断言"
-            echo "CERT_SHA256=（nightly 随机临时签名，无固定指纹）" >> "$GITHUB_ENV"
-            exit 0
-          fi
+          # ⚠️ 这里原先对 nightly **跳过**签名断言(那时它按设计用随机签名、无固定指纹)。
+          #    2026-09-13 起 nightly 与正式版**同一把密钥**,故断言对**两种构建一律生效**
+          #    —— 而且更需要它了:nightly 出了签名事故(比如回退成随机签名)的话,
+          #    表现是「装过一次之后再也升不上去」,而那要在用户侧才暴露。
 
           APKSIGNER="$(command -v apksigner || true)"
           for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
@@ -480,6 +472,55 @@ jobs:
           fi
           echo "✅ 签名一致：产物由固定正式密钥签名"
           echo "CERT_SHA256=${ACTUAL}" >> "$GITHUB_ENV"
+
+      # 断言**产物里的包名**与渠道相符(2026-09-13 加)。
+      #
+      # 为什么必须在**产物**上断言,而不是只看 build.gradle.kts:
+      #   nightly 的独立包名是靠 `if (xChannel == "nightly") applicationIdSuffix = ".nightly"`
+      #   实现的 —— 一旦那个条件被改坏(或 `-Px.channel` 没传对),**产物包名会静默变回正式版的**。
+      #   两种后果都不好看,而构建日志里**没有任何异常**(编译 / 签名 / 命名全过):
+      #     · nightly 覆盖到正式版上 → 用户以为在试新功能,其实把正式包替换掉了;
+      #     · 正式版被带上 .nightly → 正式用户装不上更新(包名对不上)。
+      #   签名那一步断言的是「身份的另一半」,两者合起来才保证「装得上、升得动」。
+      - name: Assert package name matches the channel
+        if: success()
+        env:
+          IS_NIGHTLY: ${{ steps.target.outputs.is_nightly }}
+        run: |
+          AAPT2="$(command -v aapt2 || true)"
+          for home in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
+            [ -n "$home" ] || continue
+            [ -n "$AAPT2" ] && break
+            AAPT2="$(ls -d "$home"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)"
+          done
+          # ⚠️ 这里**不许**像 versionName 那样兜底(build.gradle.kts 读默认值)——
+          #    要断言的恰恰是「Gradle 的条件真的生效了」,读配置文件等于自己验自己。
+          #    读不到就拒绝发布。
+          if [ -z "$AAPT2" ]; then
+            echo "❌ 找不到 aapt2，无法断言产物包名 —— 拒绝发布。"
+            exit 1
+          fi
+          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk 2>/dev/null | head -1)"
+          [ -n "$APK" ] || { echo "❌ 找不到 arm64-v8a 产物，无法断言包名"; exit 1; }
+
+          ACTUAL="$("$AAPT2" dump badging "$APK" 2>/dev/null \
+            | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1)"
+          if [ "$IS_NIGHTLY" = "true" ]; then
+            EXPECTED="me.rerere.rikkahub.x.nightly"
+          else
+            EXPECTED="me.rerere.rikkahub.x"
+          fi
+          echo "产物包名: ${ACTUAL:-（读不到）}"
+          echo "期望包名: ${EXPECTED}"
+          case "$ACTUAL" in
+            me.rerere.rikkahub.*) ;;
+            *) echo "❌ 读不到产物包名(aapt2 未能解析)—— 拒绝发布。"; exit 1 ;;
+          esac
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "❌ 包名与渠道不符 —— nightly 与正式版会互相覆盖,或正式版装不上更新。"
+            exit 1
+          fi
+          echo "✅ 包名与渠道相符"
 
       # 生成 release 说明(新 → 旧)。
       # 为什么要有这一步：GitHub 的 release 资产列表**固定按上传顺序(旧→新)**显示，
@@ -571,10 +612,17 @@ jobs:
               fi
             done
             echo
+            # 2026-09-13 起两页脚注**只差包名那句**:nightly 不再是随机签名,
+            # 故「每次装都要先卸载、不能覆盖升级」那条已经作废(它曾是 nightly 最大的麻烦)。
+            # 但**包名不同**带来一条新的、必须说的事:nightly 与正式版是**两个应用**,
+            # 故第一次从旧的 `…rikkahub.x` 迁到 `…x.nightly` 仍要卸载一次 —— 之后才不用。
             if [ "$IS_NIGHTLY" = "true" ]; then
-              echo "> ⚠️ nightly 为**随机临时签名**,每次构建签名不同 → 安装前请先**卸载旧版**(不能覆盖升级)。"
+              echo "> 🔒 固定密钥签名,与正式版**同一把** → 此后每次 nightly 之间可直接**覆盖升级**(无需卸载)。"
               echo ">"
-              echo "> 需要能直接覆盖升级的包,请用 [Release Build](https://github.com/${REPO}/releases/tag/release)。"
+              echo "> ⚠️ 包名是 \`me.rerere.rikkahub.x.nightly\`,与正式版**是两个应用** ——"
+              echo "> 好处是可以同时装;代价是**这一次**从旧包迁过来仍需先卸载(数据会清)。"
+              echo ">"
+              echo "> 签名证书 SHA-256：\`${CERT_SHA256}\`,装前可与本地包比对确认。"
             else
               # 与 nightly 脚注同构：第一句讲「签名性质 → 安装影响」，第二句给可核对的凭据。
               echo "> 🔒 尝鲜版为**固定密钥签名**,每次构建签名相同 → 可直接**覆盖升级**(无需卸载旧版)。"

@@ -175,6 +175,21 @@ android {
             optimization {
                 enable = true
             }
+            // [X-custom] nightly 渠道用**独立包名**(`me.rerere.rikkahub.x.nightly`),
+            // 于是它与正式版是**两个应用**,可以同时装在一台机器上。
+            //
+            // 为什么需要:装 nightly 测新改动时,不必先卸载正式版(那会连同数据一起清掉);
+            // 反过来也一样 —— 两个包各自有自己的数据、通知、权限授予。
+            //
+            // ⚠️ 三个 manifest 里的 provider authority 用的是 `${applicationId}`(fileprovider /
+            //    documents / androidx-startup),故包名一改,authority 跟着变 —— **不需要**
+            //    额外处理,而这一条正是「两个包能共存」的前提(authority 撞了会装不上)。
+            //
+            // ⚠️ 本地构建(x.channel 未传)不加后缀,与正式版同名 —— 那是刻意的:
+            //    本地装的是自己编的包,不该悄悄占用 nightly 的身份。
+            if (xChannel == "nightly") {
+                applicationIdSuffix = ".nightly"
+            }
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
             // [X-custom] 渠道。让 Kotlin 侧能区分「nightly(明确的测试包)」与「release」——

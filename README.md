@@ -15,7 +15,10 @@
 - 🏷️ **MCP 显示名解耦**:每个 MCP 服务器可设独立显示名(支持中文),与内部 ASCII 标识分离,配置/工具链路互不影响
 - 📤 **工作区归档导出/导入**:工作区可整体导出为归档包,亦可从归档包导入还原,便于迁移
 - 📥 **官方备份导入**:可直接导入官方 RikkaHub 的含数据库备份(自动补齐 X 的 schema 差异列)
-- 📦 **与官方同机共存**:包名 `me.rerere.rikkahub.x`、应用名 `RikkaHub X`,与官方数据隔离、互不干扰
+- 📦 **与官方同机共存**:正式版包名 `me.rerere.rikkahub.x`、应用名 `RikkaHub X`,与官方数据隔离、互不干扰
+- 🧪 **测试包也能共存**:nightly 用 `me.rerere.rikkahub.x.nightly`(应用名带 ` Nightly` 后缀),
+  与正式版是**两个应用**,可以同时装 —— 装 nightly 试新功能不必先卸载正式版。
+  且 nightly 与正式版**同一把签名密钥**,故连续两次 nightly 之间可直接覆盖升级(不必每次重装)
 - 🛡️ **eval_javascript 工具加固**(内存 / 日志 / 错误护栏)
 - ⚙️ **CI 无 secrets 降级构建**(fork 无 secrets 也能产出 Release APK)
 - 🔌 **不接入官方 Firebase 项目**(占位配置,待自有账号)
