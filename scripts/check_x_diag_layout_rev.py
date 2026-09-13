@@ -30,6 +30,7 @@ P = "app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic"
 DOMAIN_ENUM = D + "/XDiagnostics.kt"
 STORE = D + "/XDiagFileStore.kt"
 SURVIVOR = D + "/XSurvivorLog.kt"
+PARTS = D + "/XLogcatParts.kt"
 ZIP = D + "/XDiagZip.kt"
 LINE = D + "/XDiagLine.kt"
 NETLINE = D + "/XNetLine.kt"
@@ -63,9 +64,14 @@ def rename_events_const(text: str) -> str:
 
 
 def collide_with_logcat(text: str) -> str:
-    """让事件文件与 logcat 同名 —— 判据 2 的撞车检查必须报出来。"""
+    """让事件文件长成 **logcat 分片名** —— 判据 2 的撞车检查必须报出来。
+
+    ⚠️ 名字刻意取 `logcat_1.log`(带编号)而不是 `logcat.log`:后者**不是**分片名,
+    于是会落到判据 3 被抓住 —— 那样这条变异就**验不到新加的那条撞车判据**了,
+    而「没被验证过的判据」等于不存在(这就是本脚本存在的理由)。
+    """
     assert 'const val EVENTS_FILE = "events.log"' in text, "找不到 EVENTS_FILE 常量"
-    return text.replace('const val EVENTS_FILE = "events.log"', 'const val EVENTS_FILE = "logcat.log"')
+    return text.replace('const val EVENTS_FILE = "events.log"', 'const val EVENTS_FILE = "logcat_1.log"')
 
 
 def hardcode_name_in_zip(text: str) -> str:
@@ -124,6 +130,35 @@ def mention_unknown_name_in_comment(text: str) -> str:
 
 # ── 跑一遍 ─────────────────────────────────────────────────────────────
 
+def hardcode_part_name_in_zip(text: str) -> str:
+    """把 describe() 里**所有**对 XLogcatParts 的引用换掉 —— 判据 5 必须报出来。
+
+    ⚠️ 首版只替换了 `XLogcatParts.isPartName`,而 XDiagZip 里还有一处
+    `XLogcatParts.partOf` —— 判据「引用了 XLogcatParts 吗」照样满足,于是**测不出来**。
+    一个测不出问题的变异会让人以为判据在,其实没验过。故整类前缀一起换。
+    """
+    assert "XLogcatParts." in text, "describe() 里没有引用 XLogcatParts"
+    return text.replace("XLogcatParts.", "LogcatNaming.")
+
+
+def put_part_literal_in_code(text: str) -> str:
+    """在**代码里**写一个分片名 —— 它是真会写出的文件,**不该**被报出来(反例)。"""
+    assert "object XLogcatParts {" in text, "找不到 XLogcatParts 声明"
+    return text.replace(
+        "object XLogcatParts {",
+        'object XLogcatParts {\n    private val LEGIT = "logcat_3.log"',
+    )
+
+
+def put_bogus_part_literal_in_code(text: str) -> str:
+    """写一个**不是**分片名的 logcat 名字 —— 必须被报出来(它不会被写出)。"""
+    assert "object XLogcatParts {" in text, "找不到 XLogcatParts 声明"
+    return text.replace(
+        "object XLogcatParts {",
+        'object XLogcatParts {\n    private val BOGUS = "logcat_backup.log"',
+    )
+
+
 MUTATIONS = [
     ("语义行丢掉 domain 字段", LINE, drop_put_domain),
     ("网络行丢掉 domain 字段", NETLINE, drop_put_domain),
@@ -135,12 +170,17 @@ MUTATIONS = [
     ("SURVIVORS_FILE 常量改名(取不到真源)", SURVIVOR, drop_survivors_const_declaration),
     ("describe() 不引用存活层常量", ZIP, hardcode_survivors_in_zip),
     ("代码里塞一个未登记的文件名字面量", SURVIVOR, inject_code_literal),
+    ("describe() 不再引用 XLogcatParts(分片名会失配)", ZIP, hardcode_part_name_in_zip),
+    ("代码里塞一个假的 logcat 名(logcat_backup.log)", PARTS, put_bogus_part_literal_in_code),
 ]
 
 # ⚠️ **反例**:这些改动**不该**被报出来。检查器有一类失效是「太吵」——
 # 把正当写法也报成问题,于是没人再信它。故正向与反向都要验。
 NEGATIVE_CASES = [
     ("注释里提到未登记的文件名(正当叙述)", SURVIVOR, mention_unknown_name_in_comment),
+    # 分片名是**真会写出**的文件,故代码里出现它不该被报 —— 这条同时验到
+    # 「分片名放行」那条判据真的在(否则它会红)。
+    ("代码里写一个真的分片名(logcat_3.log)", PARTS, put_part_literal_in_code),
 ]
 
 

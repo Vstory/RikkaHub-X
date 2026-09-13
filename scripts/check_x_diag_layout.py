@@ -25,11 +25,13 @@
 1. `XDomain` 枚举解析出的条目数与 key 形态(小写、无路径分隔符、不重复);
 2. 文件名**单点定义**:`events.log` 派生自 `XDiagFileStore.EVENTS_FILE`、
    `logcat.log` 派生自 `XLogcatCapture.LOG_NAME`,不许在别处再写一份字面量;
-3. 全仓每个 `xxx.log` 文件名引用都必须落在上面**三个**之内
+3. 全仓每个 `xxx.log` 文件名引用都必须落在**会真正写出的名字**之内
    (否则 `XDiagZip.describe()` 会把它写成 `unrecognised file`)。
    ⚠️ **注释不算引用** —— 详见文件内 `comment_ranges` 的注释:首版没跳过注释,
    把「对比 LSPosed 的 modules.log」这种正当叙述也报了,属误报;
 4. `XDiagZip.describe()` 必须引用上面三个常量(而不是硬编码文件名);
+   ⚠️ **logcat 是分片的**(2026-09-13 起),名字带编号(`logcat_7.log`),故判据 2/3/5
+   对它的口径是「引用 [XLogcatParts]」而不是「等于某个固定名」。
 4. `XDiagLine` 与 `XNetLine` 都必须写出 `domain` 字段(见上「头号判据」);
 5. `x-diag` / `session-` 两个目录字面量只许出现在 `XDiagSession.kt` 一处。
 
@@ -70,6 +72,7 @@ FILE_STORE_FILE = DIAG_DIR + "XDiagFileStore.kt"
 ZIP_FILE = DIAG_DIR + "XDiagZip.kt"
 LOGCAT_FILE = DIAG_DIR + "XLogcatCapture.kt"
 SURVIVOR_FILE = DIAG_DIR + "XSurvivorLog.kt"
+PARTS_FILE = DIAG_DIR + "XLogcatParts.kt"
 
 # 两个组行函数 —— 判据 4 的对象。它们是「每行带 domain」这条不变量的**唯一**责任方。
 LINE_FORMATTERS = (
@@ -90,8 +93,12 @@ LOG_NAME_RE = re.compile(r'(?<![\w.])([a-z][a-z0-9_\-]*)\.log\b')
 
 # 常量定义处 —— 判据 2 从这里取「唯一真源」的名字。
 EVENTS_CONST_RE = re.compile(r'const val EVENTS_FILE\s*=\s*"([^"]+)"')
-LOG_NAME_CONST_RE = re.compile(r'const val LOG_NAME\s*=\s*"([^"]+)"')
 SURVIVORS_CONST_RE = re.compile(r'const val SURVIVORS_FILE\s*=\s*"([^"]+)"')
+PREFIX_CONST_RE = re.compile(r'const val PREFIX\s*=\s*"([^"]+)"')
+
+# logcat 分片名:`<前缀>_<正整数><后缀>`。与 Kotlin 侧 [XLogcatParts.partOf] 同一判据 ——
+# 两边**必须收得一样窄**:放宽成「以 logcat 开头」会把 `logcat_backup.log` 之类算进来。
+PART_NAME_RE = re.compile(r"^(?P<prefix>[a-z][a-z0-9_]*)_\d+\.log$")
 
 
 def comment_ranges(text: str) -> list:
@@ -201,11 +208,13 @@ def check(root: Path) -> list[str]:
         raise Problem(f"{FILE_STORE_FILE}:找不到 `const val EVENTS_FILE` 常量")
     events_name = m.group(1)
 
-    logcat_text = read(root, LOGCAT_FILE)
-    m = LOG_NAME_CONST_RE.search(logcat_text)
+    # ⚠️ logcat 的名字**不再是一个固定常量**:它分片,名字带编号。真源是
+    #    XLogcatParts.PREFIX + SUFFIX,而各处一律走 XLogcatParts.nameOf() 拼。
+    parts_text = read(root, PARTS_FILE)
+    m = PREFIX_CONST_RE.search(parts_text)
     if not m:
-        raise Problem(f"{LOGCAT_FILE}:找不到 `const val LOG_NAME` 常量")
-    logcat_name = m.group(1)
+        raise Problem(f"{PARTS_FILE}:找不到 `const val PREFIX` 常量")
+    logcat_prefix = m.group(1)
 
     survivor_text = read(root, SURVIVOR_FILE)
     m = SURVIVORS_CONST_RE.search(survivor_text)
@@ -213,13 +222,17 @@ def check(root: Path) -> list[str]:
         raise Problem(f"{SURVIVOR_FILE}:找不到 `const val SURVIVORS_FILE` 常量")
     survivors_name = m.group(1)
 
-    if events_name == logcat_name:
-        problems.append(
-            f"{FILE_STORE_FILE}:EVENTS_FILE ('{events_name}')与 {LOGCAT_FILE} 的 LOG_NAME "
-            f"重名 —— 事件时间线会把原始 logcat 覆盖掉。"
-        )
+    # 事件/存活层不得长成分片名的样子(那样 describe() 会先按「原始 logcat」判它,
+    # 于是时间线被说成原始日志 —— 读者据此判断「这里没有结构化记录」)。
+    for fixed_name, where in ((events_name, FILE_STORE_FILE), (survivors_name, SURVIVOR_FILE)):
+        m2 = PART_NAME_RE.match(fixed_name)
+        if m2 and m2.group("prefix") == logcat_prefix:
+            problems.append(
+                f"{where}:'{fixed_name}' 长得像 logcat 分片名 —— describe() 会先按"
+                f"「原始 logcat」判它,于是这个文件被说成别的用途。"
+            )
 
-    allowed = {events_name, logcat_name, survivors_name}
+    allowed = {events_name, survivors_name}
 
     # ── 判据 3:代码里每个文件名引用都必须落在允许集合里(注释不算引用) ──
     #
@@ -240,6 +253,9 @@ def check(root: Path) -> list[str]:
         for match in LOG_NAME_RE.finditer(text):
             name = match.group(0)
             if name in allowed:
+                continue
+            # 分片名(`logcat_7.log`)放行:它由 XLogcatParts 拼出来,是本次会话真会写的文件。
+            if PART_NAME_RE.match(name) and name.startswith(logcat_prefix + "_"):
                 continue
             if any(start <= match.start() < end for start, end in comments):
                 continue
@@ -275,9 +291,11 @@ def check(root: Path) -> list[str]:
             f"{ZIP_FILE}:describe() 没有引用 `XDiagFileStore.EVENTS_FILE` —— "
             f"硬编码文件名会在常量改名时漂移,清单就会把 {events_name} 写成 'unrecognised file'。"
         )
-    if "XLogcatCapture.LOG_NAME" not in zip_text:
+    if "XLogcatParts." not in zip_text:
         problems.append(
-            f"{ZIP_FILE}:describe() 没有引用 `XLogcatCapture.LOG_NAME` —— 同上。"
+            f"{ZIP_FILE}:describe() 没有引用 `XLogcatParts` —— logcat 分片的名字带编号,"
+            f"只认某个固定名(或硬编码)会在轮转之后静默失效:包里的分片被说成 "
+            f"'unrecognised file',读者以为那堆日志不属于本应用。"
         )
     if "XSurvivorLog.SURVIVORS_FILE" not in zip_text:
         problems.append(

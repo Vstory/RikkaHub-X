@@ -1409,7 +1409,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_capture_size">%1$s · %2$d 行</string>
   <string name="diagnostic_capture_size_last">上次记录 %1$s</string>
   <string name="diagnostic_capture_size_none">还没有日志</string>
-  <string name="diagnostic_capture_capped">已达体积上限,后续日志未记录</string>
+  <string name="diagnostic_capture_capped">较早的日志分片已被轮转删除——现在只保留最近的这一段</string>
   <string name="diagnostic_capture_noise_dropped">已过滤 %1$d 行噪声</string>
   <string name="diagnostic_capture_noise">过滤系统噪声</string>
   <string name="diagnostic_survivors">崩溃与关键失败</string>

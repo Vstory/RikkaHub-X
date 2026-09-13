@@ -140,7 +140,9 @@ fun DiagnosticPage() {
     // 噪声过滤开关的状态也随 revision 重读:改了它之后那一行要立刻反映新值。
     val noiseFiltered = remember(revision) { XLogcatNoise.isEnabled() }
     val capture = remember(revision, tick) { XLogcatCapture.current() }
-    val captureFile = remember(revision, tick) { XLogcatCapture.latestLogFile(context) }
+    // ⚠️ 未在捕获时要显示**全部片**的合计 —— 分片之后单片体积不是那个数(一次会话常有
+    //    十几片),只取最后一片会少报。故用 latestSessionBytes 而不是 latestLogFile。
+    val captureBytes = remember(revision, tick) { XLogcatCapture.latestSessionBytes(context) }
     // 存活层:只取体积(便宜),**不读内容** —— 那要走 IO,而这一页的刷新是每秒一次。
     // 它要回答的问题只有一个:「磁盘上到底有没有留存」。
     val survivorBytes = remember(revision, tick) { XSurvivorLog.file()?.takeIf { it.isFile }?.length() ?: 0L }
@@ -313,7 +315,7 @@ fun DiagnosticPage() {
                                 // 读磁盘文件、而行数硬编码 0,于是出现「75.6 KB · 0 行」这种
                                 // 自相矛盾 —— 未在记录时改为显示上一次留下的文件体积,并说清它
                                 // 是「上次记录」(见下面的分支)。
-                                val size = capture?.bytes ?: (captureFile?.length() ?: 0L)
+                                val size = capture?.bytes ?: captureBytes
                                 val lines = capture?.lines
                                 Text(
                                     when {
@@ -333,7 +335,7 @@ fun DiagnosticPage() {
                                         else -> stringResource(R.string.diagnostic_capture_size_none)
                                     }
                                 )
-                                if (capture?.isCapped == true) {
+                                if (capture?.hasRotated == true) {
                                     Text(
                                         text = stringResource(R.string.diagnostic_capture_capped),
                                         color = MaterialTheme.colorScheme.error,

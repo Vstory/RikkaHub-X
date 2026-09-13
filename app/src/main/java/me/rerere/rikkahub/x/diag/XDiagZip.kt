@@ -110,11 +110,13 @@ object XDiagZip {
         // 每个文件被掩的行数,以及**关键词索引**(读者按图索骥的那份)。索引必须无论
         // 脱敏开关如何都存在,否则「关掉脱敏就没有索引」这种事没人会想到。
         //
-        // ⚠️ logcat.log **不进索引**:它是任意文本,行里没有 `domain`/`event` 字段,
+        // ⚠️ logcat 分片**不进索引**:它是任意文本,行里没有 `domain`/`event` 字段,
         //    数它只会白读一遍。索引的输入是那些「一行一条 JSON」的文件。
+        //    判据走 [XLogcatParts.isPartName](而不是比某个具体名字)—— 分片名带编号,
+        //    比名字只会在轮转之后静默失效:索引里全是 logcat 的行。
         val keywords = XEventIndex.Counter()
         val hits = files.associate { f ->
-            val indexable = f.name != XLogcatCapture.LOG_NAME
+            val indexable = !XLogcatParts.isPartName(f.name)
             f.name to preScan(f, indexable, keywords) { n ->
                 read += n
                 progress.report(XExportPhase.ANALYSING, read, total)
@@ -203,7 +205,7 @@ object XDiagZip {
      *
      * 合在一遍里是有意的:拆成两遍就是把大文件读两回,而这一层刻意做到「几百 MB 也压得动」。
      *
-     * @param indexable `false` 表示本文件不进索引(如 logcat.log —— 它是任意文本,行里
+     * @param indexable `false` 表示本文件不进索引(logcat 分片 —— 它是任意文本,行里
      *   没有 `domain`/`event` 字段,数它只会白读一遍)。
      * @return 被掩的行数。
      */
@@ -260,7 +262,11 @@ object XDiagZip {
         }
         appendLine("${XDiagEnv.MARK} how to read it ${XDiagEnv.MARK}")
         appendLine()
-        appendLine("  logcat.log is plain logcat text, one log record per line, oldest first.")
+        appendLine("  logcat_N.log files are plain logcat text, one log record per line, oldest")
+        appendLine("  first. The capture is SPLIT INTO PARTS: they are consecutive slices of one")
+        appendLine("  capture, read them in part order (1, 2, 3, ...). Only the newest few parts are")
+        appendLine("  kept -- older ones are deleted as new ones start, so an early part number may")
+        appendLine("  be missing; the session end marker says how many were rotated out.")
         appendLine("  Every other file holds one compact JSON object per line. Newlines and quotes")
         appendLine("  inside a message are JSON-escaped, so ONE LINE IS ALWAYS ONE RECORD --")
         appendLine("  you can locate a record by line number and filter with a single grep.")
@@ -307,8 +313,17 @@ object XDiagZip {
      * 专门守着;合并之后那个检查器的判据大半作废 —— 耦合本身没有了。
      */
     private fun describe(name: String): String {
-        if (name == XLogcatCapture.LOG_NAME) {
-            return "raw logcat of the app itself (upstream + framework lines included)"
+        if (XLogcatParts.isPartName(name)) {
+            // 分片必须说清**它只是其中一段**:读者拿到 logcat_7.log 若不被告知,
+            // 会以为这就是全部捕获,于是「怎么开头就在这里了」变成一个疑点。
+            val part = XLogcatParts.partOf(name)
+            val head = if (part == 1) {
+                "raw logcat of the app itself, part 1 - this is where the capture begins"
+            } else {
+                "raw logcat of the app itself, part $part of the capture - CONTINUES from the " +
+                    "previous part; parts are consecutive slices in order"
+            }
+            return "$head (upstream + framework lines included)"
         }
         if (name == XDiagFileStore.EVENTS_FILE) {
             return "X custom timeline: semantic events and HTTP request metadata, in occurrence order"

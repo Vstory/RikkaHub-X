@@ -34,6 +34,12 @@ class XDiagZipTest {
      */
     private val EVENTS = XDiagFileStore.EVENTS_FILE
 
+    /**
+     * logcat 分片名。**引用 [XLogcatParts] 而不是写一个字面量** —— 分片名带编号,
+     * 写死一个名字会在轮转/改名之后静默失配(那时这个测试守的就不是真文件了)。
+     */
+    private val LOGCAT = XLogcatParts.nameOf(1)
+
     private lateinit var dir: File
 
     @Before
@@ -80,13 +86,13 @@ class XDiagZipTest {
 
     @Test
     fun `manifest comes first and files follow in name order`() {
-        file("logcat.log", "a\n")
+        file(LOGCAT, "a\n")
         file(EVENTS, "b\n")
         file("mystery.log", "c\n")
 
         // 清单必须**最前**:它是读包时的唯一指引,放在末尾等于没人会先看到。
         assertEquals(
-            listOf(XDiagZip.MANIFEST_NAME, EVENTS, "logcat.log", "mystery.log"),
+            listOf(XDiagZip.MANIFEST_NAME, EVENTS, LOGCAT, "mystery.log"),
             pack().map { it.first },
         )
     }
@@ -113,21 +119,21 @@ class XDiagZipTest {
     @Test
     fun `empty files are skipped while non empty ones are kept`() {
         file(EVENTS, "")
-        file("logcat.log", "kept")
+        file(LOGCAT, "kept")
 
         val entries = pack()
-        assertEquals(listOf(XDiagZip.MANIFEST_NAME, "logcat.log"), entries.map { it.first })
+        assertEquals(listOf(XDiagZip.MANIFEST_NAME, LOGCAT), entries.map { it.first })
     }
 
     @Test
     fun `manifest names every file and states that it is not redacted`() {
-        file("logcat.log", "a")
+        file(LOGCAT, "a")
         file(EVENTS, "bb")
         file("mystery.log", "dddd")
 
         val text = manifestOf(pack())
 
-        listOf("logcat.log", EVENTS, "mystery.log").forEach {
+        listOf(LOGCAT, EVENTS, "mystery.log").forEach {
             assertTrue("清单应点名 $it", text.contains(it))
         }
         assertTrue("清单应说明一行一条", text.contains("ONE LINE IS ALWAYS ONE RECORD"))
@@ -165,8 +171,8 @@ class XDiagZipTest {
     @Test
     fun `manifest lists per file masked counts so a miss is visible`() {
         file(EVENTS, "x")
-        file("logcat.log", "y")
-        val text = manifest(redacted = true, hits = mapOf(EVENTS to 3L, "logcat.log" to 0L))
+        file(LOGCAT, "y")
+        val text = manifest(redacted = true, hits = mapOf(EVENTS to 3L, LOGCAT to 0L))
 
         assertTrue("有命中应给出条数", text.contains("3 value(s) masked"))
         assertTrue("零命中应说「没匹配到」而不是省略", text.contains("nothing matched"))
@@ -183,7 +189,7 @@ class XDiagZipTest {
 
     @Test
     fun `manifest describes known files and admits unknown ones`() {
-        file("logcat.log", "a")
+        file(LOGCAT, "a")
         file(EVENTS, "b")
         file("mystery.log", "d")
 
@@ -204,7 +210,7 @@ class XDiagZipTest {
         // 这是本次改动的**要害**:包里不能带出真密钥。
         // 三种形态各来一个:Authorization 头、裸的厂商前缀 key、JSON 里的键值对。
         file(EVENTS, "{\"headers\":{\"Authorization\":\"Bearer sk-abcdefghijklmnopqrstuvwxyz\"}}")
-        file("logcat.log", "using key sk-ant-aaaaaaaaaaaaaaaaaaaa to call")
+        file(LOGCAT, "using key sk-ant-aaaaaaaaaaaaaaaaaaaa to call")
         file("mystery.log", "{\"api_key\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaa\"}")
 
         val packed = pack().toMap()
@@ -233,7 +239,7 @@ class XDiagZipTest {
     fun `progress is reported per phase and never exceeds the total`() {
         // 文件要足够大,进度才会分成多次上报 —— 太小的话一次就读完了,分段逻辑测不出来。
         val line = "x".repeat(1024) + "\n"
-        listOf("logcat.log", EVENTS, "mystery.log").forEach { name ->
+        listOf(LOGCAT, EVENTS, "mystery.log").forEach { name ->
             File(dir, name).bufferedWriter(Charsets.UTF_8).use { w -> repeat(64) { w.write(line) } }
         }
         val reports = mutableListOf<Triple<XExportPhase, Long, Long>>()
@@ -372,12 +378,38 @@ class XDiagZipTest {
     fun `logcat lines never leak into the keyword index`() {
         // logcat 是**任意文本**,行里没有 domain/event 字段。数它只会白读一遍,
         // 更要紧的是「什么都不该数出来」—— 于是索引段整段不写。
-        file("logcat.log", "01-01 00:00:00.000  1234  1234 I XCustom: chat chat.message.sent 随便\n")
+        file(LOGCAT, "01-01 00:00:00.000  1234  1234 I XCustom: chat chat.message.sent 随便\n")
 
         val text = manifestOf(pack())
 
         assertFalse("没有可索引的事件时,整段不写(写空标题会让读者以为索引坏了)", text.contains("keyword index"))
         assertFalse("logcat 里的词不该被当成事件名", text.contains("domain=chat"))
+    }
+
+    @Test
+    fun `a later part is described as a continuation`() {
+        // ⚠️ 读者拿到 `logcat_7.log` 若不被说明,会以为这就是全部捕获 ——
+        //    「怎么开头就在这里了」于是变成一个疑点。故第 2 片起必须写明「接着上一片」。
+        file(EVENTS, "x")
+        file(XLogcatParts.nameOf(7), "y")
+        val text = manifestOf(pack())
+
+        assertTrue("第 1 片应说明是起点", text.contains("this is where the capture begins"))
+        assertTrue("第 7 片应说明是续片", text.contains("part 7"))
+        assertTrue("并给出处", text.contains("CONTINUES from the"))
+        assertTrue("应说明分片是按序的连续切片", text.contains("consecutive slices in order"))
+    }
+
+    @Test
+    fun `a logcat-looking file that is not a part is treated as unknown`() {
+        // 反向:形似而实非的名字(`logcat_backup.log`)**不该**被当成原始日志 ——
+        // 认错方向有两个,都不会报错:说成「本应用原始日志」,或者反过来漏掉真日志。
+        // 这里钉住前者。
+        file(EVENTS, "x")
+        file("logcat_backup.log", "z")
+        val text = manifestOf(pack())
+
+        assertTrue("认不出的要明说认不出", text.contains("unrecognised"))
     }
 
     @Test
@@ -388,7 +420,7 @@ class XDiagZipTest {
         file(EVENTS, "")
         assertFalse("只有 0 字节文件时仍算没有内容", XDiagZip.hasContent(dir))
 
-        file("logcat.log", "x")
+        file(LOGCAT, "x")
         assertTrue("有非空文件即有内容", XDiagZip.hasContent(dir))
     }
 }
