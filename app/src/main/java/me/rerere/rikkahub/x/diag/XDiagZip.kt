@@ -206,8 +206,15 @@ object XDiagZip {
         appendLine()
         appendLine("  Domain files carry: at (HH:mm:ss.SSS), lvl (I/W), domain, event, msg.")
         appendLine("  net.log carries:    at, method, url, code, durationMs, reqHeaders, reqBody,")
-        appendLine("                      respHeaders. reqBody is the FULL request body -- for chat")
-        appendLine("                      requests that means the complete prompt sent to the model.")
+        appendLine("                      respHeaders, and respBody. reqBody is the FULL request body")
+        appendLine("                      -- for chat requests that means the complete prompt sent to")
+        appendLine("                      the model.")
+        appendLine("                      respBody is present only when the request FAILED (non-2xx):")
+        appendLine("                      an error response says why it was rejected, and that text is")
+        appendLine("                      not available anywhere else. Successful (2xx) responses carry")
+        appendLine("                      no respBody -- for chat they are SSE streams, and buffering")
+        appendLine("                      one would stall the conversation. If an error body exceeded")
+        appendLine("                      the capture limit, the line also has respBodyTruncated=true.")
         appendLine()
         appendRedactionNote(this, redacted)
     }
@@ -260,7 +267,7 @@ object XDiagZip {
             return "raw logcat of the app itself (upstream + framework lines included)"
         }
         if (name == NET_NAME) {
-            return "HTTP requests, including full request bodies"
+            return "HTTP requests: full request bodies, plus error response bodies"
         }
         val stem = name.removeSuffix(".log")
         val domain = XDomain.entries.firstOrNull { it.key == stem }

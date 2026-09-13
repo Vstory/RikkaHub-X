@@ -1,3 +1,6 @@
+// [X-custom] RikkaHub-X 定制:非 2xx 请求的**响应正文**展示(2026-09-13 加)。
+// 上游这一页只显示请求体,于是「服务端为什么拒了」在应用内看不到 —— 状态码只说被拒了,
+// 原因写在正文里。加了这一块之后本文件开始承载 X 行为,故按约定打标签。
 package me.rerere.rikkahub.ui.pages.log
 
 import android.content.ClipData
@@ -337,6 +340,59 @@ private fun RequestLogDetail(log: LogEntry.RequestLog) {
                                 scope.launch {
                                     clipboard.setClipEntry(
                                         ClipEntry(ClipData.newPlainText("Request Body", body))
+                                    )
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = HugeIcons.Copy01,
+                                contentDescription = stringResource(R.string.copy)
+                            )
+                        }
+                    }
+                    val jsonElement = remember(body) {
+                        runCatching { JsonInstantPretty.parseToJsonElement(body) }.getOrNull()
+                    }
+                    if (jsonElement != null) {
+                        JsonTree(
+                            json = jsonElement,
+                            modifier = Modifier.padding(top = 4.dp),
+                            initialExpandLevel = 2
+                        )
+                    } else {
+                        Text(
+                            text = body,
+                            fontFamily = JetbrainsMono,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // [X-custom] 非 2xx 的响应正文(2026-09-13 加)。
+            //
+            // 为什么要有这一块:上游这一页此前只显示**请求**体,于是「服务端为什么拒了」
+            // 在应用内根本看不到 —— 状态码只说「被拒了」,原因写在正文里。
+            // 照着上面「Request Body」那段写,两处保持同一种呈现(可折叠 JSON + 复制)。
+            log.responseBody?.let { body ->
+                item {
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (log.responseBodyTruncated) "Response Body (truncated)"
+                            else "Response Body",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    clipboard.setClipEntry(
+                                        ClipEntry(ClipData.newPlainText("Response Body", body))
                                     )
                                 }
                             }

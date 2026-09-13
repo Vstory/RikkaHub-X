@@ -30,6 +30,25 @@ sealed class LogEntry {
         val requestBody: String? = null,
         val responseCode: Int? = null,
         val responseHeaders: Map<String, String> = emptyMap(),
+        /**
+         * [X-custom] **非 2xx** 响应的一小段正文（2026-09-13 加）。
+         *
+         * 状态码只说「被拒了」，**原因写在正文里** —— 实测 2026-09-13：同一个
+         * `/v1/user/balance` 一次 401、一次 200，而当时**没有任何途径**能看到那个 401
+         * 说了什么（Firebase 也看不到：上游没接 Performance Monitoring，
+         * Crashlytics 只收崩溃，而非致命异常上报全项目 0 处）。
+         *
+         * 只对非 2xx 取值：2xx 的 chat 请求是 SSE 流，取正文会碰流式（见
+         * `RequestLoggingInterceptor` 的注释）。默认 `null` —— 2xx 与「取不到」都是它。
+         */
+        val responseBody: String? = null,
+        /**
+         * [X-custom] 上面那段正文**是否被截断**（超过上限时无法完整带走）。
+         *
+         * 单独一个字段而不是往正文里塞标记：正文可能是 JSON，塞标记会把它弄坏。
+         * 也**不许静默截断** —— 读的人必须能判断自己看到的是不是全部。
+         */
+        val responseBodyTruncated: Boolean = false,
         val durationMs: Long? = null,
         val error: String? = null
     ) : LogEntry()

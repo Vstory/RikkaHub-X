@@ -27,6 +27,12 @@ import me.rerere.common.android.LogEntry
  * ⚠️ 由此带来一个**已知特性**:长对话的请求正文可达数百 KB,于是**单行会很长**。
  * 这是刻意的取舍(不丢数据),不是疏漏。
  *
+ * ## 响应正文只在**非 2xx** 时才有(2026-09-13 加)
+ *
+ * 字段名 `respBody`,同样不截断(上限 256 KB,超过则置 `respBodyTruncated` 为真)。
+ * 为什么只记非 2xx、为什么不能记 2xx:见 `RequestLoggingInterceptor.peekErrorBody` ——
+ * 一句话是「2xx 的对话响应是 SSE 流,取它会把流式打断」。
+ *
  * ## 为什么不进 logcat
  *
  * logd 单条上限约 4 KB,而请求正文动辄几十上百 KB —— 打进去会被**静默截断**成一段看着像
@@ -52,6 +58,12 @@ object XNetLine {
                 putJsonObject("reqHeaders") { entry.requestHeaders.forEach { (k, v) -> put(k, v) } }
             }
             entry.requestBody?.let { put("reqBody", it) }
+            // 非 2xx 的响应正文(2026-09-13 加)。放在请求体**之后**:读的人先看「我们发了什么」,
+            // 再看「服务端回了什么」,与真实请求的时间顺序一致。
+            entry.responseBody?.let { put("respBody", it) }
+            // 被上限截断时**必须标出来** —— 否则读的人会以为自己看到了完整的错误。
+            // 只在为真时输出:2xx 与「没截断」都是不写。
+            if (entry.responseBodyTruncated) put("respBodyTruncated", true)
             if (entry.responseHeaders.isNotEmpty()) {
                 putJsonObject("respHeaders") { entry.responseHeaders.forEach { (k, v) -> put(k, v) } }
             }

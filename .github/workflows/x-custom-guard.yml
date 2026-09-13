@@ -73,6 +73,13 @@ on:
       - 'app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt'
       # 承载 X 接线:诊断框架的请求记录旁路回调挂在这里(见 Logging.setRequestLogSink)
       - 'common/src/main/java/me/rerere/common/android/Logging.kt'
+      # 2026-09-13 补登:本文件决定「请求记录里带不带响应正文」——
+      # `peekErrorBody` / `isErrorBodyTruncated` 是 X 加的两个私有函数,
+      # 且 `responseBody = if (response.isSuccessful) null else ...` 这条**只记非 2xx**
+      # 的口径也在这里(2xx 是 SSE 流,取了会打断流式)。
+      # 上游重写本文件会让 net.log 静默失去 respBody —— 而 net.log 正是「服务端为什么拒了」
+      # 的唯一留存处(实测 2026-09-13 那个 401:Firebase 看不到、Crashlytics 只收崩溃)。
+      - 'app/src/main/java/me/rerere/rikkahub/data/ai/RequestLoggingInterceptor.kt'
   workflow_dispatch:
 
 permissions:

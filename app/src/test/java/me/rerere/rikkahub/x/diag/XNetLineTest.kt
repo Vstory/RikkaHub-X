@@ -37,6 +37,8 @@ class XNetLineTest {
         responseHeaders: Map<String, String> = emptyMap(),
         durationMs: Long? = null,
         error: String? = null,
+        responseBody: String? = null,
+        responseBodyTruncated: Boolean = false,
     ) = LogEntry.RequestLog(
         tag = "HTTP",
         url = url,
@@ -47,6 +49,8 @@ class XNetLineTest {
         responseHeaders = responseHeaders,
         durationMs = durationMs,
         error = error,
+        responseBody = responseBody,
+        responseBodyTruncated = responseBodyTruncated,
     )
 
     @Test
@@ -120,5 +124,57 @@ class XNetLineTest {
         val json = parse(XNetLine.format(entry(method = "GET"), at = 0L))
         assertFalse(json.containsKey("reqBody"))
         assertFalse("没有头时不该出现空对象", json.containsKey("reqHeaders"))
+    }
+
+    // ────────────────────────────────────
+    // 非 2xx 的响应正文(2026-09-13 加)
+    //
+    // 它存在的唯一理由:状态码只说「被拒了」,**原因写在正文里** ——
+    // 而实测那次 401 的原因在哪都查不到(Firebase 没接 Perf、Crashlytics 只收崩溃、
+    // 非致命上报 0 处),只有这里能留下。
+    // ────────────────────────────────────
+
+    @Test
+    fun `error response body is carried and stays on one line`() {
+        // 错误正文通常是 JSON,且**带换行**。单行约束在这里同样必须成立 ——
+        // 否则最先崩的恰好是出错那几行,而那是最需要看清的地方。
+        val body = """{
+  "error": {
+    "message": "Authentication Fails",
+    "type": "authentication_error"
+  }
+}"""
+        val line = XNetLine.format(entry(responseCode = 401, responseBody = body), at = 0L)
+        assertFalse("响应正文里的换行必须被转义", line.contains('\n'))
+        assertEquals("解析回来应还原成原文", body, text(line, "respBody"))
+        assertEquals("401", text(line, "code"))
+    }
+
+    @Test
+    fun `successful response omits the response body key`() {
+        // 2xx 一律不带正文:chat 的 2xx 是 SSE 流,取它会打断流式(见拦截器注释)。
+        // 写成 "respBody":null 会让 grep 命中一堆空值,故**整键不出现**。
+        val json = parse(XNetLine.format(entry(responseCode = 200), at = 0L))
+        assertFalse("2xx 不该出现 respBody 键", json.containsKey("respBody"))
+        assertFalse("没截断时不该出现 respBodyTruncated 键", json.containsKey("respBodyTruncated"))
+    }
+
+    @Test
+    fun `truncation flag is carried only when true`() {
+        // 被截断必须**可见** —— 否则读的人会以为自己看到了完整的错误原因,
+        // 于是在一个残缺的正文上做判断。
+        val truncated = parse(
+            XNetLine.format(
+                entry(responseCode = 500, responseBody = "x", responseBodyTruncated = true),
+                at = 0L,
+            )
+        )
+        assertEquals("true", truncated.getValue("respBodyTruncated").jsonPrimitive.content)
+
+        // 反向:为假时不写键(与上一条用例配对,「写」与「不写」两边都钉住)
+        val intact = parse(
+            XNetLine.format(entry(responseCode = 500, responseBody = "x"), at = 0L)
+        )
+        assertFalse(intact.containsKey("respBodyTruncated"))
     }
 }
