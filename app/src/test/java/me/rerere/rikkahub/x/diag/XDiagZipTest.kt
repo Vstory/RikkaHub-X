@@ -25,6 +25,15 @@ import java.util.zip.ZipInputStream
  */
 class XDiagZipTest {
 
+    /**
+     * 事件时间线的文件名 —— **引用同一处常量**,不在测试里另写一份字面量。
+     *
+     * 合并成单文件(2026-09-13)之前,这里散布着 `chat.log` / `net.log` / `storage.log`
+     * 等一串「域文件名」。那些名字现在**不再是文件名**(域退回了每行的一个字段)——
+     * 若测试继续照旧写法,它守的就是一个已经不存在的东西。
+     */
+    private val EVENTS = XDiagFileStore.EVENTS_FILE
+
     private lateinit var dir: File
 
     @Before
@@ -72,12 +81,12 @@ class XDiagZipTest {
     @Test
     fun `manifest comes first and files follow in name order`() {
         file("logcat.log", "a\n")
-        file("net.log", "b\n")
-        file("chat.log", "c\n")
+        file(EVENTS, "b\n")
+        file("mystery.log", "c\n")
 
         // 清单必须**最前**:它是读包时的唯一指引,放在末尾等于没人会先看到。
         assertEquals(
-            listOf(XDiagZip.MANIFEST_NAME, "chat.log", "logcat.log", "net.log"),
+            listOf(XDiagZip.MANIFEST_NAME, EVENTS, "logcat.log", "mystery.log"),
             pack().map { it.first },
         )
     }
@@ -86,16 +95,16 @@ class XDiagZipTest {
     fun `contents survive the round trip including newlines and non ascii`() {
         // 内容是 JSON 行(自带换行)且可能含中文 —— 打包环节不得改动字节
         val body = "{\"msg\":\"第一行\\n第二行\"}\n{\"msg\":\"café ünïcode\"}\n"
-        file("chat.log", body)
+        file(EVENTS, body)
 
-        assertEquals(body, pack().first { it.first == "chat.log" }.second)
+        assertEquals(body, pack().first { it.first == EVENTS }.second)
     }
 
     @Test
     fun `empty files are skipped and the call reports nothing packed`() {
         // 0 字节的文件进包只会让读者以为「这个文件里什么都没有」——
         // 而真相是那一项压根没记录。剔除更诚实。
-        file("chat.log", "")
+        file(EVENTS, "")
         val buf = ByteArrayOutputStream()
         assertFalse("没有任何非空文件时应返回 false", XDiagZip.write(listOf("x"), buf, dir))
         assertEquals("返回 false 时不该写出任何字节", 0, buf.size())
@@ -103,23 +112,22 @@ class XDiagZipTest {
 
     @Test
     fun `empty files are skipped while non empty ones are kept`() {
-        file("chat.log", "")
-        file("net.log", "kept")
+        file(EVENTS, "")
+        file("logcat.log", "kept")
 
         val entries = pack()
-        assertEquals(listOf(XDiagZip.MANIFEST_NAME, "net.log"), entries.map { it.first })
+        assertEquals(listOf(XDiagZip.MANIFEST_NAME, "logcat.log"), entries.map { it.first })
     }
 
     @Test
     fun `manifest names every file and states that it is not redacted`() {
         file("logcat.log", "a")
-        file("net.log", "bb")
-        file("chat.log", "ccc")
+        file(EVENTS, "bb")
         file("mystery.log", "dddd")
 
         val text = manifestOf(pack())
 
-        listOf("logcat.log", "net.log", "chat.log", "mystery.log").forEach {
+        listOf("logcat.log", EVENTS, "mystery.log").forEach {
             assertTrue("清单应点名 $it", text.contains(it))
         }
         assertTrue("清单应说明一行一条", text.contains("ONE LINE IS ALWAYS ONE RECORD"))
@@ -128,7 +136,7 @@ class XDiagZipTest {
 
     @Test
     fun `manifest in disabled mode warns that nothing was redacted`() {
-        file("net.log", "x")
+        file(EVENTS, "x")
         val text = manifest(redacted = false)
 
         assertTrue("未脱敏时必须明说", text.contains("not redacted"))
@@ -138,7 +146,7 @@ class XDiagZipTest {
 
     @Test
     fun `manifest in redacted mode says so and keeps warning about content`() {
-        file("net.log", "x")
+        file(EVENTS, "x")
         val text = manifest(redacted = true)
 
         assertFalse("已脱敏时不该说未脱敏", text.contains("not redacted"))
@@ -146,16 +154,19 @@ class XDiagZipTest {
         // ⚠️ 这一段是清单里**最要紧**的:正则只认凭据形态,抓不到聊天内容。
         //    不写清楚,读者会以为「已脱敏 = 可以随便发」。
         assertTrue("必须写明不处理内容", text.contains("NOT sanitised"))
-        assertTrue("必须点名请求正文照旧在包里", text.contains("system prompt, chat history"))
+        // ⚠️ 断言随行为变(2026-09-13):请求体**已不再落盘**,故清单不再声称它在包里 ——
+        //    改口为「错误响应正文与框架日志照旧在」,那才是现在真正剩下的。
+        assertTrue("必须点名错误响应正文照旧在包里", text.contains("error response bodies"))
+        assertTrue("必须点名框架日志照旧在", text.contains("framework log lines"))
         assertTrue("必须提醒分享前自己过目", text.contains("Review it before sharing"))
         assertTrue("应说明可被证伪(命中数对不上就是脱敏漏了)", text.contains("redactor missed it"))
     }
 
     @Test
     fun `manifest lists per file masked counts so a miss is visible`() {
-        file("net.log", "x")
-        file("chat.log", "y")
-        val text = manifest(redacted = true, hits = mapOf("net.log" to 3L, "chat.log" to 0L))
+        file(EVENTS, "x")
+        file("logcat.log", "y")
+        val text = manifest(redacted = true, hits = mapOf(EVENTS to 3L, "logcat.log" to 0L))
 
         assertTrue("有命中应给出条数", text.contains("3 value(s) masked"))
         assertTrue("零命中应说「没匹配到」而不是省略", text.contains("nothing matched"))
@@ -163,7 +174,7 @@ class XDiagZipTest {
 
     @Test
     fun `manifest reports each file size`() {
-        val f = file("chat.log", "12345")
+        val f = file(EVENTS, "12345")
         assertTrue(
             "清单应给出体积,实得:\n" + manifestOf(pack()),
             manifestOf(pack()).contains(XLogcatCapture.sizeText(f.length())),
@@ -173,28 +184,28 @@ class XDiagZipTest {
     @Test
     fun `manifest describes known files and admits unknown ones`() {
         file("logcat.log", "a")
-        file("net.log", "b")
-        file("chat.log", "c")
+        file(EVENTS, "b")
         file("mystery.log", "d")
 
         val text = manifestOf(pack())
 
         assertTrue("logcat 应被说明为原始日志", text.contains("raw logcat"))
-        // ⚠️ 这一条守的是**判断顺序**:net.log 既可能被当成「net 域的事件文件」,
-        //    也可能被当成「请求记录」。两者只有一处对。
-        assertTrue("net.log 应说明为请求记录", text.contains("HTTP requests"))
-        assertFalse("net.log 不该被当成 net 域的事件文件", text.contains("domain 'net'"))
-        assertTrue("chat 域的说明应带中文标签", text.contains("会话"))
+        // ⚠️ 这一条守的是**判断顺序**:logcat 必须**先判**,否则它会被当成普通事件文件。
+        assertTrue("事件时间线应被说明为时间线", text.contains("timeline"))
+        assertFalse("logcat 不该被当成时间线", !text.contains("raw logcat of the app itself"))
         assertTrue("认不出的文件要明说认不出,而不是猜", text.contains("unrecognised"))
+        // ⚠️ 域标签那层已随合并移除(2026-09-13):文件名不再与域绑定,
+        //    describe() 也就不该再提任何"域"。这条是**反向**断言。
+        assertFalse("合并后不该再按域描述文件", text.contains("semantic events for domain"))
     }
 
     @Test
     fun `credentials inside packed files are masked`() {
         // 这是本次改动的**要害**:包里不能带出真密钥。
         // 三种形态各来一个:Authorization 头、裸的厂商前缀 key、JSON 里的键值对。
-        file("net.log", "{\"headers\":{\"Authorization\":\"Bearer sk-abcdefghijklmnopqrstuvwxyz\"}}")
-        file("chat.log", "using key sk-ant-aaaaaaaaaaaaaaaaaaaa to call")
-        file("storage.log", "{\"api_key\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaa\"}")
+        file(EVENTS, "{\"headers\":{\"Authorization\":\"Bearer sk-abcdefghijklmnopqrstuvwxyz\"}}")
+        file("logcat.log", "using key sk-ant-aaaaaaaaaaaaaaaaaaaa to call")
+        file("mystery.log", "{\"api_key\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaa\"}")
 
         val packed = pack().toMap()
 
@@ -204,14 +215,14 @@ class XDiagZipTest {
                     assertFalse("$name 里不该出现原始密钥 $secret,实得:\n$body", body.contains(secret))
                 }
             }
-        assertTrue("应留下掩码,让人知道这里原本有值", packed.getValue("net.log").contains(XLogScrub.MASK))
+        assertTrue("应留下掩码,让人知道这里原本有值", packed.getValue(EVENTS).contains(XLogScrub.MASK))
     }
 
     @Test
     fun `the manifest itself is not passed through the redactor`() {
         // 清单是我们自己生成的一段已知文本,里面**就写着**「Authorization」这类词。
         // 过一遍脱敏反而有把它改坏的风险(改坏的正是那条警告)。
-        file("net.log", "x")
+        file(EVENTS, "x")
         val text = manifestOf(pack())
 
         assertTrue("清单里的警告文字应原样保留", text.contains("Authorization headers, Bearer tokens"))
@@ -222,7 +233,7 @@ class XDiagZipTest {
     fun `progress is reported per phase and never exceeds the total`() {
         // 文件要足够大,进度才会分成多次上报 —— 太小的话一次就读完了,分段逻辑测不出来。
         val line = "x".repeat(1024) + "\n"
-        listOf("logcat.log", "net.log", "chat.log").forEach { name ->
+        listOf("logcat.log", EVENTS, "mystery.log").forEach { name ->
             File(dir, name).bufferedWriter(Charsets.UTF_8).use { w -> repeat(64) { w.write(line) } }
         }
         val reports = mutableListOf<Triple<XExportPhase, Long, Long>>()
@@ -273,10 +284,10 @@ class XDiagZipTest {
         assertFalse("null 视为没有内容", XDiagZip.hasContent(null))
         assertFalse("空目录没有内容", XDiagZip.hasContent(dir))
 
-        file("chat.log", "")
+        file(EVENTS, "")
         assertFalse("只有 0 字节文件时仍算没有内容", XDiagZip.hasContent(dir))
 
-        file("net.log", "x")
+        file("logcat.log", "x")
         assertTrue("有非空文件即有内容", XDiagZip.hasContent(dir))
     }
 }

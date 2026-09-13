@@ -1,11 +1,11 @@
-// [X-custom] RikkaHub-X 诊断框架：把上游的请求记录接到 net.log
+// [X-custom] RikkaHub-X 诊断框架：把上游的请求记录接进事件时间线
 package me.rerere.rikkahub.x.diag
 
 import me.rerere.common.android.LogEntry
 import me.rerere.common.android.Logging
 
 /**
- * 把上游 `RequestLoggingInterceptor` 产出的请求记录**落一份到 `net.log`**。
+ * 把上游 `RequestLoggingInterceptor` 产出的请求记录**落一份到事件时间线**。
  *
  * ## 补的是哪个缺口
  *

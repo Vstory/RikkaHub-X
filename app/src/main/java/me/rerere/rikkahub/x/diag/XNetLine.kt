@@ -7,38 +7,59 @@ import kotlinx.serialization.json.putJsonObject
 import me.rerere.common.android.LogEntry
 
 /**
- * 一条 HTTP 请求记录 → **一行紧凑 JSON**。
+ * 一条 HTTP 请求记录 → **一行紧凑 JSON**,与语义事件**同一形状**。
  *
- * ## 字段为什么与语义事件那套不同
+ * ## 为什么形状与语义事件统一了(2026-09-13 改)
  *
- * `<域>.log` 里是「X 做了什么」的语义事件(`{at,lvl,domain,event,msg}`,统一格式)。
- * `net.log` 里是「应用往外发了什么」—— 字段天然不同,且**关键字段要能一眼 grep 到**:
- * 想看某次请求的正文,`grep '"reqBody"' net.log` 就该命中,而不是先打开 `msg` 再解开一层。
+ * 原先这里是**另一套字段**(只有 `at`/`method`/`url`/…,没有 `domain`/`event`/`lvl`),
+ * 因为它当时**独占一个文件**(网络记录单独一份)。**合并进同一条时间线之后,
+ * 两种形状是读不下去的** —— 读的人得逐行猜「这行是哪一类的」。故补齐核心字段:
+ * `at` / `lvl` / `domain` / `event`,与 [XDiagLine] 完全对齐;专有字段(`method`/`code`/…)
+ * 平铺在同一层,靠 `domain` 区分。
  *
- * 故这里用**专用字段名**,而不是把它塞进 `msg`。不变的是那条硬约束:**一条记录恰好占一行**
- * (请求正文里的换行由 JSON 转义),见 `XDiagLine` 的类注释。
+ * 不变的是那条硬约束:**一条记录恰好占一行**(正文里的换行由 JSON 转义),
+ * 理由见 [XDiagLine] 的类注释。
  *
- * ## 请求正文是完整的,不做截断
+ * ## ⚠️ 请求体**不落盘**,只记字节数(2026-09-13 用户决定)
  *
- * 诊断的整个价值就在「模型到底看到了什么」,截断等于把要看的东西裁掉;而截在哪儿都错 ——
- * 聊天请求的系统提示在前、最新消息在后,砍头砍尾都会丢掉关键那一段。
- * 总量由 [XDiagFileStore.MAX_BYTES_PER_DOMAIN] 兜底,到顶会留下一条可见的记录。
+ * 这里此前记的是**完整请求正文**(system prompt + 聊天历史,可达数百 KB)。改为只记
+ * `reqBytes`。两条理由,后一条是决定性的:
  *
- * ⚠️ 由此带来一个**已知特性**:长对话的请求正文可达数百 KB,于是**单行会很长**。
- * 这是刻意的取舍(不丢数据),不是疏漏。
+ * ① **时间线会被冲垮**。合并成一条时间线之后,一条几百 KB 的记录会让「什么时候做了什么」
+ *    完全读不出来 —— 而时间线可读正是合并的全部收益。
+ * ② **脱敏器认不出聊天正文**。[XLogScrub] 只认**凭据的形态**(密钥、token、Authorization),
+ *    它对「用户打的字」无能为力。请求体不落盘,等于**从源头掐掉包里最大的一块**,
+ *    而不是指望导出时那一层过滤。
  *
- * ## 响应正文只在**非 2xx** 时才有(2026-09-13 加)
+ * **代价(诚实记下)**:包里从此看不到「模型到底看到了什么」。要看它需要在应用内
+ * 「日志」页临时打开请求记录(上游内存缓冲,100 条,不为取证保留)。这是刻意的取舍。
  *
- * 字段名 `respBody`,同样不截断(上限 256 KB,超过则置 `respBodyTruncated` 为真)。
- * 为什么只记非 2xx、为什么不能记 2xx:见 `RequestLoggingInterceptor.peekErrorBody` ——
- * 一句话是「2xx 的对话响应是 SSE 流,取它会把流式打断」。
+ * ## 响应正文仍然保留,但只在**非 2xx** 时
+ *
+ * 字段名 `respBody`,上限 256 KB(超过则置 `respBodyTruncated` 为真,不静默)。
+ * 非 2xx 的正文是**几十字节到几 KB 的错误说明**(如 deepseek 的 401 是 65 字节)——
+ * 它是「服务端为什么拒了」的唯一留存处,且体积不构成威胁。
+ * 为什么不能记 2xx:见 `RequestLoggingInterceptor.peekErrorBody` —— 一句话是
+ * 「2xx 的对话响应是 SSE 流,取它会把流式打断」。
  *
  * ## 为什么不进 logcat
  *
- * logd 单条上限约 4 KB,而请求正文动辄几十上百 KB —— 打进去会被**静默截断**成一段看着像
- * 完整 JSON 的残片,比没有更糟。故只落文件。
+ * 这些字段里 `url` 与 `respBody` 都可能很长,而 logd 单条上限约 4 KB ——
+ * 打进去会被**静默截断**成一段看着像完整记录的残片,比没有更糟。故只落文件。
  */
 object XNetLine {
+
+    /** 正常完成的一次请求。 */
+    internal const val EVENT_SENT = "net.request.sent"
+
+    /**
+     * 出错的那次。
+     *
+     * 单列一个事件名而不是只靠 `error` 字段:出错的行**没有响应码与耗时**,
+     * 一条 grep 就能把「所有失败」捞出来,比 `grep '"error"'` 稳
+     * (后者会被正文里恰好出现 error 字样的行污染)。
+     */
+    internal const val EVENT_FAILED = "net.request.failed"
 
     /**
      * 组一行。
@@ -47,23 +68,31 @@ object XNetLine {
      */
     internal fun format(entry: LogEntry.RequestLog, at: Long = entry.timestamp): String =
         buildJsonObject {
+            // ── 与 XDiagLine 对齐的四个核心字段 ──
             put("at", XLogRing.timeText(at))
+            put("lvl", if (entry.error != null) "W" else "I")
+            put("domain", XDomain.NET.key)
+            put("event", if (entry.error != null) EVENT_FAILED else EVENT_SENT)
+            // ── net 专有字段(平铺,靠 domain 区分) ──
             put("method", entry.method)
             put("url", entry.url)
             entry.responseCode?.let { put("code", it) }
             entry.durationMs?.let { put("durationMs", it) }
-            // 出错的那次没有响应码与耗时,只有这条 —— 否则那行会像「一条没写完的记录」。
             entry.error?.let { put("error", it) }
+            // ⚠️ 只记**字节数**,不记正文(理由见类注释)。写字节数而不是字符数:
+            //    传输量以字节计,而 UTF-8 下中文一字三字节,字符数会低报三分之一。
+            //    只在有正文时输出 —— GET 类请求没有正文,写成 `"reqBytes":0` 会让
+            //    「有没有正文」这个判断落空(与 test 里那条「不写 null 字段」同一条理由)。
+            entry.requestBody?.let { put("reqBytes", it.toByteArray(Charsets.UTF_8).size) }
+            // 非 2xx 的响应正文:错误说明,是「服务端为什么拒了」的唯一留存处。
+            entry.responseBody?.let { put("respBody", it) }
+            // 被上限截断时**必须标出来** —— 否则读的人会以为自己看到了完整的错误。
+            if (entry.responseBodyTruncated) put("respBodyTruncated", true)
+            // 请求头里就是凭据所在处(Authorization / x-api-key),落盘保留原文
+            // (现场不被破坏),**导出时由 XLogScrub 掩掉** —— 与其它内容同一条口径。
             if (entry.requestHeaders.isNotEmpty()) {
                 putJsonObject("reqHeaders") { entry.requestHeaders.forEach { (k, v) -> put(k, v) } }
             }
-            entry.requestBody?.let { put("reqBody", it) }
-            // 非 2xx 的响应正文(2026-09-13 加)。放在请求体**之后**:读的人先看「我们发了什么」,
-            // 再看「服务端回了什么」,与真实请求的时间顺序一致。
-            entry.responseBody?.let { put("respBody", it) }
-            // 被上限截断时**必须标出来** —— 否则读的人会以为自己看到了完整的错误。
-            // 只在为真时输出:2xx 与「没截断」都是不写。
-            if (entry.responseBodyTruncated) put("respBodyTruncated", true)
             if (entry.responseHeaders.isNotEmpty()) {
                 putJsonObject("respHeaders") { entry.responseHeaders.forEach { (k, v) -> put(k, v) } }
             }

@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
-"""诊断日志布局自检 —— 域枚举、文件名、目录名三处不许各说各话。
+"""诊断日志布局自检 —— 文件名、目录名、以及「每行都带 domain」三者不许各说各话。
 
-## 为什么需要它
+## 它守的东西在 2026-09-13 变了(重要)
 
-诊断包里的**文件名就是域的唯一标识**:`XDiagFileStore` 按 `domain.key + ".log"` 建文件,
-`XDiagZip.describe()` 反过来用文件名去 `XDomain.entries` 里找域。
-
-于是三处必须严格对齐,而它们**在编译期毫无约束**:
+**改革前**:每个域一个文件(`chat.log` / `storage.log` / …),文件名**就是**域的标识。
+于是三处必须严格对齐,而它们在编译期毫无约束:
 
 | 漂移 | 后果 |
 |---|---|
 | 有人硬编码 `"chat.log"` 而枚举 key 改成 `chat_history` | 该文件在清单里被写成 `unrecognised file`,读者看不出这堆记录属于谁 |
 | 枚举 key 含大写或 `-` | 文件名落在不同平台/大小写敏感度上不一致,同一域可能开成两个文件 |
 | `LOG_NAME` 与某个域名撞车 | `describe()` 先判 logcat、后判域 → 域文件被误标成「原生 logcat」 |
-| 目录名(`x-diag` / `session-`)在别处再写一份 | 「清空」扫不到旧目录 → **点了清空却没清** |
 
-这些都是**编译得过、测试也过得去**的错误,只在读懂包内容时才暴露 —— 而那时已经晚了。
+**改革后**:所有事件落**一个** `events.log`,**域退回成每行的一个字段**。
+于是「文件 ↔ 域」这层耦合**不存在了**,上面那张表里的判据大半自动作废。
+
+⚠️ 但**有一条新约束取代了它**,而且更要紧 —— 既然不再靠文件名区分域,
+那「按域挑记录」这件事就**只剩读取端过滤一条路**。若某一行忘了写 `domain`,
+那条记录就**永远分不出属于谁**,而它不会有任何编译或运行时报错。
+故本检查器现在的头号判据是:**两个组行函数都必须写出 `domain` 字段**。
 
 ## 判据
 
 1. `XDomain` 枚举解析出的条目数与 key 形态(小写、无路径分隔符、不重复);
-2. 全仓每个 `xxx.log` 文件名引用,必须是**某个域的 key + `.log`**,或 `logcat.log`;
-3. `net.log` 在 `XDiagZip` 里必须**派生自枚举**(不许硬编码),`XDiagFileStore` 必须用 `domain.key` 拼名;
-4. `x-diag` / `session-` 两个目录字面量只许出现在 `XDiagSession.kt` 一处。
+2. 文件名**单点定义**:`events.log` 派生自 `XDiagFileStore.EVENTS_FILE`、
+   `logcat.log` 派生自 `XLogcatCapture.LOG_NAME`,不许在别处再写一份字面量;
+3. 全仓每个 `xxx.log` 文件名引用都必须落在上面两个之内
+   (否则 `XDiagZip.describe()` 会把它写成 `unrecognised file`);
+4. `XDiagLine` 与 `XNetLine` 都必须写出 `domain` 字段(见上「头号判据」);
+5. `x-diag` / `session-` 两个目录字面量只许出现在 `XDiagSession.kt` 一处。
 
 ## 索引下限
 
@@ -54,11 +60,18 @@ DIAG_DIRS = (
 MIN_DOMAINS = 5
 MIN_FILES = 8
 
-DOMAIN_ENUM_FILE = "app/src/main/java/me/rerere/rikkahub/x/diag/XDiagnostics.kt"
-SESSION_FILE = "app/src/main/java/me/rerere/rikkahub/x/diag/XDiagSession.kt"
-FILE_STORE_FILE = "app/src/main/java/me/rerere/rikkahub/x/diag/XDiagFileStore.kt"
-ZIP_FILE = "app/src/main/java/me/rerere/rikkahub/x/diag/XDiagZip.kt"
-LOGCAT_FILE = "app/src/main/java/me/rerere/rikkahub/x/diag/XLogcatCapture.kt"
+DIAG_DIR = "app/src/main/java/me/rerere/rikkahub/x/diag/"
+DOMAIN_ENUM_FILE = DIAG_DIR + "XDiagnostics.kt"
+SESSION_FILE = DIAG_DIR + "XDiagSession.kt"
+FILE_STORE_FILE = DIAG_DIR + "XDiagFileStore.kt"
+ZIP_FILE = DIAG_DIR + "XDiagZip.kt"
+LOGCAT_FILE = DIAG_DIR + "XLogcatCapture.kt"
+
+# 两个组行函数 —— 判据 4 的对象。它们是「每行带 domain」这条不变量的**唯一**责任方。
+LINE_FORMATTERS = (
+    (DIAG_DIR + "XDiagLine.kt", "语义事件"),
+    (DIAG_DIR + "XNetLine.kt", "网络记录"),
+)
 
 # 枚举条目:`NAME("key", "label")` —— 只认带两个字符串参数的那种,注释里的示例不受影响。
 ENUM_ENTRY_RE = re.compile(r'^\s{4}([A-Z][A-Z0-9_]*)\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)', re.M)
@@ -70,6 +83,10 @@ ENUM_BLOCK_RE = re.compile(r"enum class XDomain[^{]*\{", re.M)
 # 前后的排除条件是为了不误抓 `Logging.log(` 这类**方法调用**:要求点号前至少一个字母,
 # 且点号前那个字符不是 `.`(否则 `foo.bar.log` 会被截出 `bar.log`)。
 LOG_NAME_RE = re.compile(r'(?<![\w.])([a-z][a-z0-9_\-]*)\.log\b')
+
+# 常量定义处 —— 判据 2 从这里取「唯一真源」的名字。
+EVENTS_CONST_RE = re.compile(r'const val EVENTS_FILE\s*=\s*"([^"]+)"')
+LOG_NAME_CONST_RE = re.compile(r'const val LOG_NAME\s*=\s*"([^"]+)"')
 
 # 目录字面量(带引号,精确匹配 —— XDiagEnv 的标记 `===== [x-diag]` 是另一回事,不该被算进来)
 ROOT_DIR_RE = re.compile(r'"x-diag"')
@@ -134,40 +151,46 @@ def diag_files(root: Path) -> list[Path]:
 def check(root: Path) -> list[str]:
     problems: list[str] = []
     domains = parse_domains(root)
-    keys = [k for _, k in domains]
     files = diag_files(root)
 
     # ── 判据 1:key 形态与唯一性 ──
+    # key 不再是文件名,但它**仍然是每行 `domain` 字段的取值** —— 形态错了一样会让
+    # 读取端的 `grep '"domain":"..."'` 变得别扭,故这条留着。
     seen: dict[str, str] = {}
     for name, key in domains:
         if not re.fullmatch(r"[a-z][a-z0-9_]*", key):
             problems.append(
                 f"{DOMAIN_ENUM_FILE}:域 {name} 的 key '{key}' 不合规 —— "
-                f"只允许小写字母/数字/下划线,且以字母开头(它是文件名的一部分)。"
+                f"只允许小写字母/数字/下划线,且以字母开头(它是每行 domain 字段的取值)。"
             )
         if key in seen:
             problems.append(
                 f"{DOMAIN_ENUM_FILE}:域 {name} 与 {seen[key]} 的 key 重复('{key}')—— "
-                f"两个域会写进同一个文件,导出时分不开。"
+                f"读取端按 domain 过滤时分不开两者。"
             )
         else:
             seen[key] = name
 
-    domain_files = {k + ".log" for k in keys}
-
-    # ── 判据 2:LOG_NAME 不许与某个域名撞车 ──
-    logcat_text = read(root, LOGCAT_FILE)
-    m = re.search(r'const val LOG_NAME\s*=\s*"([^"]+)"', logcat_text)
+    # ── 判据 2:文件名单点定义 ──
+    store_text = read(root, FILE_STORE_FILE)
+    m = EVENTS_CONST_RE.search(store_text)
     if not m:
-        raise Problem(f"{LOGCAT_FILE}:找不到 `LOG_NAME` 常量")
+        raise Problem(f"{FILE_STORE_FILE}:找不到 `const val EVENTS_FILE` 常量")
+    events_name = m.group(1)
+
+    logcat_text = read(root, LOGCAT_FILE)
+    m = LOG_NAME_CONST_RE.search(logcat_text)
+    if not m:
+        raise Problem(f"{LOGCAT_FILE}:找不到 `const val LOG_NAME` 常量")
     logcat_name = m.group(1)
-    if logcat_name in domain_files:
+
+    if events_name == logcat_name:
         problems.append(
-            f"{LOGCAT_FILE}:LOG_NAME ('{logcat_name}')与某个域的 key 撞车 —— "
-            f"XDiagZip.describe() 先判 logcat,该域文件会被误标成「原生 logcat」。"
+            f"{FILE_STORE_FILE}:EVENTS_FILE ('{events_name}')与 {LOGCAT_FILE} 的 LOG_NAME "
+            f"重名 —— 事件时间线会把原始 logcat 覆盖掉。"
         )
 
-    allowed = domain_files | {logcat_name}
+    allowed = {events_name, logcat_name}
 
     # ── 判据 3:每个文件名引用都必须落在允许集合里 ──
     for path in files:
@@ -177,32 +200,43 @@ def check(root: Path) -> list[str]:
             name = match.group(0)
             if name in allowed:
                 continue
+            # 常量定义那一行本身就是真源,不算「别处又写一份」。
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_text = text[line_start:text.find("\n", match.start())]
+            if "const val EVENTS_FILE" in line_text or "const val LOG_NAME" in line_text:
+                continue
             line = text.count("\n", 0, match.start()) + 1
             problems.append(
-                f"{rel}:{line}: 文件名 '{name}' 不挂在任何域上 —— "
+                f"{rel}:{line}: 文件名 '{name}' 不是本次会话会写出的文件 —— "
                 f"XDiagZip.describe() 会把它写成 'unrecognised file'。"
-                f"合法值:{sorted(allowed)}"
+                f"合法值:{sorted(allowed)}(历史文件名可在注释里叙述,但不要写成带引号的字面量)"
             )
 
-    # ── 判据 4:域名必须派生自枚举,不许硬编码 ──
+    # ── 判据 4:两个组行函数都必须写出 domain(取代了旧的「文件↔域」耦合) ──
+    # 这是合并成单文件后**最要紧**的一条:不再靠文件名区分域,只剩读取端过滤一条路。
+    # 某一行漏了 domain → 那条记录永远分不出属于谁,而且没有任何编译/运行时报错。
+    for rel, what in LINE_FORMATTERS:
+        text = read(root, rel)
+        if not re.search(r'put\(\s*"domain"', text):
+            problems.append(
+                f"{rel}:没有写出 `domain` 字段 —— 所有事件现在同住一个 {events_name},"
+                f"按域挑记录**只剩读取端过滤一条路**(grep '\"domain\":\"…\"')。"
+                f"{what}的行漏了它,那条记录就永远分不出属于谁。"
+            )
+
+    # ── 判据 5:描述函数必须引用常量,不许硬编码文件名 ──
     zip_text = read(root, ZIP_FILE)
-    net_name = re.search(r'NET_NAME\s*=\s*([^\n]+)', zip_text)
-    if not net_name:
-        problems.append(f"{ZIP_FILE}:找不到 NET_NAME(describe() 依赖它判 net.log)")
-    elif "XDomain.NET.key" not in net_name.group(1):
+    if "XDiagFileStore.EVENTS_FILE" not in zip_text:
         problems.append(
-            f"{ZIP_FILE}:NET_NAME 未派生自 XDomain.NET.key(现值:{net_name.group(1).strip()})—— "
-            f"硬编码会在枚举改 key 时漂移。"
+            f"{ZIP_FILE}:describe() 没有引用 `XDiagFileStore.EVENTS_FILE` —— "
+            f"硬编码文件名会在常量改名时漂移,清单就会把 {events_name} 写成 'unrecognised file'。"
+        )
+    if "XLogcatCapture.LOG_NAME" not in zip_text:
+        problems.append(
+            f"{ZIP_FILE}:describe() 没有引用 `XLogcatCapture.LOG_NAME` —— 同上。"
         )
 
-    store_text = read(root, FILE_STORE_FILE)
-    if 'domain.key + ".log"' not in store_text:
-        problems.append(
-            f"{FILE_STORE_FILE}:建文件处不再用 `domain.key + \".log\"` —— "
-            f"文件名从此与枚举脱钩,本检查器的其余判据也就失去意义。"
-        )
-
-    # ── 判据 5:目录字面量单点定义 ──
+    # ── 判据 6:目录字面量单点定义 ──
     for path in files:
         if path.name == Path(SESSION_FILE).name:
             continue
@@ -217,7 +251,7 @@ def check(root: Path) -> list[str]:
                 )
 
     # ⚠️ 刻意**不查**「每个域在 XDiagZip.describe() 里有没有自己的说明」——
-    # describe() 是**通用**的(拿文件名去 XDomain.entries 里找),本来就没有逐域的代码。
+    # describe() 是**通用**的,而且合并之后它连域都不再提(域不是文件名了)。
     # 硬要写一条,只会得到一条永远通过的检查 —— 那比不检查更坏(见仓库纪律「两种假检查」)。
     return problems
 
@@ -243,7 +277,7 @@ def main(argv: list[str]) -> int:
     domains = parse_domains(root)
     print(
         f"[CHECK PASS] {len(domains)} 个域 / {len(diag_files(root))} 个文件:"
-        f"文件名与域枚举一致,目录字面量单点定义"
+        f"文件名单点定义,两个组行函数都带 domain,目录字面量单点定义"
     )
     return 0
 

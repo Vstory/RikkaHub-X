@@ -19,7 +19,7 @@ import java.util.zip.ZipOutputStream
  *
  * ① **体积**:`logcat.log` 单独就能到 200MB(它的安全阀),而日志文本压缩比很高 ——
  *    压完常常只有十分之一。不压就得先传 200MB 出去。
- * ② **文件边界**:包里同时有 logcat(纯文本行)、`net.log`(请求 JSON 行)、各域事件 JSON 行。
+ * ② **文件边界**:包里同时有 logcat(纯文本行)与 `events.log`(JSON 行)。
  *    拼成一份就得靠分隔标记猜「哪几行属于哪个文件」,而这个猜测正是最容易出错的地方
  *    (消息正文里本来就带各种标记)。分文件则不需要猜。
  * ③ 顺带:一个文件比分四个文件好传。
@@ -204,17 +204,24 @@ object XDiagZip {
         appendLine("  inside a message are JSON-escaped, so ONE LINE IS ALWAYS ONE RECORD --")
         appendLine("  you can locate a record by line number and filter with a single grep.")
         appendLine()
-        appendLine("  Domain files carry: at (HH:mm:ss.SSS), lvl (I/W), domain, event, msg.")
-        appendLine("  net.log carries:    at, method, url, code, durationMs, reqHeaders, reqBody,")
-        appendLine("                      respHeaders, and respBody. reqBody is the FULL request body")
-        appendLine("                      -- for chat requests that means the complete prompt sent to")
-        appendLine("                      the model.")
-        appendLine("                      respBody is present only when the request FAILED (non-2xx):")
-        appendLine("                      an error response says why it was rejected, and that text is")
-        appendLine("                      not available anywhere else. Successful (2xx) responses carry")
-        appendLine("                      no respBody -- for chat they are SSE streams, and buffering")
-        appendLine("                      one would stall the conversation. If an error body exceeded")
-        appendLine("                      the capture limit, the line also has respBodyTruncated=true.")
+        appendLine("  Every line of events.log carries: at (HH:mm:ss.SSS), lvl (I/W), domain, event.")
+        appendLine()
+        appendLine("  Domains are NOT split into separate files, and that is deliberate: THE ORDER IS")
+        appendLine("  THE POINT. One timeline answers 'what happened when', including across areas.")
+        appendLine("  To look at one area only, filter instead of opening another file:")
+        appendLine("      grep '\"domain\":\"storage\"' events.log")
+        appendLine()
+        appendLine("  Lines with domain=net also carry: method, url, code, durationMs, reqHeaders,")
+        appendLine("  respHeaders, and -- when the request carried one -- reqBytes.")
+        appendLine("  reqBytes is only the SIZE of the request body. The body itself is NOT in this")
+        appendLine("  bundle, on purpose (a chat request body is the whole prompt plus history,")
+        appendLine("  hundreds of KB: it would drown the timeline, and the redactor cannot tell")
+        appendLine("  ordinary user text from credentials).")
+        appendLine("  respBody IS included, but only when the request FAILED (non-2xx): an error")
+        appendLine("  response says why it was rejected, and that text is available nowhere else.")
+        appendLine("  Successful (2xx) responses carry no respBody -- for chat they are SSE streams,")
+        appendLine("  and buffering one would stall the conversation. If an error body exceeded the")
+        appendLine("  capture limit, the line also has respBodyTruncated=true.")
         appendLine()
         appendRedactionNote(this, redacted)
     }
@@ -235,9 +242,7 @@ object XDiagZip {
             sb.appendLine()
             sb.appendLine("  This bundle is exported AS-IS. Redaction is currently disabled, so it may")
             sb.appendLine("  contain credentials and personal content, including:")
-            sb.appendLine("    - Authorization / api keys in net.log request headers")
-            sb.appendLine("    - the full model request body in net.log (system prompt, chat history,")
-            sb.appendLine("      and anything typed by the user)")
+            sb.appendLine("    - Authorization / api keys in request headers recorded in events.log")
             sb.appendLine("    - whatever the app itself happened to log into logcat")
             sb.appendLine()
             sb.appendLine("  Review it before sharing it with anyone.")
@@ -254,30 +259,26 @@ object XDiagZip {
         sb.appendLine()
         sb.appendLine("  What this does NOT do -- the redactor only knows credential *patterns*. It")
         sb.appendLine("  cannot tell that ordinary text is private, so the following are still in here:")
-        sb.appendLine("    - the full model request body in net.log: system prompt, chat history, and")
-        sb.appendLine("      anything typed by the user")
+        sb.appendLine("    - error response bodies (respBody), which are server text we do not control")
         sb.appendLine("    - app and framework log lines that happen to contain user content")
         sb.appendLine()
         sb.appendLine("  Review it before sharing it with anyone.")
     }
 
-    /** 一个文件是什么 —— 按名字给读者一句说明。认不出就明说认不出。 */
+    /**
+     * 一个文件是什么 —— 按名字给读者一句说明。认不出就明说认不出。
+     *
+     * ⚠️ 这里**不再按域查表**(2026-09-13 合并单文件后,域不再是文件名的一部分)。
+     * 从前它要拿文件名去 `XDomain.entries` 里找域,那层耦合由 `check_x_diag_layout.py`
+     * 专门守着;合并之后那个检查器的判据大半作废 —— 耦合本身没有了。
+     */
     private fun describe(name: String): String {
         if (name == XLogcatCapture.LOG_NAME) {
             return "raw logcat of the app itself (upstream + framework lines included)"
         }
-        if (name == NET_NAME) {
-            return "HTTP requests: full request bodies, plus error response bodies"
+        if (name == XDiagFileStore.EVENTS_FILE) {
+            return "X custom timeline: semantic events and HTTP request metadata, in occurrence order"
         }
-        val stem = name.removeSuffix(".log")
-        val domain = XDomain.entries.firstOrNull { it.key == stem }
-        return if (domain != null) {
-            "X custom semantic events for domain '${domain.key}' (${domain.label})"
-        } else {
-            "unrecognised file (name does not match a known domain or the logcat capture)"
-        }
+        return "unrecognised file (name does not match a known file of the diagnostic bundle)"
     }
-
-    /** 与 [XDomain.NET] 的 `key` 同源 —— 写成常量只为让上面那处判断读起来自明。 */
-    private val NET_NAME = XDomain.NET.key + ".log"
 }
