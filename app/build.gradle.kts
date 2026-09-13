@@ -179,11 +179,16 @@ android {
             }
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
+            // [X-custom] 渠道。让 Kotlin 侧能区分「nightly(明确的测试包)」与「release」——
+            // 诊断页的自检按钮据此决定要不要出现(见 DiagnosticPage 那段注释)。
+            // ⚠️ 之前只有 Gradle 侧用得到它(改应用名),Kotlin 读不到。
+            buildConfigField("String", "X_CHANNEL", "\"$xChannel\"")
         }
         debug {
             applicationIdSuffix = ".debug"
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
+            buildConfigField("String", "X_CHANNEL", "\"$xChannel\"")
         }
     }
     compileOptions {

@@ -1394,6 +1394,11 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_events_empty">还没有记录——打开上面的开关才开始记。</string>
   <string name="diagnostic_events_scope">只搜每域最近 %1$d 条;完整内容在导出的包里。</string>
   <string name="diagnostic_events_count">显示 %1$d / %2$d</string>
+  <string name="diagnostic_selftest_title">自检(仅调试版有)</string>
+  <string name="diagnostic_selftest_crash">制造一次崩溃</string>
+  <string name="diagnostic_selftest_crash_desc">点了会立刻崩溃(故意的)。重启应用后,看上面的「崩溃与关键失败」,以及导出包里 survivors.log 的内容。</string>
+  <string name="diagnostic_selftest_anr">制造一次 ANR</string>
+  <string name="diagnostic_selftest_anr_desc">点了会故意把主线程堵住 15 秒。**点完请立刻在屏幕上点几下** —— 系统要有一次输入事件超时才会判定 ANR;等「应用无响应」弹窗出现后,选**「关闭应用」**(那才让进程带着 ANR 的理由结束;选「等待」不会留下退出记录)。需要 Android 11 以上。</string>
 <string name="diagnostic_export_title">导出</string>
   <string name="diagnostic_export_bundle">导出诊断包</string>
   <string name="diagnostic_export_bundle_desc">一次导出全部:原始应用日志、事件时间线(语义事件与网络记录),外加一份说明文件,打成压缩包,适合交给 AI。凭据会被掩掉,但日志里仍可能含你个人的内容,分享前请先过目。</string>

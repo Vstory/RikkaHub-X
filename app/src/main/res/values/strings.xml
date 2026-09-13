@@ -889,6 +889,11 @@
   <string name="diagnostic_events_empty">Nothing recorded yet — turn the switch on above.</string>
   <string name="diagnostic_events_scope">Searches the newest %1$d entries per area; the exported bundle has everything.</string>
   <string name="diagnostic_events_count">showing %1$d of %2$d</string>
+  <string name="diagnostic_selftest_title">Self-test (debug builds only)</string>
+  <string name="diagnostic_selftest_crash">Force a crash</string>
+  <string name="diagnostic_selftest_crash_desc">Crashes on purpose right now. Restart the app, then look at &quot;Crashes &amp; critical failures&quot; above, and at survivors.log inside an exported bundle.</string>
+  <string name="diagnostic_selftest_anr">Force an ANR</string>
+  <string name="diagnostic_selftest_anr_desc">Blocks the main thread for 15s on purpose. TAP THE SCREEN a few times right after &amp;mdash; the system only declares an ANR when an input event times out. When the &quot;app isn&#39;t responding&quot; dialog appears, choose CLOSE APP (that is what makes the process exit with an ANR reason; picking &quot;wait&quot; leaves no exit record). Needs Android 11 or newer.</string>
 <string name="diagnostic_export_title">Export</string>
   <string name="diagnostic_export_bundle">Export diagnostic bundle</string>
   <string name="diagnostic_export_bundle_desc">One archive with everything: the raw app log, the event timeline (semantic events and network records), and a README explaining the layout. Best for handing to an AI. Credentials are masked, but the log can still hold personal content — review it before sharing.</string>

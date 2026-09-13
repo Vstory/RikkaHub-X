@@ -2,6 +2,8 @@ package me.rerere.rikkahub.ui.pages.diagnostic
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +57,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.x.diag.NoExportProgress
 import me.rerere.rikkahub.x.diag.XDiagClear
 import me.rerere.rikkahub.x.diag.XDiagExportNotifier
@@ -673,6 +676,65 @@ fun DiagnosticPage() {
                         supportingContent = { Text(stringResource(R.string.diagnostic_clear_desc)) },
                         onClick = { confirmClear = true },
                     )
+                }
+            }
+
+            // ── 自检(仅调试版)──
+            //
+            // 这一区是给「验证崩溃与 ANR 到底有没有被记下来」用的。那两个替换件
+            // ([XCrashReport] / [XExitReport])只在**真机**上才验得了 —— CI 只能证明它们
+            // 能编译,证明不了「崩溃真被记进了 survivors.log」。故这里给两个按钮,
+            // 把「造一次崩溃」与「造一次 ANR」变成两次点击,而不是每次去改代码。
+            //
+            // ⚠️ **只在「明确的测试包」里出现**:debug 版,以及 **nightly 渠道**。
+            //
+            // 为什么把 nightly 也算进来:真机验证走的正是 nightly 那个 APK(CI 构建、
+            // 直接装了就能用),而 debug 版要自己搭环境编译。若只放 debug,这条验证在
+            // 实际流程里就没人做得了 —— 那一开始就不该把它做成按钮。
+            //
+            // 而**正式版里绝不出现**:一个叫「制造一次崩溃」的按钮出现在正式版里,
+            // 无论怎么解释都说不通。nightly 与正式版的区别是**可见的** ——
+            // 应用名带后缀(见 build.gradle.kts 的 xAppLabelRes),装它的人本来就在测。
+            if (BuildConfig.DEBUG || BuildConfig.X_CHANNEL == "nightly") {
+                item {
+                    CardGroup(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        title = { Text(stringResource(R.string.diagnostic_selftest_title)) },
+                    ) {
+                        item(
+                            headlineContent = {
+                                Text(stringResource(R.string.diagnostic_selftest_crash))
+                            },
+                            supportingContent = {
+                                Text(stringResource(R.string.diagnostic_selftest_crash_desc))
+                            },
+                            onClick = {
+                                // 走主线程的 Handler,而不是在这里直接 `throw`:那样异常会从
+                                // Compose 的事件分发里冒出来(有可能被它的边界接住)——
+                                // 而这里**确定**是一个未捕获的异常,上游 CrashHandler 收得到,
+                                // 那正是我们要验的那条路。
+                                Handler(Looper.getMainLooper()).post {
+                                    throw RuntimeException("X 自检:故意制造的崩溃(诊断用)")
+                                }
+                            },
+                        )
+                        item(
+                            headlineContent = {
+                                Text(stringResource(R.string.diagnostic_selftest_anr))
+                            },
+                            supportingContent = {
+                                Text(stringResource(R.string.diagnostic_selftest_anr_desc))
+                            },
+                            onClick = {
+                                Handler(Looper.getMainLooper()).post {
+                                    // 故意堵住主线程。15 秒远超 ANR 的判定阈值(5 秒);
+                                    // 而**点完要在屏幕上点几下** —— 系统是在「输入事件超时」
+                                    // 那一刻才判定 ANR 的(见下面那句说明文字)。
+                                    Thread.sleep(15_000)
+                                }
+                            },
+                        )
+                    }
                 }
             }
 
