@@ -45,6 +45,7 @@ import me.rerere.rikkahub.x.diag.XDiagFileStore
 import me.rerere.rikkahub.x.diag.XDiagSession
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XRequestLog
+import me.rerere.rikkahub.x.diag.XSurvivorLog
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get

@@ -95,7 +95,7 @@ object XDiagZip {
         progress: XExportProgress = NoExportProgress,
         extra: List<File> = emptyList(),
     ): Boolean {
-        val files = filesOf(dir) + filesOf(extra)
+        val files = filesOf(dir) + filesFrom(extra)
         if (files.isEmpty()) return false
 
         val redacted = XLogScrub.ENABLED
@@ -163,11 +163,22 @@ object XDiagZip {
         return true
     }
 
+    /** 目录里的非空文件(按名排序)。 */
     private fun filesOf(dir: File?): List<File> =
         dir?.listFiles()
             ?.filter { it.isFile && it.length() > 0L }
             ?.sortedBy { it.name }
             .orEmpty()
+
+    /**
+     * 目录**之外**的额外文件(存活层),同样只取非空、按名排序。
+     *
+     * ⚠️ 与 [filesOf] 分开是**有意的**:前者吃「一个目录」、后者吃「一份文件清单」,
+     * 两个签名不同正是「来源不同」的体现。早先把 extra 也交给 [filesOf] 时,
+     * 传进去的是 `List<File>` 而形参是 `File?` —— 编译不过(实测在 CI 上红了)。
+     */
+    private fun filesFrom(files: List<File>): List<File> =
+        files.filter { it.isFile && it.length() > 0L }.sortedBy { it.name }
 
     /** 逐行读 → 脱敏 → 写。内存占用与文件大小无关,故几百 MB 的日志也压得动。 */
     private fun writeScrubbed(file: File, zip: ZipOutputStream, onRead: (Long) -> Unit = {}) {
@@ -259,7 +270,7 @@ object XDiagZip {
         appendLine("  Domains are NOT split into separate files, and that is deliberate: THE ORDER IS")
         appendLine("  THE POINT. One timeline answers 'what happened when', including across areas.")
         appendLine("  To look at one area only, filter instead of opening another file:")
-        appendLine("      grep '\\"domain\\":\\"storage\\"' events.log")
+        appendLine("      grep '\"domain\":\"storage\"' events.log")
         appendLine()
         appendLine("  Lines with domain=net also carry: method, url, code, durationMs, reqHeaders,")
         appendLine("  respHeaders, and -- when the request carried one -- reqBytes.")
