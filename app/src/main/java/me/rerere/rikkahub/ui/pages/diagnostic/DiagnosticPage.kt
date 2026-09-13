@@ -61,6 +61,7 @@ import me.rerere.rikkahub.x.diag.XExportProgress
 import me.rerere.rikkahub.x.diag.XLogRing
 import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
+import me.rerere.rikkahub.x.diag.XLogcatDump
 import me.rerere.rikkahub.x.diag.XLogcatNoise
 import me.rerere.rikkahub.x.diag.XSurvivorLog
 import me.rerere.rikkahub.x.diag.XRedaction
