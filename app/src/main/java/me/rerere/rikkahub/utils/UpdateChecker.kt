@@ -21,6 +21,7 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.rikkahub.x.diag.XUserVisibleErrors
 
 private const val API_URL = "https://updates.rikka-ai.com/"
 
@@ -103,6 +104,8 @@ class UpdateChecker(
             dm.enqueue(request)
             // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
         }.onFailure {
+            // 系统原生 Toast 绕过 toaster 漏斗 → 显式记,并带上真正的异常。
+            XUserVisibleErrors.recordShown(message = "触发下载更新失败", error = it)
             Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
             context.openUrl(download.url) // 跳转到下载页面
         }

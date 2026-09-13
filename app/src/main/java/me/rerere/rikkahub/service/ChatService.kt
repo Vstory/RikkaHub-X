@@ -106,6 +106,7 @@ import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
+import me.rerere.rikkahub.x.diag.XUserVisibleErrors
 
 private const val TAG = "ChatService"
 
@@ -1232,6 +1233,11 @@ class ChatService(
             context.getString(R.string.compress_feedback_success)
         } else {
             context.getString(R.string.compress_feedback_failed)
+        }
+        // 失败要记账(成功不必 —— 那是流水,不是问题)。
+        // 这条提示走的是**系统原生 Toast**,天生绕过 toaster 漏斗,故在这里显式记。
+        if (!success) {
+            XUserVisibleErrors.recordShown(message = message)
         }
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         // 持久通知反馈:Toast 一闪而过不直观,结果留一条通知可回看。

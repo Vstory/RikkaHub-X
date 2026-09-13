@@ -364,6 +364,8 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                             try {
                                 context.startActivity(Intent.createChooser(intent, share))
                             } catch (e: ActivityNotFoundException) {
+                                // x-diag-toast-ok: 设备上没有可分享的应用 —— 属**用户的
+                                // 环境情况**,不是本应用的失败(应用行为完全正常)。
                                 Toast.makeText(context, noShareApp, Toast.LENGTH_SHORT).show()
                             }
                         },
@@ -445,6 +447,7 @@ private fun QQGroupBottomSheet(onDismiss: () -> Unit) {
                     onClick = {
                         if (group.number != null) {
                             context.writeClipboardText(group.number)
+                            // x-diag-toast-ok: 成功提示,不是问题
                             Toast.makeText(context, "群号已复制", Toast.LENGTH_SHORT).show()
                         } else {
                             context.joinQQGroup(group.key)
