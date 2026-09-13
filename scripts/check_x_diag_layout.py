@@ -98,9 +98,12 @@ SURVIVORS_CONST_RE = re.compile(r'const val SURVIVORS_FILE\s*=\s*"([^"]+)"')
 DUMP_CONST_RE = re.compile(r'const val DUMP_FILE\s*=\s*"([^"]+)"')
 PREFIX_CONST_RE = re.compile(r'const val PREFIX\s*=\s*"([^"]+)"')
 
-# logcat 分片名:`<前缀>_<正整数><后缀>`。与 Kotlin 侧 [XLogcatParts.partOf] 同一判据 ——
-# 两边**必须收得一样窄**:放宽成「以 logcat 开头」会把 `logcat_backup.log` 之类算进来。
-PART_NAME_RE = re.compile(r"^(?P<prefix>[a-z][a-z0-9_]*)_\d+\.log$")
+# logcat 分片名:`<前缀>_<正整数><后缀>`。与 Kotlin 侧 `XLogcatParts.partOf` **同一判据** ——
+# 两边必须收得一样窄,否则检查器会放行一个运行时认不出的名字:
+# · 放宽成「以 logcat 开头」→ `logcat_backup.log` 被当成真日志;
+# · 前导零(`[1-9]\d*` 写成 `\d+`)→ `logcat_01.log` 被放行,而 Kotlin 那边会判它不是分片
+#   (实测:实现漏了拒前导零,是单测逼出来的;检查器这里也要跟上,免得两边又漂)。
+PART_NAME_RE = re.compile(r"^(?P<prefix>[a-z][a-z0-9_]*)_[1-9]\d*\.log$")
 
 
 def comment_ranges(text: str) -> list:
