@@ -153,6 +153,10 @@ fun DiagnosticPage() {
     // 待导出的内容。先记下内容、再让用户挑保存位置 —— 反过来会先去算一遍内容（可能很大）。
     var pending by remember { mutableStateOf<PendingExport?>(null) }
 
+    // 导出入口「正在抓缓冲快照」的标志。抓快照要起一次 logcat 进程(几十到几百毫秒),
+    // 期间重复点会抓两份、并弹两次保存位置。故挡住。
+    var preparing by remember { mutableStateOf(false) }
+
     // 走系统的「创建文档」让用户自己选存到哪。不再用剪贴板:它装不下完整日志,也留不下文件。
     //
     // ⚠️ 位置选完之后真正落盘的那段**两个 launcher 共用**:MIME 只能在**构造时**定死,
@@ -162,7 +166,17 @@ fun DiagnosticPage() {
     fun onPicked(uri: Uri?) {
         val payload = pending
         pending = null
-        if (uri == null || payload == null) return
+        if (payload == null) return
+        // ⚠️ **临时文件在每一条路径上都要删**:写成功、写失败、以及**用户在系统选位置时
+        //    点了取消**(`uri == null`)。它们是这次导出动作的产物,不是诊断现场 ——
+        //    现场在会话目录与存活层里,那些一个都不动。漏删的后果是一份几十 MB 的
+        //    快照留在缓存目录里,而它对应的那次导出可能已经被取消了。
+        val temps = (payload as? PendingExport.SessionZip)?.temps.orEmpty()
+        fun cleanTemps() = temps.forEach { runCatching { it.delete() } }
+        if (uri == null) {
+            cleanTemps()
+            return
+        }
         val fileName = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
         XDiagExportNotifier.begin(context)
         appScope.launch {
@@ -171,6 +185,7 @@ fun DiagnosticPage() {
                     writeExport(context, uri, payload, XDiagExportNotifier.progress(context))
                 }.getOrDefault(false)
             }
+            cleanTemps()
             // 结果同时走通知与吐司:通知保证「离开了这一页也看得到」,
             // 吐司保证「通知权限被关掉时仍有反馈」。
             XDiagExportNotifier.finish(context, fileName, ok)
@@ -464,28 +479,56 @@ fun DiagnosticPage() {
                         headlineContent = { Text(stringResource(R.string.diagnostic_export_bundle)) },
                         supportingContent = { Text(stringResource(R.string.diagnostic_export_bundle_desc)) },
                         onClick = {
-                            // 停止之后也允许导出 —— 「先关掉开关,再把刚录的那段导出来」是很自然的顺序。
-                            val dir = XDiagSession.latest(context)
-                            // 存活层在**根目录**、独立于开关,故单独取一份给打包与判据用。
-                            // ⚠️ 它必须进判据:「开关从未开过、但崩溃过」时包里**只有**它 ——
-                            //    只看会话目录会报「还没有记录」,而那恰恰是最该导出的情形。
-                            val survivors = listOfNotNull(XSurvivorLog.file())
-                            // ⚠️ 判据走 hasContent(它自己接 File?),**不要**在这里写
-                            //    「dir == null 就先报没有记录」—— 那会漏掉「开关从未开过、
-                            //    但崩溃过」这一种:包里只有存活层,而它恰恰最该导出来。
+                            // ⚠️ **顺序是「先抓快照、再判定」**(2026-09-13 修,此前是个缺口)。
                             //
-                            // ⚠️⚠️ **已知缺口**(2026-09-13 记下,未修):判据**看不到**导出时
-                            //    才抓的那份 logd 全缓冲快照(见 XLogcatDump)。于是当
-                            //    「开关从未开过、也没崩溃过」时,这里报「还没有记录」——
-                            //    而那一刻 logd 缓冲里其实躺着东西(包括开关打开之前的行),
-                            //    恰恰是快照**唯一**能提供、别处都拿不到的那部分。
-                            //    修法是把这次判据挪到 IO 线程上(先抓快照再决定是否弹保存位置),
-                            //    那要改这条点击路径的启动流程,故单独排期;别顺手在这里加
-                            //    `|| true` —— 那会让空包走到「保存失败」,比现在更糟。
-                            if (XDiagZip.hasContent(dir, survivors)) {
-                                exportZip("diag", PendingExport.SessionZip(dir, survivors))
-                            } else {
-                                toaster.show(message = context.getString(R.string.diagnostic_export_bundle_none))
+                            // 判据若看不到快照,「开关从未开过、也没崩溃过」时会报
+                            // 「还没有记录」—— 而那一刻 logd 缓冲里其实躺着东西(含开关
+                            // 打开之前的行),那恰恰是快照**唯一**能提供、别处都拿不到的部分。
+                            // 换句话说:**这个按钮会在最需要它的那台设备上撒谎。**
+                            //
+                            // 代价是点一下到弹出保存位置之间多几十~几百毫秒(一次
+                            // `logcat -b all -d`),期间用 `preparing` 挡住重复点击。
+                            //
+                            // ⚠️ 另一处**必须留意**的:判据走 `hasContent`(它自己接 `File?`),
+                            //    **不要**改写成「dir == null 就先报没有记录」—— 那会把
+                            //    「开关从未开过、但崩溃过」的那种包判成空,而它恰恰最该导出来。
+                            if (!preparing) {
+                                preparing = true
+                                appScope.launch {
+                                    // ⚠️ `preparing` 用 finally 复位:它若因为任何异常留在 true,
+                                    //    这个按钮就**永久失灵**了,而界面上看不出任何异常(点了没
+                                    //    反应)。这正是「静默失败比崩溃更贵」那一类 ——
+                                    //    XLogcatDump.capture 自己吞掉了异常,但 `withContext`
+                                    //    仍可能因取消而抛。
+                                    try {
+                                        // 停止之后也允许导出 —— 「先关掉开关,再把刚录的那段
+                                        // 导出来」是很自然的顺序。
+                                        //
+                                        // 抓取走 IO:它要起进程、读管道。
+                                        val dump = withContext(Dispatchers.IO) {
+                                            XLogcatDump.capture(context.cacheDir)
+                                        }
+                                        val dir = XDiagSession.latest(context)
+                                        // 存活层在**根目录**、独立于开关,同样要进判据与包。
+                                        val extras = listOfNotNull(XSurvivorLog.file(), dump)
+                                        if (XDiagZip.hasContent(dir, extras)) {
+                                            // 快照作为**临时文件**随载荷传下去,由 onPicked
+                                            // 在任何路径下删掉(见那里的注释)。
+                                            exportZip(
+                                                "diag",
+                                                PendingExport.SessionZip(dir, extras, listOfNotNull(dump)),
+                                            )
+                                        } else {
+                                            // 空包:刚才那份快照也要删 —— 留着就是一份没人要的文件。
+                                            runCatching { dump?.delete() }
+                                            toaster.show(
+                                                message = context.getString(R.string.diagnostic_export_bundle_none),
+                                            )
+                                        }
+                                    } finally {
+                                        preparing = false
+                                    }
+                                }
                             }
                         },
                     )
@@ -568,7 +611,18 @@ private sealed interface PendingExport {
      *   而存活层仍可能有内容(崩溃过),那种情况必须照样能导出。
      * @param extra 会话目录之外的额外文件(存活层 `survivors.log`,在根目录)。
      */
-    data class SessionZip(val dir: File?, val extra: List<File> = emptyList()) : PendingExport
+    data class SessionZip(
+        val dir: File?,
+        val extra: List<File> = emptyList(),
+        /**
+         * 导出完成后要删掉的**临时文件**(导出那刻抓的缓冲快照)。
+         *
+         * ⚠️ 与 [extra] 分开是**有意的**:`extra` 是「要打进包的内容」,这里是
+         * 「打完要清理什么」。此刻两者恰好指向同一个文件,但语义不同 —— 合成一个字段,
+         * 将来给 `extra` 加一项(比如把某个现场文件也递进来)就会**连带把它删掉**。
+         */
+        val temps: List<File> = emptyList(),
+    ) : PendingExport
 
     /**
      * 小段文本。**现在唯一的调用点是「关键失败留存」卡片里的「导出详情」** ——
@@ -596,27 +650,11 @@ private fun writeExport(
         // 打包与脱敏都在 XDiagZip 里,进度由它上报(读两遍:先扫、后写)。
         // dir 为 null 不是错误(没有会话、只有存活层),故不在这里报失败 ——
         // XDiagZip 以「到底打进了什么」为准返回,空包才 false。
-        is PendingExport.SessionZip -> {
-            // 导出这一刻另抓一份 **logd 全缓冲快照**:它含开关打开之前的行、已被轮转掉的
-            // 行、以及实时捕获剔掉的噪声 —— 三块**在别处都拿不到**。实时那条路要便宜连续,
-            // 这条路要一条不漏,两者目标不同,故不合并(见 XLogcatDump 的类注释)。
-            // 跑在 IO 线程上:onPicked 那边已经 withContext(Dispatchers.IO) 了。
-            val dump = XLogcatDump.capture(context.cacheDir)
-            try {
-                XDiagZip.write(
-                    header = XDiagEnv.appLines(context),
-                    out = out,
-                    dir = payload.dir,
-                    progress = progress,
-                    // 快照与存活层一样,是**目录之外**的额外项。
-                    extra = payload.extra + listOfNotNull(dump),
-                )
-            } finally {
-                // 快照是**临时**的:它不该留在应用私有目录里 —— 那份目录是「现场」,
-                // 导出动作不该改写它(哪怕是多一个文件)。
-                runCatching { dump?.delete() }
-            }
-        }
+        is PendingExport.SessionZip ->
+            // 快照**已经在入口处抓好并挂在这个载荷上了**(见导出卡片那段注释),
+            // 这里只管写、不再自己抓一次:再抓一次会得到**第二份**、而且时机晚于
+            // 用户选保存位置 —— 「导出那一刻」就不再是同一个时刻了。
+            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress, payload.extra)
 
         is PendingExport.Text -> {
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出
