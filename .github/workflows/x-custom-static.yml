@@ -20,6 +20,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_diag_layout.py` | 诊断域枚举 ↔ 文件名 ↔ 目录名是否自洽 | 域文件在包里被标成 `unrecognised` / 清空扫不到旧目录 |
 # | `check_x_diag_redaction.py` | 每种导出形态是否都过脱敏、规则顺序、每条规则有无样例 | 新增导出路径**静默**不带脱敏(2026-09-12 实测发生过) |
 # | `check_x_manifest.py` | AndroidManifest 上的四处 X 声明(采集开关/广告权限/应用名占位符/接线点) | 采集**静默恢复**、权限重新声明、诊断接线全不执行 —— 都看不出来 |
+# | `check_x_event_lists.py` | 域事件「常量 ↔ ALL 清单」是否一一对应、名字形态是否能被 grep | 新事件漏登记 → 不进任何导出与检索(2026-09-13 实测:CI 红了才发现) |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -61,6 +62,12 @@ on:
       - 'scripts/check_x_diag_redaction_rev.py'
       - 'scripts/check_x_manifest.py'
       - 'scripts/check_x_manifest_rev.py'
+      - 'scripts/check_x_event_lists.py'
+      - 'scripts/check_x_event_lists_rev.py'
+      # XChatEvents 与它的单测 —— 本检查器守的正是这两者之间的一致性,
+      # 不登记的话改了事件清单反而不跑(那恰好是它该跑的时候)。
+      - 'app/src/main/java/me/rerere/rikkahub/x/chat/XChatEvents.kt'
+      - 'app/src/test/java/me/rerere/rikkahub/x/chat/XChatEventsTest.kt'
       # manifest 检查器的输入。**必须登**:上游会持续改这个文件,而 X 在上面挂的四件事
       # 丢了都不报错(采集恢复、广告权限回来、nightly 少后缀、诊断接线不执行)。
       - 'app/src/main/AndroidManifest.xml'
@@ -158,3 +165,16 @@ jobs:
       # 同上,检查器自己的反向验证(9 种破坏逐一断言被报出)
       - name: manifest 检查器的反向验证
         run: python3 scripts/check_x_manifest_rev.py
+
+      # 域事件的「常量 ↔ ALL 清单」一致性 + 名字形态。
+      # ⚠️ 这条是**为一次真实失败补的**(2026-09-13):从 Firebase 迁入 5 个动作计数常量、
+      #    忘了登记进 ALL,推送后 CI 红了(275 条用例红 1 条),而当时本地没有任何秒级检查
+      #    能提前发现 —— 正是仓库纪律里说的「本地全绿、CI 红」那种最难排查的红。
+      #    单测那条已同步改成反射(真去取全部声明),两者刻意并存:单测在 JVM 里验编译后的
+      #    真实字段,本检查器不依赖编译、提交前就能跑。
+      - name: 域事件清单
+        run: python3 scripts/check_x_event_lists.py
+
+      # 同理,反向验证:4 种破坏 + 「扫不到清单必须中止」逐一断言
+      - name: 域事件清单检查器的反向验证
+        run: python3 scripts/check_x_event_lists_rev.py
