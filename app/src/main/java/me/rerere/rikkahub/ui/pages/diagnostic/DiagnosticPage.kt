@@ -472,6 +472,15 @@ fun DiagnosticPage() {
                             // ⚠️ 判据走 hasContent(它自己接 File?),**不要**在这里写
                             //    「dir == null 就先报没有记录」—— 那会漏掉「开关从未开过、
                             //    但崩溃过」这一种:包里只有存活层,而它恰恰最该导出来。
+                            //
+                            // ⚠️⚠️ **已知缺口**(2026-09-13 记下,未修):判据**看不到**导出时
+                            //    才抓的那份 logd 全缓冲快照(见 XLogcatDump)。于是当
+                            //    「开关从未开过、也没崩溃过」时,这里报「还没有记录」——
+                            //    而那一刻 logd 缓冲里其实躺着东西(包括开关打开之前的行),
+                            //    恰恰是快照**唯一**能提供、别处都拿不到的那部分。
+                            //    修法是把这次判据挪到 IO 线程上(先抓快照再决定是否弹保存位置),
+                            //    那要改这条点击路径的启动流程,故单独排期;别顺手在这里加
+                            //    `|| true` —— 那会让空包走到「保存失败」,比现在更糟。
                             if (XDiagZip.hasContent(dir, survivors)) {
                                 exportZip("diag", PendingExport.SessionZip(dir, survivors))
                             } else {
@@ -586,8 +595,27 @@ private fun writeExport(
         // 打包与脱敏都在 XDiagZip 里,进度由它上报(读两遍:先扫、后写)。
         // dir 为 null 不是错误(没有会话、只有存活层),故不在这里报失败 ——
         // XDiagZip 以「到底打进了什么」为准返回,空包才 false。
-        is PendingExport.SessionZip ->
-            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress, payload.extra)
+        is PendingExport.SessionZip -> {
+            // 导出这一刻另抓一份 **logd 全缓冲快照**:它含开关打开之前的行、已被轮转掉的
+            // 行、以及实时捕获剔掉的噪声 —— 三块**在别处都拿不到**。实时那条路要便宜连续,
+            // 这条路要一条不漏,两者目标不同,故不合并(见 XLogcatDump 的类注释)。
+            // 跑在 IO 线程上:onPicked 那边已经 withContext(Dispatchers.IO) 了。
+            val dump = XLogcatDump.capture(context.cacheDir)
+            try {
+                XDiagZip.write(
+                    header = XDiagEnv.appLines(context),
+                    out = out,
+                    dir = payload.dir,
+                    progress = progress,
+                    // 快照与存活层一样,是**目录之外**的额外项。
+                    extra = payload.extra + listOfNotNull(dump),
+                )
+            } finally {
+                // 快照是**临时**的:它不该留在应用私有目录里 —— 那份目录是「现场」,
+                // 导出动作不该改写它(哪怕是多一个文件)。
+                runCatching { dump?.delete() }
+            }
+        }
 
         is PendingExport.Text -> {
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出

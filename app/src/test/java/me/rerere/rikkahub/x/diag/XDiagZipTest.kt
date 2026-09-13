@@ -412,6 +412,29 @@ class XDiagZipTest {
         assertTrue("认不出的要明说认不出", text.contains("unrecognised"))
     }
 
+    // ────────────────────────────────────
+    // 导出时抓的 logd 全缓冲快照(2026-09-13)
+    //
+    // 与实时捕获**长得像但来路不同**:一份剔过噪、只覆盖开关打开之后的窗口,
+    // 一份是原样全缓冲。故清单必须说清「两份对不上是正常的」——否则读者会拿它们
+    // 逐行对比,发现不一致后怀疑日志坏了。
+    // ────────────────────────────────────
+
+    @Test
+    fun `the buffer snapshot is described as raw and as not matching the live capture`() {
+        file(EVENTS, "x")
+        file(XLogcatDump.DUMP_FILE, "01-01 00:00:00.000  1  1 I XCustom: hi\n")
+        val text = manifestOf(pack())
+
+        assertTrue("应说明它是原始快照", text.contains("RAW logd buffer snapshot"))
+        assertTrue("应说明它未经本应用过滤", text.contains("no filtering by the app"))
+        assertTrue("必须写明它与实时那份对不上一一对应", text.contains("NOT match"))
+        assertTrue("并说明为什么(含开关打开之前的行、被轮转掉的行、被剔掉的噪声)",
+            text.contains("before the switch was turned on") &&
+                text.contains("rotated out") &&
+                text.contains("noise"))
+    }
+
     @Test
     fun `hasContent treats missing empty and blank dirs alike`() {
         assertFalse("null 视为没有内容", XDiagZip.hasContent(null))

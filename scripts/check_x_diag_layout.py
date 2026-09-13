@@ -72,6 +72,7 @@ FILE_STORE_FILE = DIAG_DIR + "XDiagFileStore.kt"
 ZIP_FILE = DIAG_DIR + "XDiagZip.kt"
 LOGCAT_FILE = DIAG_DIR + "XLogcatCapture.kt"
 SURVIVOR_FILE = DIAG_DIR + "XSurvivorLog.kt"
+DUMP_FILE = DIAG_DIR + "XLogcatDump.kt"
 PARTS_FILE = DIAG_DIR + "XLogcatParts.kt"
 
 # 两个组行函数 —— 判据 4 的对象。它们是「每行带 domain」这条不变量的**唯一**责任方。
@@ -94,6 +95,7 @@ LOG_NAME_RE = re.compile(r'(?<![\w.])([a-z][a-z0-9_\-]*)\.log\b')
 # 常量定义处 —— 判据 2 从这里取「唯一真源」的名字。
 EVENTS_CONST_RE = re.compile(r'const val EVENTS_FILE\s*=\s*"([^"]+)"')
 SURVIVORS_CONST_RE = re.compile(r'const val SURVIVORS_FILE\s*=\s*"([^"]+)"')
+DUMP_CONST_RE = re.compile(r'const val DUMP_FILE\s*=\s*"([^"]+)"')
 PREFIX_CONST_RE = re.compile(r'const val PREFIX\s*=\s*"([^"]+)"')
 
 # logcat 分片名:`<前缀>_<正整数><后缀>`。与 Kotlin 侧 [XLogcatParts.partOf] 同一判据 ——
@@ -222,9 +224,19 @@ def check(root: Path) -> list[str]:
         raise Problem(f"{SURVIVOR_FILE}:找不到 `const val SURVIVORS_FILE` 常量")
     survivors_name = m.group(1)
 
+    dump_text = read(root, DUMP_FILE)
+    m = DUMP_CONST_RE.search(dump_text)
+    if not m:
+        raise Problem(f"{DUMP_FILE}:找不到 `const val DUMP_FILE` 常量")
+    dump_name = m.group(1)
+
     # 事件/存活层不得长成分片名的样子(那样 describe() 会先按「原始 logcat」判它,
     # 于是时间线被说成原始日志 —— 读者据此判断「这里没有结构化记录」)。
-    for fixed_name, where in ((events_name, FILE_STORE_FILE), (survivors_name, SURVIVOR_FILE)):
+    for fixed_name, where in (
+        (events_name, FILE_STORE_FILE),
+        (survivors_name, SURVIVOR_FILE),
+        (dump_name, DUMP_FILE),
+    ):
         m2 = PART_NAME_RE.match(fixed_name)
         if m2 and m2.group("prefix") == logcat_prefix:
             problems.append(
@@ -232,7 +244,7 @@ def check(root: Path) -> list[str]:
                 f"「原始 logcat」判它,于是这个文件被说成别的用途。"
             )
 
-    allowed = {events_name, survivors_name}
+    allowed = {events_name, survivors_name, dump_name}
 
     # ── 判据 3:代码里每个文件名引用都必须落在允许集合里(注释不算引用) ──
     #
@@ -296,6 +308,12 @@ def check(root: Path) -> list[str]:
             f"{ZIP_FILE}:describe() 没有引用 `XLogcatParts` —— logcat 分片的名字带编号,"
             f"只认某个固定名(或硬编码)会在轮转之后静默失效:包里的分片被说成 "
             f"'unrecognised file',读者以为那堆日志不属于本应用。"
+        )
+    if "XLogcatDump.DUMP_FILE" not in zip_text:
+        problems.append(
+            f"{ZIP_FILE}:describe() 没有引用 `XLogcatDump.DUMP_FILE` —— 快照与实时捕获"
+            f"**长得像但来路不同**(一份未过滤、一份剔过噪),不说明的话读者会拿两份逐行"
+            f"对比,然后怀疑日志坏了。"
         )
     if "XSurvivorLog.SURVIVORS_FILE" not in zip_text:
         problems.append(

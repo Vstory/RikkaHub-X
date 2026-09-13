@@ -290,6 +290,14 @@ object XDiagZip {
         appendLine("  and buffering one would stall the conversation. If an error body exceeded the")
         appendLine("  capture limit, the line also has respBodyTruncated=true.")
         appendLine()
+        appendLine("  logcat_dump.log is a RAW snapshot of every logd buffer, taken the moment you")
+        appendLine("  exported. It has had NO filtering by the app, so it also contains lines from")
+        appendLine("  before the switch was turned on, lines the live capture had already rotated")
+        appendLine("  out, and the OEM noise the live capture drops. That is why it does NOT match")
+        appendLine("  logcat_N.log line for line -- reach for it when you need everything logd still")
+        appendLine("  remembers, and reach for logcat_N.log when you want the readable trace. It is")
+        appendLine("  a point-in-time copy, NOT part of the stored session.")
+        appendLine()
         appendLine("  survivors.log is the one file that does NOT depend on the recording switch.")
         appendLine("  It holds crashes and other failures that would otherwise vanish -- the kind you")
         appendLine("  cannot re-create by simply running the app again. It sits OUTSIDE the session")
@@ -330,6 +338,14 @@ object XDiagZip {
         }
         if (name == XSurvivorLog.SURVIVORS_FILE) {
             return "crashes and other must-not-lose failures, kept across sessions (switch-independent)"
+        }
+        if (name == XLogcatDump.DUMP_FILE) {
+            // ⚠️ 必须**说清它与 logcat_N.log 对不上是正常的** —— 否则读者会拿两份逐行对比,
+            //    发现不一致后怀疑日志坏了,而真相是它们本就来路不同(见 XLogcatDump 的类注释)。
+            return "RAW logd buffer snapshot taken at export time, with no filtering by the app; " +
+                "it also holds lines from before the switch was on, lines the live capture " +
+                "rotated out, and the noise the live capture drops - so it will NOT match " +
+                "logcat_N.log line for line"
         }
         return "unrecognised file (name does not match a known file of the diagnostic bundle)"
     }
