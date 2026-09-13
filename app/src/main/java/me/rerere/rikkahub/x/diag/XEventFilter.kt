@@ -55,9 +55,13 @@ object XEventFilter {
      * @param rows 调用方按**最新在前**排好 —— 这个函数只管筛,不管序(排序是呈现的事,
      *   放在这里会让「筛」与「排」两件事纠缠,测试也不好读)。
      * @param query 关键字;空白视为「不筛」。
-     * @param only 只看这个域;`null` 视为「全部」。
+     * @param only 只看这个域。**默认 `null` = 全部** —— 「不筛域」本来就是最常见的用法,
+     *   故给它默认值而不是要求每个调用点都写一遍 `null`。
+     *   (⚠️ 这个默认值是补上的:首版没有,于是三个「只给关键字」的调用点编译不过 ——
+     *    而那三个调用点写的正是最自然的读法。参数该不该有默认值,看的是**最常见的用法**,
+     *    不是「能不能省」。)
      */
-    fun apply(rows: List<Row>, query: String, only: XDomain?): List<Row> {
+    fun apply(rows: List<Row>, query: String, only: XDomain? = null): List<Row> {
         val needle = query.trim().lowercase()
         if (needle.isEmpty() && only == null) return rows
         return rows.filter { row ->
