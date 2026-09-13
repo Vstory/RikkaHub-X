@@ -18,6 +18,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `pangu_format_resources.py` | 中文文案的盘古之白是否已格式化 | 排版回退,得人工重跑脚本 |
 # | `check_x_string_resources.py` | 字符串资源里未转义的撇号与重名 | aapt2 拒收 → 资源编译失败,整条 CI 中断 |
 # | `check_x_diag_layout.py` | 诊断域枚举 ↔ 文件名 ↔ 目录名是否自洽 | 域文件在包里被标成 `unrecognised` / 清空扫不到旧目录 |
+# | `check_x_diag_redaction.py` | 每种导出形态是否都过脱敏、规则顺序、每条规则有无样例 | 新增导出路径**静默**不带脱敏(2026-09-12 实测发生过) |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -55,11 +56,16 @@ on:
       - 'scripts/pangu_format_resources.py'
       - 'scripts/check_x_string_resources.py'
       - 'scripts/check_x_diag_layout.py'
-      # 诊断布局检查器的输入(域枚举 / 会话目录 / 落盘 / 打包 / 诊断页)。
+      - 'scripts/check_x_diag_redaction.py'
+      - 'scripts/check_x_diag_redaction_rev.py'
+      # 两个诊断检查器的输入(域枚举 / 落盘 / 打包 / 诊断页 / 脱敏规则与它的用例)。
       # 用通配而不是逐个列文件:新增诊断文件时不必回来登记 —— 漏登记正是「改了
       # 却不在检查范围内」这类静默缺口。
       - 'app/src/main/java/me/rerere/rikkahub/x/diag/**'
       - 'app/src/main/java/me/rerere/rikkahub/ui/pages/diagnostic/**'
+      # ⚠️ 测试目录也要登:脱敏检查器会读 `XLogScrubTest` 判「每条规则都有样例」,
+      #    删掉样例却不触发本工作流的话,那条判据等于不存在。
+      - 'app/src/test/java/me/rerere/rikkahub/x/diag/**'
       # 检查器的输入。用**通配**而不是逐个列模块:盘古检查器会扫**所有 Gradle 模块**的
       # values-zh(实测:app / oauth / search 共 3 个 —— `collect_files` 遍历
       # `*/src/main/res`),逐个手写模块名极易漏,而漏掉的后果正是「改了那个模块的文案、
@@ -122,3 +128,16 @@ jobs:
       # 扫不到旧目录(点了清空却没清)。
       - name: 诊断日志布局
         run: python3 scripts/check_x_diag_layout.py
+
+      # 诊断脱敏:每种导出形态是否都过脱敏、规则顺序(顺序即优先级)、每条规则有无样例。
+      # 「掩对了没有」是行为,归 Guard 里的 Kotlin 单测;这里只守静态能判死的部分,
+      # 且**刻意不复刻正则** —— 两套判据迟早漂移,漂移方向恰好是「检查器说没事、真漏了」。
+      - name: 诊断脱敏
+        run: python3 scripts/check_x_diag_redaction.py
+
+      # 检查器自己也要被验证:11 种破坏(导出路径去掉脱敏 / 删规则 / 打乱优先级 /
+      # 删样例 / 关闸门 / 硬编码掩码 / 清空规则表 / 新增形态不加分支 …)必须**每种都被报出**。
+      # 它已经抓出过本检查器首版的两处失效(样例判据写成前缀、判据片段被当正则用),
+      # 故留在 CI 里当回归网 —— 代价是 11 次子进程,秒级。
+      - name: 诊断脱敏检查器的反向验证
+        run: python3 scripts/check_x_diag_redaction_rev.py

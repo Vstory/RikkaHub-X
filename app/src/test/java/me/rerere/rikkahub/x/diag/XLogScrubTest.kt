@@ -162,6 +162,21 @@ class XLogScrubTest {
             "AIza***",
             "Google API key",
         )
+        assertScrub(
+            "sk-proj-abcdefghijklmnopqrstuvwxyz",
+            "sk-proj-***",
+            "OpenAI 项目级 key:同样不能被 sk- 先吃掉、留下后半段",
+        )
+        assertScrub(
+            "glpat-abcdefghijklmnopqrst",
+            "glpat-***",
+            "GitLab PAT",
+        )
+        assertScrub(
+            "hf_abcdefghijklmnopqrstuvwx",
+            "hf_***",
+            "HuggingFace token",
+        )
         assertScrub("xai-abcdefghijklmnopqrstuvwx", "xai-***", "xAI")
         assertScrub("AKIAIOSFODNN7EXAMPLE", "AKIA***", "AWS access key id")
     }
