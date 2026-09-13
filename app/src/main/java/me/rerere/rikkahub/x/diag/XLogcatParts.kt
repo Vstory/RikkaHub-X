@@ -57,6 +57,12 @@ object XLogcatParts {
         if (!name.startsWith("$PREFIX" + "_") || !name.endsWith(SUFFIX)) return null
         val digits = name.substring(PREFIX.length + 1, name.length - SUFFIX.length)
         if (digits.isEmpty() || !digits.all { it.isDigit() }) return null
+        // ⚠️ **拒前导零**:否则 `logcat_1.log` 与 `logcat_01.log` 都指向第 1 片,
+        //    而「按名字排序」会给它们两个不同的位置 —— 「按片号排序 = 按时间排序」
+        //    这条就不再成立,而打包时的顺序正靠它。
+        //    (上面那段注释早就这么写了,而代码里漏了 —— 是**单测**把它逼出来的:
+        //     我照注释写了一条断言,CI 上红了才发现实现没跟上。)
+        if (digits.length > 1 && digits[0] == '0') return null
         val n = digits.toIntOrNull() ?: return null
         return if (n >= 1) n else null
     }

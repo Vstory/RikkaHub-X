@@ -94,10 +94,12 @@ class XLogcatPartsTest {
 
     @Test
     fun `rotation drops exactly one part, and only once the window is full`() {
-        // 还没写满:不删
+        // 还没写满:不删。
+        // 算一遍边界:写到第 11 片、保留 12 片 → 下一片是 12,窗口 [1,12] 正好放得下 → 不删。
         assertNull(XLogcatParts.partToDrop(latest = 11, keep = 12))
-        assertNull(XLogcatParts.partToDrop(latest = 12, keep = 12))
-        // 写满之后每轮转一次删一片,且删的是**最老的那一片**
+        // ⚠️ 而**第 12 片时就要删了**:下一片是 13,窗口变成 [2,13],第 1 片该走。
+        //    这条我一开始写成了 `assertNull` —— 与自己下一行的 `assertEquals(1, …)`
+        //    **直接矛盾**(同一个调用两种期望),CI 上红了两条。
         assertEquals(1, XLogcatParts.partToDrop(latest = 12, keep = 12))
         assertEquals(2, XLogcatParts.partToDrop(latest = 13, keep = 12))
         assertEquals(3, XLogcatParts.partToDrop(latest = 14, keep = 12))

@@ -391,7 +391,10 @@ class XDiagZipTest {
         // ⚠️ 读者拿到 `logcat_7.log` 若不被说明,会以为这就是全部捕获 ——
         //    「怎么开头就在这里了」于是变成一个疑点。故第 2 片起必须写明「接着上一片」。
         file(EVENTS, "x")
-        file(XLogcatParts.nameOf(7), "y")
+        // ⚠️ **第 1 片也要放进夹具**:只放第 7 片的话,那句「这是捕获的起点」根本无从出现
+        //    (它只写给第 1 片),于是断言必红 —— 是我夹具缺了东西,不是实现错了。
+        file(XLogcatParts.nameOf(1), "y")
+        file(XLogcatParts.nameOf(7), "z")
         val text = manifestOf(pack())
 
         assertTrue("第 1 片应说明是起点", text.contains("this is where the capture begins"))
