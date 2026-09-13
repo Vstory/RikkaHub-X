@@ -43,6 +43,7 @@ import me.rerere.rikkahub.x.diag.DiagnosticSwitchStore
 import me.rerere.rikkahub.x.diag.XCrashReport
 import me.rerere.rikkahub.x.diag.XDiagFileStore
 import me.rerere.rikkahub.x.diag.XDiagSession
+import me.rerere.rikkahub.x.diag.XExitReport
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XRequestLog
 import me.rerere.rikkahub.x.diag.XSurvivorLog
@@ -97,6 +98,11 @@ class RikkaHubApp : Application() {
         //      背景:移除 Firebase Crashlytics 后,崩溃只剩「上游 CrashHandler(只给安全模式
         //      当场看)」与「logcat 捕获(开关关着就没有)」两条路 —— 这段补的是那个缺口。
         XCrashReport.install(this)
+        //   ⑦ 系统记下的进程退出(崩溃 / **ANR** / 被杀)带进存活层(2026-09-13)。
+        //      排在 ⑥ 之后 —— 它同样往存活层写。两者互补而不重复:
+        //      ⑥ 收的是 Java 未捕获异常(有栈),⑦ 收的是**系统视角的退出**
+        //      (含 ANR 与原生崩溃,那两类 ⑥ 一个都收不到)。
+        XExitReport.install(this)
 
         // Restore files and settings before eager Koin singletons or workers can access them.
         try {
