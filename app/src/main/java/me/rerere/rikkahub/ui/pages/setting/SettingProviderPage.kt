@@ -88,6 +88,7 @@ import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import kotlin.uuid.Uuid
+import me.rerere.rikkahub.x.diag.XUserVisibleErrors
 
 @Composable
 fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
@@ -466,6 +467,13 @@ private fun handleQRResult(
     runCatching {
         when (result) {
             is QRResult.QRError -> {
+                // 把**真正的异常**也记下来(提示文本里只有它的 toString,栈要单独留)。
+                // 2026-09-13:这条提示曾经什么都没留下 —— 用户看到了、诊断里却是 0 处,
+                // 详见 XUserVisibleErrors 的类注释。
+                XUserVisibleErrors.recordShown(
+                    message = context.getString(R.string.setting_provider_page_scan_error, result),
+                    error = result.exception,
+                )
                 toaster.show(
                     context.getString(
                         R.string.setting_provider_page_scan_error,

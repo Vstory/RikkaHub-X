@@ -107,6 +107,7 @@ import java.io.FileOutputStream
 import java.time.LocalDateTime
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
+import me.rerere.rikkahub.x.diag.XUserVisibleErrors
 
 @Composable
 fun ChatExportSheet(
@@ -455,7 +456,9 @@ private fun ExportedChatImage(
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
     val navigator = Navigator(navBackStack)
-    val toasterState = rememberToasterState()
+    val toasterState = rememberToasterState(
+        onToastDismissed = { XUserVisibleErrors.recordDismissedToast(it) },
+    )
     RikkahubTheme {
         CompositionLocalProvider(
             LocalNavController provides navigator,

@@ -138,6 +138,7 @@ import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
+import me.rerere.rikkahub.x.diag.XUserVisibleErrors
 
 private const val TAG = "RouteActivity"
 private const val ACTION_TRANSLATE = "me.rerere.rikkahub.action.TRANSLATE"
@@ -239,7 +240,7 @@ class RouteActivity : ComponentActivity() {
     @OptIn(ExperimentalComposeUiApi::class)
     @Composable
     fun AppRoutes() {
-        val toastState = rememberToasterState()
+        val toastState = rememberToasterState(onToastDismissed = { XUserVisibleErrors.recordDismissedToast(it) })
         val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
         val tts = rememberCustomTtsState()
         val asr = rememberCustomAsrState()
