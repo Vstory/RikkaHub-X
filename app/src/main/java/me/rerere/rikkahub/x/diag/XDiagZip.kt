@@ -318,6 +318,14 @@ object XDiagZip {
         return if (n > 0L) " · redacted, $n value(s) masked" else " · redacted, nothing matched"
     }
 
+    /**
+     * 脱敏说明。**两种模式都必须如实说** —— 一边脱敏一边写「原样导出」会让人误判风险,
+     * 反过来写「已脱敏」而闸门关着更危险:读者会以为可以随便发。
+     *
+     * ⚠️ 未脱敏分支**必须 `return`**:否则会接着打下面那段「credentials masked」——
+     * 而那句在那种模式下是**谎话**。这就是所谓「文案撒谎」,它不会让任何测试变红,
+     * 只会让人在错误的前提下决定要不要分享。
+     */
     private fun appendRedactionNote(sb: StringBuilder, redacted: Boolean) {
         if (!redacted) {
             sb.appendLine("${XDiagEnv.MARK} CAUTION: not redacted ${XDiagEnv.MARK}")
@@ -328,7 +336,20 @@ object XDiagZip {
             sb.appendLine("    - whatever the app itself happened to log into logcat")
             sb.appendLine()
             sb.appendLine("  Review it before sharing it with anyone.")
+            return
         }
+        // ⚠️ 下面这段 2026-09-13 曾被整段弄丢过(重写本文件时),而它**是唯一的
+        //    「已脱敏」说明** —— 丢了以后清单在脱敏模式下只剩一句「哪些没做」,
+        //    读者看不到「凭据已被换成 ***」。XDiagZipTest 里那两条断言正是守它的。
+        sb.appendLine("${XDiagEnv.MARK} redaction: credentials masked, content NOT sanitised ${XDiagEnv.MARK}")
+        sb.appendLine()
+        sb.appendLine("  Every file except this README was passed through a regex redactor line by line")
+        sb.appendLine("  (see XLogScrub). Credential-shaped values were replaced with \"${XLogScrub.MASK}\":")
+        sb.appendLine("  Authorization headers, Bearer tokens, JWTs, cookies, and known vendor key")
+        sb.appendLine("  prefixes such as sk-, ghp_, glpat-, AIza, AKIA. Per-file counts are listed")
+        sb.appendLine("  above -- if a file says \"nothing matched\" but you can see a key in it, the")
+        sb.appendLine("  redactor missed it, and that is worth reporting.")
+        sb.appendLine()
         sb.appendLine("  What this does NOT do -- the redactor only knows credential *patterns*. It")
         sb.appendLine("  cannot tell that ordinary text is private, so the following are still in here:")
         sb.appendLine("    - error response bodies (respBody), which are server text we do not control")
