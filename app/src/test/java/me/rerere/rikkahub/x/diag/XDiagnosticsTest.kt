@@ -25,9 +25,6 @@ import org.junit.Test
  */
 class XDiagnosticsTest {
 
-    private val filesRoot = "/data/user/0/me.rerere.rikkahub.x/files"
-    private val hash = "a3f9c2d1" + "0".repeat(56)
-
     @Before
     fun setUp() {
         XDiagnostics.clearAll()
@@ -153,93 +150,13 @@ class XDiagnosticsTest {
     }
 
     // ---- 导出 ----
-
-    @Test
-    fun `dump is empty when nothing recorded`() {
-        assertTrue(XDiagnostics.dump().isEmpty())
-        assertEquals(XDiagnostics.EMPTY_DUMP, XDiagnostics.dumpMerged())
-    }
-
-    @Test
-    fun `dump only contains domains with content`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
-        val dump = XDiagnostics.dump()
-        assertEquals(setOf(XDomain.STORAGE), dump.keys)
-    }
-
-    @Test
-    fun `dump carries a header with label key count and window`() {
-        XDiagnostics.setEnabled(true)
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "asset.write.new", "新建")
-        val text = XDiagnostics.dump().getValue(XDomain.STORAGE)
-
-        assertTrue("表头应含中文标签", text.contains("# 存储"))
-        assertTrue("表头应含域 key(导出文件名用)", text.contains("storage"))
-        assertTrue("表头应含条数", text.contains("# 条数: 1"))
-        assertTrue("表头应说明路径与哈希已缩短", text.contains("# 脱敏: 路径与哈希已缩短"))
-        assertTrue("表头应同时说明凭据已掩", text.contains("，凭据已掩"))
-        assertTrue("表头应含记录起点", text.contains("# 记录起点: "))
-        assertFalse("有记录时不该说无记录", text.contains("(无记录)"))
-        assertTrue("正文应含事件名", text.contains("asset.write.new"))
-    }
-
-    @Test
-    fun `dump marks full mode in the header`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
-        val text = XDiagnostics.dump(full = true).getValue(XDomain.STORAGE)
-        // 「完整」= 路径与哈希不缩短。**不等于凭据不掩** —— 导出时一律过 XLogScrub,
-        // 故表头必须把两件事分开写,否则读者会以为这份文本里带着密钥。
-        assertTrue(text.contains("# 脱敏: 路径与哈希不缩短"))
-        assertTrue(text.contains("，凭据已掩"))
-    }
-
-    @Test
-    fun `dump redacts by default`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "asset.write.new", "$filesRoot/assets/ab/cd/$hash.png")
-        val text = XDiagnostics.dump(filesRoot = filesRoot).getValue(XDomain.STORAGE)
-        assertFalse("默认应抹掉应用私有目录前缀", text.contains(filesRoot))
-        assertFalse("默认应截断哈希", text.contains(hash))
-        assertTrue("但保留可定位的相对路径", text.contains("assets/ab/cd/"))
-        assertTrue("并保留哈希前缀", text.contains(hash.take(8)))
-    }
-
-    @Test
-    fun `dump with full mode keeps everything`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "$filesRoot/assets/$hash.png")
-        val text = XDiagnostics.dump(full = true, filesRoot = filesRoot).getValue(XDomain.STORAGE)
-        assertTrue(text.contains(filesRoot))
-        assertTrue(text.contains(hash))
-    }
-
-    @Test
-    fun `dump can be limited to selected domains`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "存储")
-        XDiagnostics.record(XDomain.COMPRESS, Level.INFO, "e", "压缩")
-        val dump = XDiagnostics.dump(domains = listOf(XDomain.STORAGE))
-        assertEquals(setOf(XDomain.STORAGE), dump.keys)
-    }
-
-    @Test
-    fun `merged dump separates domains by a blank line`() {
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "存储")
-        XDiagnostics.record(XDomain.COMPRESS, Level.INFO, "e", "压缩")
-        val merged = XDiagnostics.dumpMerged()
-        assertTrue(merged.contains("存储"))
-        assertTrue(merged.contains("压缩"))
-        assertTrue("域之间应空行分隔,便于在聊天里阅读", merged.contains("\n\n"))
-    }
-
-    @Test
-    fun `dump of a domain with no window start says so`() {
-        // 起点由最早记录推导,所以「有内容却无起点」在实现上不可能出现;
-        // 这里守住的是表头对「无记录」的兜底文案 —— 若哪天改成存字段,本用例会红
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
-        XDiagnostics.clearAll()
-        XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "y")
-        val text = XDiagnostics.dump().getValue(XDomain.STORAGE)
-        assertFalse("有记录时表头不该说无记录", text.contains("(无记录)"))
-        assertTrue(text.contains("# 记录起点: "))
-    }
+    //
+    // 原先这里有 9 条用例守着 `XDiagnostics.dump` / `dumpMerged`(把内存环渲成按域分块的
+    // 文本)。那两个函数 2026-09-13 已随「导出收敛成一个压缩包」移除 —— 内容与压缩包重复,
+    // 而压缩包还多带原始 logcat 与清单。理由与该取舍的例外情形见 XDiagnostics 里的注释。
+    //
+    // ⚠️ **不要把断言搬进压缩包的测试里装作还在**:两者读的不是同一处(这里是内存环,
+    // 那里是磁盘文件),搬过去会让用例守着一个它其实没覆盖的东西。
 
     // ---- 清空 ----
 

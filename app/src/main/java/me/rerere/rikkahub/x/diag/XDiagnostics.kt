@@ -336,53 +336,20 @@ object XDiagnostics {
         sticky.set(null)
     }
 
-    /**
-     * 按域导出。**只返回有内容的域**。
-     *
-     * @param full `true` = 带完整信息（用户显式选择）。默认脱敏。
-     * @param filesRoot 用于抹去应用私有目录前缀；`null` 则只做哈希脱敏。
-     * @param domains 只导出这些域；`null` = 全部。
-     * @return 域 → 文本（含表头：域标签、条数、记录起点）。
-     */
-    fun dump(
-        full: Boolean = false,
-        filesRoot: String? = null,
-        domains: List<XDomain>? = null,
-    ): Map<XDomain, String> {
-        val selected = (domains ?: XDomain.entries).filter { countOf(it) > 0 }
-        // 起点取全部域的并集:它描述的是「这次记录」而非「某个域」
-        val start = windowStartMillis()
-        return selected.associateWith { domain ->
-            val redact: (String) -> String = { XRedaction.redact(it, filesRoot, full) }
-            buildString {
-                append("# ").append(domain.label).append("（").append(domain.key).append("）\n")
-                append("# 条数: ").append(countOf(domain)).append('\n')
-                append("# 记录起点: ").append(if (start == null) "(无记录)" else XLogRing.timeText(start)).append('\n')
-                // ⚠️ 这一行**要把两件事分开说**。原先只有「是/否」,且 `full = true` 写「否」
-                //    —— 读者会据此以为凭据也原样在文本里,而导出时一律过 [XLogScrub]
-                //    (2026-09-12 修:此前三条文本导出确实一条都没过,那句「否」当时是实话)。
-                //    「完整」的差异只在**路径与哈希缩不缩短**(见 [XRedaction] 的 full 参数)。
-                append("# 脱敏: 路径与哈希").append(if (full) "不缩短" else "已缩短")
-                    .append("，凭据").append(if (XLogScrub.ENABLED) "已掩" else "未掩").append("\n")
-                append('\n')
-                append(rings.getValue(domain).format(redact = redact))
-            }
-        }
-    }
+    // ────────────────────────────────────
+    // 导出:已收敛到「一个压缩包」
+    // ────────────────────────────────────
+    //
+    // 这里原先还有两个文本导出函数(`dump` / `dumpMerged`),把内存环渲成一段按域分块的
+    // 文本。2026-09-13 移除,连同诊断页上那两张「导出诊断记录(已脱敏/完整)」卡片 ——
+    // 它们与压缩包**是同一份内容的两种包装**,而压缩包还多带原始 logcat 与清单。
+    //
+    // ⚠️ 一处**已知取舍**要记下来:文本导出读的是**内存环**,而压缩包读的是**磁盘文件**。
+    // 正常情形下文件是超集(环每域只留 2000 条,文件从会话开始累积),故移除无损;
+    // 唯一的例外是**会话目录建不出来**时(见 [XDiagSession.open]),那时环里有内容而
+    // 文件一个都没有 —— 压缩包会是空的。该情形已由 [recordStickyFailure] 显式留痕
+    // (「诊断目录创建失败,本次不落盘任何记录」),不会静默消失。
 
-    /**
-     * 合并成一段文本（用于「一键复制」）。
-     *
-     * 域之间用空行分隔，便于在聊天里阅读。
-     */
-    fun dumpMerged(full: Boolean = false, filesRoot: String? = null): String {
-        val parts = dump(full = full, filesRoot = filesRoot)
-        if (parts.isEmpty()) return EMPTY_DUMP
-        return parts.entries.joinToString("\n\n") { (_, text) -> text.trimEnd() }
-    }
-
-    /** 空缓冲的导出文案 —— 不返回空串，否则界面上分不清「没记录」与「界面坏了」。 */
-    const val EMPTY_DUMP = "(无 X 诊断记录)"
 
     /**
      * logcat 过滤命令。

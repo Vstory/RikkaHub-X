@@ -33,10 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
-import java.io.BufferedReader
-import java.io.BufferedWriter
 import java.io.File
-import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -66,7 +63,6 @@ import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XLogcatNoise
 import me.rerere.rikkahub.x.diag.XRedaction
-import me.rerere.rikkahub.x.diag.countingStream
 import org.koin.compose.koinInject
 
 /**
@@ -96,7 +92,15 @@ import org.koin.compose.koinInject
  *
  * 完整日志有几十到几百 MB，**剪贴板装不下**，而且剪贴板留不下东西 —— 用户还得再找地方粘贴。
  * 现在点一下走系统的「创建文档」，用户自己选存到哪（下载目录、文件管理器任意位置）。
- * 应用日志在写出前**逐行脱敏**（文件本身不脱敏，交给用户时才过一遍）。
+ *
+ * ## 为什么导出只有**一个**动作（2026-09-13 收敛）
+ *
+ * 此前这一区摆着四张卡：压缩包、诊断记录(已脱敏)、诊断记录(完整)、应用日志。它们其实是
+ * **同一份内容的四种包装** —— 「应用日志」是压缩包里的一个文件，「诊断记录」两兄弟是同一段
+ * 文本的两种路径处理。而其中两张的说明**还写着「不做脱敏」**，与实现正好相反（压缩包逐行
+ * 过 [XLogScrub]）。卡片少一张不会让人少拿到东西，说明写反了却会让人误判风险。
+ *
+ * 现在只有「导出诊断包」：全部内容、已脱敏、包内清单说明每一处。要哪一份就在包里取。
  *
  * ## 数据从哪来
  *
@@ -444,43 +448,6 @@ fun DiagnosticPage() {
                             }
                         },
                     )
-                    item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_export_redacted)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_export_redacted_desc)) },
-                        onClick = {
-                            val text = XDiagnostics.dumpMerged(full = false, filesRoot = filesRoot)
-                            if (text == XDiagnostics.EMPTY_DUMP) {
-                                toaster.show(message = context.getString(R.string.diagnostic_summary_empty))
-                            } else {
-                                export("diag", "txt", PendingExport.Text(text))
-                            }
-                        },
-                    )
-                    item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_export_full)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_export_full_desc)) },
-                        onClick = {
-                            val text = XDiagnostics.dumpMerged(full = true, filesRoot = filesRoot)
-                            if (text == XDiagnostics.EMPTY_DUMP) {
-                                toaster.show(message = context.getString(R.string.diagnostic_summary_empty))
-                            } else {
-                                export("diag-full", "txt", PendingExport.Text(text))
-                            }
-                        },
-                    )
-                    item(
-                        headlineContent = { Text(stringResource(R.string.diagnostic_export_logcat)) },
-                        supportingContent = { Text(stringResource(R.string.diagnostic_export_logcat_desc)) },
-                        onClick = {
-                            // 停止之后也允许导出 —— 用户很自然会「先关掉开关,再把刚录的那段导出来」。
-                            val file = XLogcatCapture.latestLogFile(context)
-                            if (file == null) {
-                                toaster.show(message = context.getString(R.string.diagnostic_export_logcat_none))
-                            } else {
-                                export("logcat", "log", PendingExport.LogcatFile(file))
-                            }
-                        },
-                    )
                 }
             }
 
@@ -556,16 +523,15 @@ private sealed interface PendingExport {
     /** 整次会话:全部文件打进一个压缩包(见 [XDiagZip])。 */
     data class SessionZip(val dir: File) : PendingExport
 
-    /** 小段文本(诊断记录、失败详情)。 */
-    data class Text(val text: String) : PendingExport
-
     /**
-     * 应用日志文件。
+     * 小段文本。**现在唯一的调用点是「关键失败留存」卡片里的「导出详情」** ——
+     * 那是这一页上除了压缩包之外仅剩的导出动作,而且它不在「导出」区里(它是那一条
+     * 失败记录的上下文动作,不是一份可选择的导出物)。
      *
-     * ⚠️ 原文件是**未脱敏**的(捕获时不做脱敏:那是热路径,而且文件本身在应用私有目录)。
-     * 交出去之前必须逐行过一遍 [XLogScrub] —— 导出物的去向是聊天/AI,带出一个凭证就是泄漏。
+     * 2026-09-13 之前它还被「导出诊断记录(已脱敏/完整)」两张卡用着,那两张已随
+     * 「导出收敛成一个压缩包」移除。
      */
-    data class LogcatFile(val file: File) : PendingExport
+    data class Text(val text: String) : PendingExport
 }
 
 /**
@@ -588,6 +554,8 @@ private fun writeExport(
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出
             //    一条都没过**(诊断记录 / 诊断记录完整版 / 失败详情),而它们的去向与压缩包
             //    一样是聊天/AI。文本虽小,里面带的 URL 查询串(`?key=`)与请求头同样是凭据形态。
+            //    (那三条里前两条 2026-09-13 已随导出收敛移除,现在只剩失败详情走这条路 ——
+            //     但**这个漏斗不能撤**:撤了就回到「新加一条导出忘了加脱敏」。)
             //
             // 放在这里而不是各个调用点:这是所有文本导出物的**唯一漏斗**;
             // 只在调用点加,就会出现「新加一条导出忘了加」。
@@ -599,107 +567,5 @@ private fun writeExport(
             progress.report(XExportPhase.WRITING, total, total)
             true
         }
-
-        is PendingExport.LogcatFile -> {
-            // 逐行:读一行 → (脱敏) → 写一行。内存占用与文件大小无关,
-            // 故几百 MB 的日志也能导出而不会 OOM。
-            //
-            // 逐行过 [XLogScrub] 把凭据形态的值掩掉。用 XLogScrub(而不是 XRedaction)是因为
-            // logcat 是**任意文本**:后者面向 X 的事件文本(缩路径、掩哈希),防不了凭据泄漏。
-            // ⚠️ 它只认凭据形态,抓不到聊天内容 —— 摘要里把这件事写清楚,别让人以为已安全。
-            //
-            // ⚠️ 先预扫一遍再写正文:摘要要落在**文件开头**(读者第一眼就该看到行数、
-            //    以及脱敏到底开没开),而这两个数只有读完才知道 —— 单遍做不到。
-            //    代价是两遍顺序读:实测单份日志是 KB 级可忽略。
-            val scan = scanForExport(payload.file, progress)
-            // 写入阶段重新从 0 计:通知上标着阶段名,两个阶段各走一遍 0→100% 才读得懂。
-            val total = payload.file.length()
-            var written = 0L
-            BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { writer ->
-                writeExportSummary(writer, scan)
-                val source = countingStream(payload.file.inputStream()) { n ->
-                    written += n
-                    progress.report(XExportPhase.WRITING, written, total)
-                }
-                BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
-                    while (true) {
-                        val line = reader.readLine() ?: break
-                        writer.write(if (XLogScrub.ENABLED) XLogScrub.scrub(line) else line)
-                        writer.newLine()
-                    }
-                }
-            }
-            true
-        }
     }
 } ?: false
-
-/** 预扫结果:总行数、被脱敏器**实际改过**的行数。 */
-private class ExportScan(val lines: Long, val scrubbed: Long)
-
-/**
- * 预扫一遍日志,取「导出摘要」要的两个数。
- *
- * 判「这一行被脱敏过」用 `scrub(line) != line` —— 直接问脱敏器「你动它了吗」,
- * 而不是另写一套规则去猜哪些行"应该"被掩。两套判据迟早会漂移。
- */
-private fun scanForExport(file: File, progress: XExportProgress = NoExportProgress): ExportScan {
-    var lines = 0L
-    var scrubbed = 0L
-    var read = 0L
-    val total = file.length()
-    val source = countingStream(file.inputStream()) { n ->
-        read += n
-        progress.report(XExportPhase.ANALYSING, read, total)
-    }
-    BufferedReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
-        while (true) {
-            val line = reader.readLine() ?: break
-            lines++
-            // 关掉时不去调脱敏器:既省一遍正则,也让「命中 0」这个数**诚实**
-            // (否则会算出"如果不关会命中多少",与文件实际情况不符)。
-            if (XLogScrub.ENABLED && XLogScrub.scrub(line) != line) scrubbed++
-        }
-    }
-    return ExportScan(lines, scrubbed)
-}
-
-/**
- * 导出摘要 —— 让「脱敏到底跑了没」**可被证伪**。
- *
- * 这是实测分析里点出的缺口之一:原先掩了凭据,但文件里一个字不说,读者无从判断。
- * 现在若这一行写着「命中 0 行」而正文里明显挂着 `Authorization:`,那就是脱敏没生效 ——
- * 一眼看得出来。**可被证伪比「静默地掩掉」有用得多。**
- *
- * 写「命中 N 行」还有一个副作用:能看出脱敏器是不是**过掩**了(命中数高得离谱)。
- *
- * 与文件里其它自产内容一致用英文:它们是日志元数据,读者是分析工具与 AI。
- */
-private fun writeExportSummary(writer: BufferedWriter, scan: ExportScan) {
-    writer.write("${XDiagEnv.MARK} export summary ${XDiagEnv.MARK}")
-    writer.newLine()
-    writer.write("exported  : ${XDiagEnv.stamp(System.currentTimeMillis())}")
-    writer.newLine()
-    writer.write(
-        if (XLogScrub.ENABLED) {
-            "redaction : XLogScrub applied to every line; ${scan.scrubbed} line(s) hit " +
-                "(credentials in them were replaced with ${XLogScrub.MASK})"
-        } else {
-            // 如实写在文件开头:读者一眼就知道「这份是原样日志,可能带密钥」,不会误以为已脱敏。
-            "redaction : DISABLED - this file is the raw log, it may contain credentials " +
-                "such as API keys. Review it before sharing."
-        }
-    )
-    writer.newLine()
-    writer.write("lines     : ${scan.lines}")
-    writer.newLine()
-    // ⚠️ 此处**不能**写「以下为日志正文」:紧随其后的是文件自带的清单头,
-    //    而清单头自己末尾才是那句「以下为日志正文」。两处都那么写会指错地方。
-    // ⚠️ 先算成 val,不要写成 `"…" + if (c) A else B + "…"` —— Kotlin 把那个表达式解析为
-    //    `if (c) A else (B + C)`,于是**真**分支会丢掉后面的尾巴。编译不报错,只在开关
-    //    打开时才看得出来(实测踩到过一次)。
-    val tail = if (XLogScrub.ENABLED) "redacted line by line" else "as-is"
-    writer.write("${XDiagEnv.MARK} raw log file follows ($tail) ${XDiagEnv.MARK}")
-    writer.newLine()
-    writer.newLine()
-}

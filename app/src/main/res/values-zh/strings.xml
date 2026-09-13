@@ -1390,12 +1390,8 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_domains_title">分域条数</string>
   <string name="diagnostic_domain_entries">%1$d</string>
   <string name="diagnostic_export_title">导出</string>
-  <string name="diagnostic_export_redacted">导出诊断记录(已脱敏)</string>
-  <string name="diagnostic_export_redacted_desc">保存为文件。路径已缩短、哈希已掩码,但可能仍含凭据,分享前请先过目。</string>
-  <string name="diagnostic_export_full">导出诊断记录(完整)</string>
-  <string name="diagnostic_export_full_desc">含完整路径与哈希,也可能含凭据,分享前请先过目。</string>
   <string name="diagnostic_export_bundle">导出诊断包</string>
-  <string name="diagnostic_export_bundle_desc">一次导出全部:应用日志、各域记录与网络请求,打成压缩包,适合交给 AI。原样导出、不做脱敏,可能含密钥,分享前请先过目。</string>
+  <string name="diagnostic_export_bundle_desc">一次导出全部:原始应用日志、事件时间线(语义事件与网络记录),外加一份说明文件,打成压缩包,适合交给 AI。凭据会被掩掉,但日志里仍可能含你个人的内容,分享前请先过目。</string>
   <string name="diagnostic_export_bundle_none">还没有记录 —— 打开上面的开关,从那一刻起才会开始记录。</string>
   <string name="diagnostic_export_notif_title">导出诊断记录</string>
   <string name="diagnostic_export_notif_channel">诊断导出</string>
@@ -1405,9 +1401,6 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_export_notif_percent">%1$s %2$d%%</string>
   <string name="diagnostic_export_notif_done">导出完成 · %1$s</string>
   <string name="diagnostic_export_notif_failed">导出失败 —— 没能写入所选位置</string>
-  <string name="diagnostic_export_logcat">导出应用日志</string>
-  <string name="diagnostic_export_logcat_desc">本应用的完整日志,上游与框架的日志也在内。原样导出、不做脱敏,可能含密钥,分享前请先过目。</string>
-  <string name="diagnostic_export_logcat_none">还没有日志文件 —— 打开上面的开关,从那一刻起才会开始记录。</string>
   <string name="diagnostic_export_done">已保存</string>
   <string name="diagnostic_export_failed">保存失败</string>
   <string name="diagnostic_capture_title">应用日志</string>
