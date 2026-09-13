@@ -217,6 +217,18 @@ jobs:
         id: sha
         run: echo "short=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
 
+      # ⚠️ 分支名可能**带斜杠**(`diag/consolidate`),而 artifact 名字**不许有斜杠**
+      # —— GitHub 为跨文件系统兼容而禁掉了 `/ \ : * ? " < > |`。
+      # 故凡是拿分支名去拼 artifact 名的地方,一律用它。
+      #
+      # 这个坑 2026-09-13 实测踩到:那一步是 `692f4c7b` 加的,而 nightly 只能**手动**触发
+      # —— 之后一直没人跑过 Daily Build,于是它坏了整整一天而「看板上全绿」。
+      # 又一次印证那条:**看板绿 ≠ 真的验过**(带 paths 白名单、或只能手动触发的工作流,
+      # 都可能让一步长期不执行)。
+      - name: Slugify ref name
+        id: refslug
+        run: echo "slug=$(echo '${{ github.ref_name }}' | tr '/' '-' | tr -cd 'A-Za-z0-9._-')" >> "$GITHUB_OUTPUT"
+
       - name: Compute build timestamp
         id: ts
         run: |
@@ -660,7 +672,9 @@ jobs:
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: r8-mapping-${{ github.ref_name }}-${{ github.sha }}
+          # 用 slug 而不是 ref_name:分支名带斜杠时后者会让 artifact 名字非法、
+          # 整步报错 —— 而那会**连带**让后面的「发布 release」不执行(它就是因此没跑)。
+          name: r8-mapping-${{ steps.refslug.outputs.slug }}-${{ github.sha }}
           path: |
             app/build/outputs/mapping/release/mapping.txt
             app/build/outputs/mapping/release/configuration.txt

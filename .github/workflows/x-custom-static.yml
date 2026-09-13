@@ -24,6 +24,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_test_assert_types.py` | `assertEquals` 两边的 Java 类型(如 `1L` 对 `.size`) | 编译通过、本地全绿,断言在**运行时**才炸(2026-09-13 实测:Guard 上红了才发现) |
 # | `check_x_missing_imports.py` | 用了 X 自己的类却没 import、或 `import` 的包不存在 | `Unresolved reference`(2026-09-13 三次:两次漏 import、一次形参改一半) |
 # | `check_x_when_braces.py` | `when` 分支体多语句却省了花括号 | 报错**指向整个 when**(「must be exhaustive」),看起来不像少了括号(2026-09-13 实测一次) |
+# | `check_gh_artifact_names.py` | artifact 名里拼了带斜杠的 `github.ref_name`/`ref`/`head_ref` | 整条 nightly 在最后一步失败,**连带「发布 release」不执行 → 拿不到 APK**(实测:坏了整整一天而看板全绿) |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -73,6 +74,8 @@ on:
       - 'scripts/check_x_missing_imports_rev.py'
       - 'scripts/check_x_when_braces.py'
       - 'scripts/check_x_when_braces_rev.py'
+      - 'scripts/check_gh_artifact_names.py'
+      - 'scripts/check_gh_artifact_names_rev.py'
       # 它守的是「X 的类 ↔ 用它的文件」,故 X 的源码与全模块 import 都在射程内。
       # 用通配:新增 X 文件时不必回来登记(漏登记 = 新文件不受检)。
       - 'app/src/main/java/me/rerere/rikkahub/x/**'
@@ -231,3 +234,16 @@ jobs:
 
       - name: when 花括号检查器的反向验证
         run: python3 scripts/check_x_when_braces_rev.py
+
+      # artifact 名字:不许拼「带斜杠的上下文值」。⚠️ 为一次**代价不小**的真实失败补的
+      # (2026-09-13):`${{ github.ref_name }}` 在特性分支上是 `diag/consolidate`,
+      # 而 GitHub 的 artifact 名禁 `/ \ : * ? " < > |` → 整步报错,**连带让后面的
+      # 「发布 release」不执行**,于是构建成功了却拿不到 APK。
+      # ⚠️ 它坏了整整一天而看板上全绿 —— nightly 只能手动触发,那一步一直没执行过。
+      #    **看板绿 ≠ 真的验过**。
+      # 判据只在 artifact 步骤内看 `name:`:`run-name:` 用 ref_name 是合法的(显示名)。
+      - name: artifact 名字
+        run: python3 scripts/check_gh_artifact_names.py
+
+      - name: artifact 名字检查器的反向验证
+        run: python3 scripts/check_gh_artifact_names_rev.py
