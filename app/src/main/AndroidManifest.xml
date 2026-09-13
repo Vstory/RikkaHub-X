@@ -34,9 +34,10 @@
     (firebase-analytics 的传递依赖)带进来的。本应用不做广告、不做归因,
     自签分发的 APK 里挂着「读取广告 ID」的权限与定位不符。
 
-    用 `tools:node="remove"` 在合并阶段删掉,而不是去 exclude 依赖 ——
-    删依赖会让 `Firebase.analytics` 的 Koin 注册在启动时崩
-    (那属于「方案 B」,要同时改代码)。
+    ⚠️ **2026-09-13 更新**:Firebase 依赖已整体移除(见下面那段),故这三条**当前**
+    已没有来源。但**刻意保留**:将来别的依赖把广告 ID 权限带回来时,这三条仍然把它摘掉
+    —— 而那种回归是**看不清**的(装的时候不会提示,只有看 APK 权限或装机时的权限列表
+    才发现)。留着它的代价为零,漏了它的代价是一次静默回归。
   -->
   <uses-permission
     android:name="com.google.android.gms.permission.AD_ID"
@@ -87,43 +88,36 @@
     tools:targetApi="33">
 
     <!--
-      [X-custom] 关闭 Google 统计的**数据采集**(2026-09-13)。
+      [X-custom] Firebase 已**整体移除**(2026-09-13)。
 
-      ## 为什么关
+      ## 这里原来有什么
 
-      上游只埋了 5 个**无参**事件(全在 ChatVM,`ai_send_message` 之类),对自用 fork
-      没有任何决策价值;依赖却会带进广告 ID 权限(见上面的 remove 段)。
-      X 自己的诊断框架(`x/diag`)已经能给出更贴需求的现场,且是本地落盘 + 可导出。
+      两条 `firebase_*_collection_enabled=false` 的 meta-data —— 当时它们**只关采集、
+      不动能力**(依赖、插件、`FirebaseInitProvider`、Koin 注册都保留),因为
+      `Firebase.analytics` 是 Koin 注册而 ChatVM 构造时会取它。再往前还有
+      Crashlytics 的对外请求(实测抓到的 404 噪声与一次外网往返)。
 
-      ## 这两条各管什么
+      ## 为什么现在能整个删掉:接替件**已在真机上验过**
 
-      · `firebase_analytics_collection_enabled` —— GA4 采集总开关。
-      · `firebase_crashlytics_collection_enabled` —— Crashlytics 在
-        `FirebaseInitProvider` 初始化时**默认 true**,故必须显式置 false
-        (`CrashlyticsInitProvider` 读的正是这一条)。置 false 后 SDK 推迟到
-        `setCrashlyticsCollectionEnabled(true)` 才启用 —— 而本应用从不调用它。
+      ⚠️ 三处注意:XML 注释里**不能出现连续两个短横**,故这里不用 markdown 表格
+      (它的分隔行正是那种字符) —— 实测踩到过,报错是「not well-formed」。
 
-      ## 实测依据(2026-09-13 真机日志)
+      · 崩溃的 Java 栈 → `XCrashReport`(读回上游 CrashHandler 存的栈)
+        证据:`survivors.log` 里有完整栈,栈底是 `ActivityThread.main`
+      · **ANR** / 原生崩溃 / 被系统杀 → `XExitReport`(读系统 `ApplicationExitInfo`)
+        证据:`diag.anr.detected`,带 `Input dispatching timed out`
+      · 那 5 个使用计数 → chat 域的 `XChatEvents`
+        证据:诊断页「事件」区可搜
 
-      `E FirebaseCrashlytics: Settings request failed.`
-      `java.io.FileNotFoundException: https://firebase-settings.crashlytics.com/.../1:000000000000:...`
-      —— 即便用的是**全 0 占位的 google-services.json**,Crashlytics 照样初始化、
-      照样往外发请求(拿到 404 才没送出去,但 12 行噪声与一次外网往返是实打实的)。
+      验证方式:自检里**故意造一次崩溃** + **故意造一次 ANR**,两条都在
+      `survivors.log` 里,且**跨会话保留**(横跨两次重启)。
 
-      ## 只关采集,不动「能力」
+      ## ⚠️ 与上游合并时的注意
 
-      依赖、插件、`FirebaseInitProvider`、`AppModule` 的 Koin 注册**一律保留**:
-      `Firebase.analytics` 是 lazy 注册而 ChatVM 构造时会 `get()` 它,
-      若把 provider 一并 remove,每次打开会话会抛
-      `IllegalStateException: Default FirebaseApp is not initialized`。
-      将来要接自家 Firebase 做崩溃收集,删掉这两条 meta-data 即可恢复。
+      **上游若把 Firebase 加回来,这里会跟着回来** —— 故 `check_x_manifest.py`
+      现在**反过来守**这件事:它断言「依赖、插件、这两条 meta-data 都不在」,
+      多出任何一处就报。要真接自家 Firebase,先改那个检查器的判据。
     -->
-    <meta-data
-      android:name="firebase_analytics_collection_enabled"
-      android:value="false" />
-    <meta-data
-      android:name="firebase_crashlytics_collection_enabled"
-      android:value="false" />
 
     <activity
       android:name=".ui.activity.SafeModeActivity"

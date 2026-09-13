@@ -8,8 +8,8 @@
 
 | 挂什么 | 丢了会怎样 |
 |---|---|
-| 两条 `firebase_*_collection_enabled=false` | 统计采集**静默恢复**(依赖还在、provider 还在) —— 只有抓包或看 Firebase 后台才发现 |
-| 三条 `tools:node="remove"` 的广告 ID 权限 | 依赖又把权限带回来,APK 里重新声明「读取广告 ID」 —— 装的时候看不出来 |
+| **Firebase 应该是「不在」**(依赖/插件/两条 meta-data/源码 import) | ⚠️ 这是**反着守**:上游 merge 把 Firebase 加回来时,依赖与初始化会一起回来 —— 而那时**采集是否恢复**取决于 meta-data,两条都不在了就直接恢复 |
+| 三条 `tools:node="remove"` 的广告 ID 权限 | 别的依赖把权限带回来,APK 里重新声明「读取广告 ID」 —— 装的时候看不出来 |
 | `${appLabel}` 占位符 | nightly 包的**应用名静默少了后缀**(`RikkaHub X` 而非 `RikkaHub X Nightly`) |
 | `android:name=".RikkaHubApp"` | 诊断框架的接线点 `onCreate` **根本不会跑** —— 开关不落盘、logcat 一条不记,而 App 行为看着完全正常 |
 
@@ -20,7 +20,11 @@
 ## 判据(逐条都对应上面一行)
 
 1. `xmlns:tools` 已声明 —— 少了它,`tools:node` 与 `tools:targetApi` 会让**清单合并直接失败**;
-2. 两条 `firebase_*_collection_enabled` 的 meta-data 存在,且值都是 `false`;
+2. **Firebase 必须整体不在** —— 没有 `firebase_*` meta-data、构建文件里没有
+   firebase/google-services、Kotlin 里没有 `com.google.firebase` import。
+   ⚠️ 这一条是 `2026-09-13` **反转**过来的:原来守的是「两条采集开关存在且为 false」
+   (那时只关采集、不动能力);接替件真机验证通过后依赖整体移除,于是判据反过来守
+   「别被上游 merge 带回来」。
 3. 三条广告 ID 权限存在且都带 `tools:node="remove"`;
 4. `${appLabel}` 占位符仍在 `application` 的 `android:label` 里;
 5. `application` 的 `android:name` 仍指向 `.RikkaHubApp`;
@@ -56,10 +60,24 @@ AD_PERMISSIONS = (
     "android.permission.ACCESS_ADSERVICES_AD_ID",
 )
 
-FIREBASE_FLAGS = (
+# 必须**不存在**的 meta-data(2026-09-13 起——见判据 2 的说明)。
+FIREBASE_META_ABSENT = (
     "firebase_analytics_collection_enabled",
     "firebase_crashlytics_collection_enabled",
 )
+
+# 必须**没有任何引用**的文件(相对仓库根)。上游把这些加回来时,这里会直接报。
+FIREBASE_FREE_FILES = (
+    "app/build.gradle.kts",
+    "build.gradle.kts",
+    "gradle/libs.versions.toml",
+)
+
+# Kotlin 源码里不许出现的 import 前缀。
+FIREBASE_IMPORT_PREFIX = "com.google.firebase"
+
+# 扫 Kotlin 时的下限 —— 防「一个文件都没扫到 → 判据自动成立」。
+MIN_KT_FILES = 300
 
 # 索引下限(见模块注释)
 MIN_PERMISSIONS = 10
@@ -96,21 +114,52 @@ def check(root: Path) -> list[str]:
     for el in app:
         if el.tag == "meta-data":
             declared[el.get(A + "name")] = el.get(A + "value")
-    if len(declared) == 0:
+    # 结构下限。
+    #
+    # ⚠️ 原先这里守的是「application 下至少有一条 meta-data」—— 而 2026-09-13 移除 Firebase
+    #    之后,那两条采集开关一走,**整个文件里一条 meta-data 都不剩了**,于是这条下限
+    #    把检查器自己卡死。下限守的应该是「解析还认得这个文件的结构」,而不是「必须有
+    #    meta-data」—— 后者随内容变化,不是结构稳定性。
+    #    现在改成:必须有 `application` 元素**且**它带着 `android:name`(判据 5 要用的那个)
+    #    —— 这才真是「结构还在」的证据。
+    if app is None or app.get(A + "name") is None:
         raise Problem(
-            MANIFEST + ":application 下解析不出任何 meta-data —— 结构变了?"
+            MANIFEST + ":解析不出带 android:name 的 application 元素 —— 结构变了?"
             "这时**必须报错**,否则下面的判据会全部自动成立。"
         )
-    for flag in FIREBASE_FLAGS:
-        if flag not in declared:
+    # ── 判据 2:Firebase 必须整体不在(反着守) ──
+    for flag in FIREBASE_META_ABSENT:
+        if flag in declared:
             problems.append(
-                MANIFEST + ":少了 meta-data `" + flag + "` —— 采集会**静默恢复**(实测 2026-09-13:"
-                "占位配置下 Crashlytics 照样发 settings 请求)。"
+                MANIFEST + ":还有 meta-data `" + flag + "` —— Firebase 已整体移除,"
+                "这两条也随之不该在(它们只关采集、不动能力;留着会造成「看起来已关」的错觉)。"
             )
-        elif declared[flag] != "false":
-            problems.append(
-                MANIFEST + ":`" + flag + "` 的值是 `" + str(declared[flag]) + "`,期望 `false`。"
-            )
+
+    for rel in FIREBASE_FREE_FILES:
+        target = root / rel
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        for needle in ("firebase", "google-services", "crashlytics"):
+            if needle in text.lower():
+                problems.append(
+                    rel + ":出现 `" + needle + "` —— Firebase 已整体移除(2026-09-13),"
+                    "上游 merge 可能把它带回来了。要真接自家 Firebase,先改本检查器的判据。"
+                )
+
+    kt_files = sorted((root / "app/src/main/java").rglob("*.kt"))
+    if len(kt_files) < MIN_KT_FILES:
+        raise Problem(
+            "只扫到 " + str(len(kt_files)) + " 个 .kt(期望 ≥ " + str(MIN_KT_FILES) + ")—— "
+            "扫描面写错了,「没有 firebase import」那条会永远成立。"
+        )
+    for path in kt_files:
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            if line.lstrip().startswith("import ") and FIREBASE_IMPORT_PREFIX in line:
+                problems.append(
+                    str(path.relative_to(root)) + ":" + str(i) + ": 还有 Firebase 的 import"
+                    " —— 依赖已移除,这行会编译不过(或说明上游把它带回来了)。"
+                )
 
     # ── 判据 3 + 6:广告 ID 权限 ──
     perms = [el for el in root_el if el.tag == "uses-permission"]
@@ -176,8 +225,8 @@ def main(argv) -> int:
         return 1
 
     print(
-        "[CHECK PASS] AndroidManifest:两条采集开关为 false、三条广告权限已 remove、"
-        "应用名占位符与 RikkaHubApp 接线点都在"
+        "[CHECK PASS] AndroidManifest:Firebase 确认不在(meta-data / 构建文件 / Kotlin import)、"
+        "三条广告权限已 remove、应用名占位符与 RikkaHubApp 接线点都在"
     )
     return 0
 

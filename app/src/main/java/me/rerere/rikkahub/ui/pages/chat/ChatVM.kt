@@ -12,7 +12,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
@@ -67,7 +66,6 @@ class ChatVM(
     private val conversationRepo: ConversationRepository,
     private val chatService: ChatService,
     val updateChecker: UpdateChecker,
-    private val analytics: FirebaseAnalytics,
     private val filesManager: FilesManager,
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
@@ -288,7 +286,6 @@ class ChatVM(
      */
     fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
-        analytics.logEvent("ai_send_message", null)
         XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_SENT) { "发送消息" }
 
         chatService.sendMessage(_conversationId, content, answer)
@@ -296,7 +293,6 @@ class ChatVM(
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
-        analytics.logEvent("ai_edit_message", null)
         XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_EDITED) { "编辑消息" }
 
         viewModelScope.launch {
@@ -340,7 +336,6 @@ class ChatVM(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true
     ) {
-        analytics.logEvent("ai_regenerate_at_message", null)
         XLog.info(XDomain.CHAT, XChatEvents.MESSAGE_REGENERATED) { "重新生成" }
         chatService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
     }
@@ -350,7 +345,6 @@ class ChatVM(
         approved: Boolean,
         reason: String = ""
     ) {
-        analytics.logEvent("ai_tool_approval", null)
         // 审批是同意还是拒绝,是这两个动作里唯一有信息量的差别 —— 故记进 msg。
         // 工具名与调用 id 不记:它们属于内容侧,而本域的约定是不记自由文本。
         XLog.info(XDomain.CHAT, XChatEvents.TOOL_APPROVED) {
@@ -363,7 +357,6 @@ class ChatVM(
         toolCallId: String,
         answer: String,
     ) {
-        analytics.logEvent("ai_tool_answer", null)
         XLog.info(XDomain.CHAT, XChatEvents.TOOL_ANSWERED) { "工具调用已由用户作答" }
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
     }

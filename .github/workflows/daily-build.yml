@@ -678,7 +678,13 @@ jobs:
           path: |
             app/build/outputs/mapping/release/mapping.txt
             app/build/outputs/mapping/release/configuration.txt
-          if-no-files-found: warn
+          # ⚠️ `error` 而不是 `warn`(2026-09-13 改):Firebase Crashlytics 已移除,
+          #    于是**没有任何别的服务**替我们保存符号化信息 —— 这一份 mapping 成了
+          #    还原崩溃栈的**唯一**手段。它静默缺失的后果是:真机上导出的栈
+          #    (R8 处理过,帧名是 `CaptureNode$1$$ExternalSyntheticLambda0` 这种)
+          #    永远还原不回原始行号,而**当时不会有任何提示**。
+          #    宁可让构建失败在这里,也不要发出一个「崩溃栈将来还原不了」的包。
+          if-no-files-found: error
           retention-days: 90
 
       # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压。
