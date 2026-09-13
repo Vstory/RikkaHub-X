@@ -279,6 +279,74 @@ class XDiagZipTest {
         }
     }
 
+    // ────────────────────────────────────
+    // 存活层作为额外项(2026-09-13)
+    //
+    // 它在根目录、不在任何 session 里 —— 而打包的输入一直是「一个会话目录」。
+    // 下面几条守的正是「它到底进没进包」,以及**最关键的那种情形**:
+    // 开关从未开过(没有会话目录)却崩溃过时,包里应当**只有它**。
+    // ────────────────────────────────────
+
+    /** 造一个「根目录下的存活层」—— 与测试自己的会话目录**不同**,模拟真实布局。 */
+    private fun survivors(content: String): File =
+        File(Files.createTempDirectory("survivors").toFile(), XSurvivorLog.SURVIVORS_FILE)
+            .apply { writeText(content, Charsets.UTF_8) }
+
+    private fun packWith(extra: List<File>, sessionDir: File? = dir): List<Pair<String, String>> {
+        val buf = ByteArrayOutputStream()
+        XDiagZip.write(listOf("app     : RikkaHub X"), buf, sessionDir, extra = extra)
+        val out = mutableListOf<Pair<String, String>>()
+        ZipInputStream(ByteArrayInputStream(buf.toByteArray())).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                out += entry.name to zip.readBytes().toString(Charsets.UTF_8)
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun `the survivors file is packed alongside the session files`() {
+        file(EVENTS, "event\n")
+        val packed = packWith(listOf(survivors("{\"event\":\"diag.crash.detected\"}\n")))
+
+        assertEquals(
+            listOf(XDiagZip.MANIFEST_NAME, EVENTS, XSurvivorLog.SURVIVORS_FILE),
+            packed.map { it.first },
+        )
+    }
+
+    @Test
+    fun `a bundle with no session at all still carries the survivors file`() {
+        // ⚠️ 这条守的是最容易漏掉的那种情形:**开关从未开过、但崩溃过**。
+        //    此时没有会话目录,而存活层是唯一有内容的东西 —— 若打包以「有没有会话目录」
+        //    为准,这个包会被判成空,而它恰恰是最需要导出的一个。
+        val packed = packWith(listOf(survivors("{\"event\":\"diag.crash.detected\"}\n")), sessionDir = null)
+
+        assertEquals(listOf(XDiagZip.MANIFEST_NAME, XSurvivorLog.SURVIVORS_FILE), packed.map { it.first })
+        assertTrue("清单得给一个说得过去的 session 名", packed.first().second.contains("(no session"))
+    }
+
+    @Test
+    fun `hasContent sees the survivors file even without a session dir`() {
+        val s = survivors("x")
+        assertTrue("只有存活层也算有内容", XDiagZip.hasContent(null, listOf(s)))
+        assertFalse("存活层为空时不算", XDiagZip.hasContent(null, listOf(survivors(""))))
+        assertFalse("都没有时不算", XDiagZip.hasContent(null, emptyList()))
+        // 反向:会话目录有内容时,即使 extra 为空也算(别把判据改成只看 extra)
+        file(EVENTS, "x")
+        assertTrue("会话目录有内容即算", XDiagZip.hasContent(dir, emptyList()))
+    }
+
+    @Test
+    fun `the manifest explains what the survivors file is`() {
+        file(EVENTS, "x")
+        val text = packWith(listOf(survivors("y"))).first { it.first == XDiagZip.MANIFEST_NAME }.second
+
+        assertTrue("应说明存活层是什么", text.contains("must-not-lose"))
+        assertTrue("应写明它与开关无关", text.contains("does NOT depend on the recording switch"))
+    }
+
     @Test
     fun `hasContent treats missing empty and blank dirs alike`() {
         assertFalse("null 视为没有内容", XDiagZip.hasContent(null))

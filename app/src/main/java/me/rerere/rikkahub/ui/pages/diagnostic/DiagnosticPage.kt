@@ -62,6 +62,7 @@ import me.rerere.rikkahub.x.diag.XLogRing
 import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
 import me.rerere.rikkahub.x.diag.XLogcatNoise
+import me.rerere.rikkahub.x.diag.XSurvivorLog
 import me.rerere.rikkahub.x.diag.XRedaction
 import org.koin.compose.koinInject
 
@@ -140,6 +141,9 @@ fun DiagnosticPage() {
     val noiseFiltered = remember(revision) { XLogcatNoise.isEnabled() }
     val capture = remember(revision, tick) { XLogcatCapture.current() }
     val captureFile = remember(revision, tick) { XLogcatCapture.latestLogFile(context) }
+    // 存活层:只取体积(便宜),**不读内容** —— 那要走 IO,而这一页的刷新是每秒一次。
+    // 它要回答的问题只有一个:「磁盘上到底有没有留存」。
+    val survivorBytes = remember(revision, tick) { XSurvivorLog.file()?.takeIf { it.isFile }?.length() ?: 0L }
 
     val filesRoot = remember(context) { context.filesDir.absolutePath }
 
@@ -352,6 +356,26 @@ fun DiagnosticPage() {
                     )
                     item(
                         headlineContent = {
+                            Text(stringResource(R.string.diagnostic_survivors))
+                        },
+                        supportingContent = {
+                            // ⚠️ 这一项**不是装饰**:存活层跨会话保留,而上面的「关键失败留存」
+                            //    卡读的是**内存** —— 重启之后那张卡什么都不显示,文件里却可能
+                            //    躺着一次崩溃。没有这一项,页面就会在那种时候撒谎。
+                            Text(
+                                if (survivorBytes > 0L) {
+                                    stringResource(
+                                        R.string.diagnostic_survivors_kept,
+                                        XLogcatCapture.sizeText(survivorBytes),
+                                    )
+                                } else {
+                                    stringResource(R.string.diagnostic_survivors_none)
+                                }
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = {
                             Text(stringResource(R.string.diagnostic_capture_noise))
                         },
                         supportingContent = {
@@ -439,12 +463,17 @@ fun DiagnosticPage() {
                         onClick = {
                             // 停止之后也允许导出 —— 「先关掉开关,再把刚录的那段导出来」是很自然的顺序。
                             val dir = XDiagSession.latest(context)
-                            // 写成 if/else 而不是 `hasContent(dir)` + `dir!!`:后者那个 `!!`
-                            // 是在向类型系统撒谎(内容非空不等于目录非 null),这里让它自然收窄。
-                            if (dir == null || !XDiagZip.hasContent(dir)) {
-                                toaster.show(message = context.getString(R.string.diagnostic_export_bundle_none))
+                            // 存活层在**根目录**、独立于开关,故单独取一份给打包与判据用。
+                            // ⚠️ 它必须进判据:「开关从未开过、但崩溃过」时包里**只有**它 ——
+                            //    只看会话目录会报「还没有记录」,而那恰恰是最该导出的情形。
+                            val survivors = listOfNotNull(XSurvivorLog.file())
+                            // ⚠️ 判据走 hasContent(它自己接 File?),**不要**在这里写
+                            //    「dir == null 就先报没有记录」—— 那会漏掉「开关从未开过、
+                            //    但崩溃过」这一种:包里只有存活层,而它恰恰最该导出来。
+                            if (XDiagZip.hasContent(dir, survivors)) {
+                                exportZip("diag", PendingExport.SessionZip(dir, survivors))
                             } else {
-                                exportZip("diag", PendingExport.SessionZip(dir))
+                                toaster.show(message = context.getString(R.string.diagnostic_export_bundle_none))
                             }
                         },
                     )
@@ -520,8 +549,14 @@ fun DiagnosticPage() {
  * 后两者必须流式处理,不能先拼成一个字符串(那样内存直接爆掉)。
  */
 private sealed interface PendingExport {
-    /** 整次会话:全部文件打进一个压缩包(见 [XDiagZip])。 */
-    data class SessionZip(val dir: File) : PendingExport
+    /**
+     * 整次会话:全部文件打进一个压缩包(见 [XDiagZip])。
+     *
+     * @param dir 会话目录。**可以为 `null`** —— 「开关从未开过」时没有会话目录,
+     *   而存活层仍可能有内容(崩溃过),那种情况必须照样能导出。
+     * @param extra 会话目录之外的额外文件(存活层 `survivors.log`,在根目录)。
+     */
+    data class SessionZip(val dir: File?, val extra: List<File> = emptyList()) : PendingExport
 
     /**
      * 小段文本。**现在唯一的调用点是「关键失败留存」卡片里的「导出详情」** ——
@@ -547,8 +582,10 @@ private fun writeExport(
 ): Boolean = context.contentResolver.openOutputStream(uri)?.use { out ->
     when (payload) {
         // 打包与脱敏都在 XDiagZip 里,进度由它上报(读两遍:先扫、后写)。
+        // dir 为 null 不是错误(没有会话、只有存活层),故不在这里报失败 ——
+        // XDiagZip 以「到底打进了什么」为准返回,空包才 false。
         is PendingExport.SessionZip ->
-            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress)
+            XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress, payload.extra)
 
         is PendingExport.Text -> {
             // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出

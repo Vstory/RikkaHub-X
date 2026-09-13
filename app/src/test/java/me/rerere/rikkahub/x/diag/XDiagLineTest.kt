@@ -75,6 +75,32 @@ class XDiagLineTest {
         )
     }
 
+    // ────────────────────────────────────
+    // detail 字段(2026-09-13 加,给存活层装崩溃栈)
+    // ────────────────────────────────────
+
+    @Test
+    fun `a multi line detail stays on exactly one line`() {
+        // ⚠️ 这条是**存活层的成败所系**:它装的全是多行崩溃栈。转义一破,
+        //    「按行号定位」当场失效 —— 而那一层的内容丢了就永远没有。
+        val stack = "java.lang.IllegalStateException: x\n\tat A.b(A.kt:1)\n\tat C.d(C.kt:2)"
+        val line = XDiagLine.format(
+            XLogRing.Level.WARN, XDomain.CORE, "diag.crash.detected", "崩溃", at = 0L, detail = stack,
+        )
+
+        assertFalse("换行必须被转义", line.contains('\n'))
+        assertFalse("回车同样要转义", line.contains('\r'))
+        assertEquals("栈要能原样还原", stack, field(line, "detail"))
+    }
+
+    @Test
+    fun `detail is omitted entirely when not given`() {
+        // 写成 `"detail":null` 会让 grep 命中一堆空值 —— 与 reqBody 那条同一条理由:
+        // 「有没有」这件事必须由键**在不在**回答,而不是由值回答。
+        val line = XDiagLine.format(XLogRing.Level.INFO, XDomain.CORE, "a.b.c", "m", at = 0L)
+        assertFalse("不给 detail 时整键不该出现", parse(line).containsKey("detail"))
+    }
+
     @Test
     fun `special characters in the message survive a round trip`() {
         // 引号、反斜杠、制表符是 JSON 转义最容易出错的地方,而日志正文里都有可能出现

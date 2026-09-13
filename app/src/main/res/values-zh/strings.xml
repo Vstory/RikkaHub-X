@@ -1412,6 +1412,9 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="diagnostic_capture_capped">已达体积上限,后续日志未记录</string>
   <string name="diagnostic_capture_noise_dropped">已过滤 %1$d 行噪声</string>
   <string name="diagnostic_capture_noise">过滤系统噪声</string>
+  <string name="diagnostic_survivors">崩溃与关键失败</string>
+  <string name="diagnostic_survivors_kept">跨会话保留 · %1$s</string>
+  <string name="diagnostic_survivors_none">暂无留存</string>
   <string name="diagnostic_capture_noise_desc">丢弃已知的 ColorOS / 渲染 / 输入法日志标签——通常占一次捕获的三分之二——免得有用的行被埋掉。只丢认得出的标签,认不出的一律保留。关掉则一行不丢。</string>
   <string name="diagnostic_clear">清空</string>
   <string name="diagnostic_clear_desc">删除此前记录的全部内容。</string>

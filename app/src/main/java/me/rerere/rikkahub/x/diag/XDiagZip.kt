@@ -1,6 +1,7 @@
-// [X-custom] RikkaHub-X 诊断框架：把整个会话目录打成压缩包
+// [X-custom] RikkaHub-X 诊断框架:整次会话打成压缩包,交给 AI
 package me.rerere.rikkahub.x.diag
 
+import android.content.Context
 import java.io.BufferedOutputStream
 import java.io.BufferedReader
 import java.io.File
@@ -11,26 +12,28 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * 把一次会话目录打成**一个压缩包** —— 用户点一次导出就能拿走全部记录。
+ * 把一次诊断会话打成**一个压缩包** —— 用户点「导出诊断包」时做的事。
  *
- * ## 为什么必须是压缩包,而不是「一个拼起来的大文本」
+ * ## 为什么是压缩包
  *
- * 三件事,前两件是硬的:
+ * 会话目录里有多个文件(原始 logcat 可能几十上百 MB、事件时间线、存活层),
+ * 逐个「分享」等于让用户手忙脚乱地挑,而漏掉一个就少一份现场。打成一个包:一次保存、
+ * 一次发送,包内清单说明每一处。
  *
- * ① **体积**:`logcat.log` 单独就能到 200MB(它的安全阀),而日志文本压缩比很高 ——
- *    压完常常只有十分之一。不压就得先传 200MB 出去。
- * ② **文件边界**:包里同时有 logcat(纯文本行)与 `events.log`(JSON 行)。
- *    拼成一份就得靠分隔标记猜「哪几行属于哪个文件」,而这个猜测正是最容易出错的地方
- *    (消息正文里本来就带各种标记)。分文件则不需要猜。
- * ③ 顺带:一个文件比分四个文件好传。
+ * ## 类注释里两处要点
  *
- * ## 「文件里留全,包里脱敏」—— 两件事分开
+ * ① **脱敏在哪一层**:打包时**逐行**过 [XLogScrub]。它是导出路径上唯一的凭据闸门 ——
+ *    「脱敏有没有生效」由 [MANIFEST_NAME] 里那句可被证伪的计数兜住(见 [manifest])。
+ *    文件本身不脱敏:那是热路径,而且文件就在应用私有目录里。
  *
- * 会话目录里的文件**始终原样**(见 [XLogScrub.ENABLED] 的说明):现场不被破坏,也便于
- * 复核脱敏器到底掩了什么。打包时逐行过一遍 [XLogScrub],把凭据形态的值换成 [XLogScrub.MASK]。
+ * ② **文件边界**:包里同时有 logcat(纯文本行)与事件时间线(JSON 行),外加存活层。
+ *    清单按名字逐项说明「这是什么、多少体积、掩了几处」。见 [describe]。
  *
- * ⚠️ 但**正则只认凭据的形态**,它抓不到聊天内容 —— 故清单里既写「已脱敏」,也写明
- * 「哪些东西照旧在包里」。见 [manifest] 的 `CAUTION` 段。
+ * ## 清单里为什么有「什么不在这份包里」
+ *
+ * 因为**漏掉的比在的更危险**:包里没有的东西,读的人不会去找。故 [manifest] 的
+ * `CAUTION` 段明确列出「我们没做脱敏的部分」与「已经不在这份包里」的东西。
+ * 见 [manifest] 的 `CAUTION` 段。
  *
  * ## 为什么吃的是「头部行」而不是 `Context`
  *
@@ -44,6 +47,14 @@ import java.util.zip.ZipOutputStream
  * 用 [ZipOutputStream] 边读边压,`logcat.log` 多大都不会把内存吃掉。
  * ⚠️ **不给条目设 `size`**:文件正被捕获线程追加时,取到的长度会与随后读出的字节数不一致,
  * 设了反而让 zip 写坏。不设则走数据描述符,天然容忍。
+ *
+ * ## 存活层为什么单独作为 `extra` 传进来(2026-09-13)
+ *
+ * 它在 `x-diag/` **根目录**,不在任何 `session-*` 里 —— 那正是它「跨会话保留」的实现
+ * 方式。而打包的输入是「一个会话目录」,故它得作为额外项传进来。
+ *
+ * 另一种做法是「导出前把 survivors.log 复制进会话目录」,被否掉了:**那会动磁盘上的
+ * 证据**,而导出这一步理想情况下应只读。传路径进来只多一个形参,却保住了「导出不改现场」。
  */
 object XDiagZip {
 
@@ -54,25 +65,37 @@ object XDiagZip {
     private const val BUFFER = 64 * 1024
 
     /**
-     * [dir] 里有没有可打的东西。用于**提前**给出「还没有记录」的提示 ——
-     * 让用户先走一趟保存位置选择、再被告知没内容,是白费一步。
+     * 有没有可打的东西。
+     *
+     * ⚠️ 判据必须**同时看会话目录与存活层**(2026-09-13):存活层是独立于开关的,
+     * 「开关从未开过、但崩溃过」时包里**只有** survivors.log。只看会话目录会得出
+     * 「还没有记录」—— 而那恰恰是最需要导出的情形。
+     *
+     * 用于**提前**给出提示 —— 让用户先走一趟保存位置选择、再被告知没内容,是白费一步。
      */
-    fun hasContent(dir: File?): Boolean =
-        dir?.listFiles()?.any { it.isFile && it.length() > 0L } == true
+    fun hasContent(dir: File?, extra: List<File> = emptyList()): Boolean =
+        dir?.listFiles()?.any { it.isFile && it.length() > 0L } == true ||
+            extra.any { it.isFile && it.length() > 0L }
 
     /**
-     * 把 [dir] 下**所有非空文件**打进 [out]。
+     * 把 [dir] 下**所有非空文件**与 [extra] 打进 [out]。
      *
+     * @param dir 会话目录。**可以为 `null`** —— 「开关从未开过、但崩溃过」时没有会话目录,
+     *   而存活层仍有内容,那种情况必须照样导得出来。
+     * @param extra 会话目录之外的额外文件(存活层)。同名的以先出现的为准,故调用方
+     *   应保证名字不撞(当前只有一个存活层,与另两个不撞,由
+     *   `check_x_diag_layout.py` 机检)。
      * @return 是否至少打进了一个文件。`false` 时调用方应提示「还没有记录」——
      *   包里有内容却报「写失败」会让人以为出了问题,而其实只是没东西可打。
      */
     fun write(
         header: List<String>,
         out: OutputStream,
-        dir: File,
+        dir: File?,
         progress: XExportProgress = NoExportProgress,
+        extra: List<File> = emptyList(),
     ): Boolean {
-        val files = filesOf(dir)
+        val files = filesOf(dir) + filesOf(extra)
         if (files.isEmpty()) return false
 
         val redacted = XLogScrub.ENABLED
@@ -103,8 +126,11 @@ object XDiagZip {
             // ⚠️ 清单本身不过脱敏 —— 那是我们自己生成的一段已知文本,且它里面就写着
             //    「Authorization」这类词;过一遍反而有被改坏的风险(改坏的正是那条警告)。
             zip.putNextEntry(ZipEntry(MANIFEST_NAME))
+            // 没有会话时(只导出存活层)也要给清单一个说得过去的 session 名,
+            // 而不是空串或 `null` —— 清单是读包时的唯一指引,那一行不能含糊。
             zip.write(
-                manifest(header, dir.name, files, redacted, hits).toByteArray(Charsets.UTF_8),
+                manifest(header, dir?.name ?: "(no session recorded)", files, redacted, hits)
+                    .toByteArray(Charsets.UTF_8),
             )
             zip.closeEntry()
 
@@ -127,8 +153,8 @@ object XDiagZip {
         return true
     }
 
-    private fun filesOf(dir: File): List<File> =
-        dir.listFiles()
+    private fun filesOf(dir: File?): List<File> =
+        dir?.listFiles()
             ?.filter { it.isFile && it.length() > 0L }
             ?.sortedBy { it.name }
             .orEmpty()
@@ -209,7 +235,7 @@ object XDiagZip {
         appendLine("  Domains are NOT split into separate files, and that is deliberate: THE ORDER IS")
         appendLine("  THE POINT. One timeline answers 'what happened when', including across areas.")
         appendLine("  To look at one area only, filter instead of opening another file:")
-        appendLine("      grep '\"domain\":\"storage\"' events.log")
+        appendLine("      grep '\\"domain\\":\\"storage\\"' events.log")
         appendLine()
         appendLine("  Lines with domain=net also carry: method, url, code, durationMs, reqHeaders,")
         appendLine("  respHeaders, and -- when the request carried one -- reqBytes.")
@@ -223,7 +249,33 @@ object XDiagZip {
         appendLine("  and buffering one would stall the conversation. If an error body exceeded the")
         appendLine("  capture limit, the line also has respBodyTruncated=true.")
         appendLine()
+        appendLine("  survivors.log is the one file that does NOT depend on the recording switch.")
+        appendLine("  It holds crashes and other failures that would otherwise vanish -- the kind you")
+        appendLine("  cannot re-create by simply running the app again. It sits OUTSIDE the session")
+        appendLine("  folder and is kept across sessions until you clear diagnostics.")
+        appendLine("  Its lines may carry an extra field, detail, holding a full stack trace.")
+        appendLine()
         appendRedactionNote(this, redacted)
+    }
+
+    /**
+     * 一个文件是什么 —— 按名字给读者一句说明。认不出就明说认不出。
+     *
+     * ⚠️ 这里**不再按域查表**(2026-09-13 合并单文件后,域不再是文件名的一部分)。
+     * 从前它要拿文件名去 `XDomain.entries` 里找域,那层耦合由 `check_x_diag_layout.py`
+     * 专门守着;合并之后那个检查器的判据大半作废 —— 耦合本身没有了。
+     */
+    private fun describe(name: String): String {
+        if (name == XLogcatCapture.LOG_NAME) {
+            return "raw logcat of the app itself (upstream + framework lines included)"
+        }
+        if (name == XDiagFileStore.EVENTS_FILE) {
+            return "X custom timeline: semantic events and HTTP request metadata, in occurrence order"
+        }
+        if (name == XSurvivorLog.SURVIVORS_FILE) {
+            return "crashes and other must-not-lose failures, kept across sessions (switch-independent)"
+        }
+        return "unrecognised file (name does not match a known file of the diagnostic bundle)"
     }
 
     /**
@@ -246,39 +298,12 @@ object XDiagZip {
             sb.appendLine("    - whatever the app itself happened to log into logcat")
             sb.appendLine()
             sb.appendLine("  Review it before sharing it with anyone.")
-            return
         }
-        sb.appendLine("${XDiagEnv.MARK} redaction: credentials masked, content NOT sanitised ${XDiagEnv.MARK}")
-        sb.appendLine()
-        sb.appendLine("  Every file except this README was passed through a regex redactor line by line")
-        sb.appendLine("  (see XLogScrub). Credential-shaped values were replaced with \"${XLogScrub.MASK}\":")
-        sb.appendLine("  Authorization headers, Bearer tokens, JWTs, cookies, and known vendor key")
-        sb.appendLine("  prefixes such as sk-, ghp_, glpat-, AIza, AKIA. Per-file counts are listed")
-        sb.appendLine("  above -- if a file says \"nothing matched\" but you can see a key in it, the")
-        sb.appendLine("  redactor missed it, and that is worth reporting.")
-        sb.appendLine()
         sb.appendLine("  What this does NOT do -- the redactor only knows credential *patterns*. It")
         sb.appendLine("  cannot tell that ordinary text is private, so the following are still in here:")
         sb.appendLine("    - error response bodies (respBody), which are server text we do not control")
         sb.appendLine("    - app and framework log lines that happen to contain user content")
         sb.appendLine()
         sb.appendLine("  Review it before sharing it with anyone.")
-    }
-
-    /**
-     * 一个文件是什么 —— 按名字给读者一句说明。认不出就明说认不出。
-     *
-     * ⚠️ 这里**不再按域查表**(2026-09-13 合并单文件后,域不再是文件名的一部分)。
-     * 从前它要拿文件名去 `XDomain.entries` 里找域,那层耦合由 `check_x_diag_layout.py`
-     * 专门守着;合并之后那个检查器的判据大半作废 —— 耦合本身没有了。
-     */
-    private fun describe(name: String): String {
-        if (name == XLogcatCapture.LOG_NAME) {
-            return "raw logcat of the app itself (upstream + framework lines included)"
-        }
-        if (name == XDiagFileStore.EVENTS_FILE) {
-            return "X custom timeline: semantic events and HTTP request metadata, in occurrence order"
-        }
-        return "unrecognised file (name does not match a known file of the diagnostic bundle)"
     }
 }
