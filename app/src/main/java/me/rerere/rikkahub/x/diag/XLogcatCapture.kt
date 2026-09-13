@@ -576,7 +576,11 @@ object XLogcatCapture {
      * 与 [PART_MARKER_LEAD] 的分工:那条写在**每一片的开头**(除第 1 片),回答「上面还有」;
      * 这条写在**最后一片的末尾**,回答「这份什么时候结束的、滤掉了多少行、轮转掉了多少片」。
      */
-    private fun writeCaptureEnd(s: Session, out: BufferedWriter) {
+    private fun writeCaptureEnd(s: Session, part: PartWriter) {
+        // ⚠️ 收尾写的是**最后那一片** —— 轮转之后那不再是第 1 片。
+        //    正因如此这里必须收 [PartWriter] 而不是 `BufferedWriter`:收后者的话调用方
+        //    传 `current` 会编译不过(实测在 CI 上红过一次,而本地检查器判不了类型)。
+        val out = part.writer
         val now = System.currentTimeMillis()
         val seconds = (now - s.startedAt) / 1000.0
         runCatching {
