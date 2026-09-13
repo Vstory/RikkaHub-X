@@ -21,6 +21,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_diag_redaction.py` | 每种导出形态是否都过脱敏、规则顺序、每条规则有无样例 | 新增导出路径**静默**不带脱敏(2026-09-12 实测发生过) |
 # | `check_x_manifest.py` | AndroidManifest 上的四处 X 声明(采集开关/广告权限/应用名占位符/接线点) | 采集**静默恢复**、权限重新声明、诊断接线全不执行 —— 都看不出来 |
 # | `check_x_event_lists.py` | 域事件「常量 ↔ ALL 清单」是否一一对应、名字形态是否能被 grep | 新事件漏登记 → 不进任何导出与检索(2026-09-13 实测:CI 红了才发现) |
+# | `check_x_test_assert_types.py` | `assertEquals` 两边的 Java 类型(如 `1L` 对 `.size`) | 编译通过、本地全绿,断言在**运行时**才炸(2026-09-13 实测:Guard 上红了才发现) |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -64,6 +65,8 @@ on:
       - 'scripts/check_x_manifest_rev.py'
       - 'scripts/check_x_event_lists.py'
       - 'scripts/check_x_event_lists_rev.py'
+      - 'scripts/check_x_test_assert_types.py'
+      - 'scripts/check_x_test_assert_types_rev.py'
       # XChatEvents 与它的单测 —— 本检查器守的正是这两者之间的一致性,
       # 不登记的话改了事件清单反而不跑(那恰好是它该跑的时候)。
       - 'app/src/main/java/me/rerere/rikkahub/x/chat/XChatEvents.kt'
@@ -178,3 +181,15 @@ jobs:
       # 同理,反向验证:4 种破坏 + 「扫不到清单必须中止」逐一断言
       - name: 域事件清单检查器的反向验证
         run: python3 scripts/check_x_event_lists_rev.py
+
+      # `assertEquals` 两边的类型。⚠️ 这条是**为一次真实失败补的**(2026-09-13):
+      # `assertEquals(1L, map.size)` —— `Map.size` 是 Int,于是 JUnit 选中
+      # `assertEquals(Object, Object)`,`Long(1) != Integer(1)` **运行时**才炸。
+      # 编译通过、本地检查全绿,只有 Guard 会报 —— 又一种「最难的红的形态」。
+      # 判据**刻意收窄**(只挡「字面量的 Java 类型」与「少数几个返回类型确定的属性」),
+      # 因为推断出来的类型要判就得做类型推断,那种判据迟早误报 —— 而误报比不检查更坏。
+      - name: 断言类型
+        run: python3 scripts/check_x_test_assert_types.py
+
+      - name: 断言类型检查器的反向验证
+        run: python3 scripts/check_x_test_assert_types_rev.py

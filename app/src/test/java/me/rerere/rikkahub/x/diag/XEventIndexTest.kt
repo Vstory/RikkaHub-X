@@ -93,7 +93,11 @@ class XEventIndexTest {
 
         val result = counter.result()
         assertEquals(2L, result.getValue("chat").getValue("chat.message.sent"))
-        assertEquals(1L, result.getValue("core").size)
+        // ⚠️ `Map.size` 是 **Int**,故这里**不能**写 `1L` —— JUnit 会因此选中
+        //    `assertEquals(Object, Object)`,于是 `Long(1) != Integer(1)` 在**运行时**才炸。
+        //    编译完全通过,本地也看不出来(实测:CI 的 Guard 上红了才发现)。
+        //    这条陷阱已前移成秒级检查器 check_x_test_assert_types.py。
+        assertEquals(1, result.getValue("core").size)
     }
 
     @Test
