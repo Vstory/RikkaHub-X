@@ -25,6 +25,14 @@ object DiagnosticSwitchStore {
     private const val KEY_ENABLED = "x_diag_enabled_v1"
 
     /**
+     * logcat 噪声过滤开关（2026-09-13）—— **默认开**。
+     *
+     * 与 [KEY_ENABLED] 一样必须**同步**读回：本值决定本轮捕获怎么滤，
+     * 而捕获在 `Application.onCreate` 就起了；异步加载会让启动期那一段按默认值滤。
+     */
+    private const val KEY_NOISE_FILTER = "x_diag_noise_filter_v1"
+
+    /**
      * 读回上次的开关状态，并把持久化接上。
      *
      * **在 `Application.onCreate` 里尽早调用**（越早越好：回填与建库都在那之后启动）。
@@ -35,6 +43,12 @@ object DiagnosticSwitchStore {
         XDiagnostics.attachPersistence(
             initial = prefs.getBoolean(KEY_ENABLED, false),
             write = { enabled -> prefs.edit().putBoolean(KEY_ENABLED, enabled).apply() },
+        )
+        // 默认 true：噪声过滤是「让日志可读」的缺省行为，与诊断开关默认关不同 ——
+        // 后者是「不要产生额外日志」的隐私/性能口径，前者只是取舍。
+        XLogcatNoise.attachPersistence(
+            initial = prefs.getBoolean(KEY_NOISE_FILTER, true),
+            write = { on -> prefs.edit().putBoolean(KEY_NOISE_FILTER, on).apply() },
         )
     }
 }

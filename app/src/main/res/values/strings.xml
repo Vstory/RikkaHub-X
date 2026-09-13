@@ -912,6 +912,9 @@
   <string name="diagnostic_capture_size_last">Last run %1$s</string>
   <string name="diagnostic_capture_size_none">No log yet</string>
   <string name="diagnostic_capture_capped">Size limit reached — later lines were not recorded</string>
+  <string name="diagnostic_capture_noise_dropped">%1$d noisy line(s) filtered</string>
+  <string name="diagnostic_capture_noise">Filter OEM noise</string>
+  <string name="diagnostic_capture_noise_desc">Drops known ColorOS/render/IME log tags — about two thirds of a typical capture — so the useful lines are not buried. Only recognised tags are dropped; anything unrecognised is kept. Turn off to record every line.</string>
   <string name="diagnostic_clear">Clear</string>
   <string name="diagnostic_clear_desc">Deletes everything recorded so far.</string>
   <string name="diagnostic_clear_confirm_title">Clear diagnostics?</string>

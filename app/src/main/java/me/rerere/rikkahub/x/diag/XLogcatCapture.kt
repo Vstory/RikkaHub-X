@@ -42,6 +42,13 @@ import java.util.concurrent.atomic.AtomicLong
  * ## 落盘位置与生命周期
  *
  * 每次「开关关 → 开」= 一个新会话目录,日志落在其中的 `logcat.log`。
+ *
+ * ## 噪声过滤(2026-09-13 加)
+ *
+ * 一份真实捕获里约**三分之二**的行是 ColorOS 渲染/窗口/输入法流水(实测数据见
+ * [XLogcatNoise] 的类注释)。那些行对诊断 App 行为零贡献,却会挤掉体积额度、拖慢读取、
+ * 把要看的行埋掉。故写入前过一道 [XLogcatNoise.isNoise] —— **只丢认得出的 tag,
+ * 认不出的一律保留**(过滤失败的代价必须是「日志变多」)。丢了多少行会在结束标记里写明,不静默丢。
  * 目录由 [XDiagSession] **唯一**创建;同目录下还有请求记录与各域的语义事件文件
  * (文件名即域名)。关闭开关 = 结束本次会话,**文件保留、不随进程退出而删除** ——
  *
@@ -94,12 +101,22 @@ object XLogcatCapture {
         val startedAt: Long,
         /** 体积安全阀(字节)。 */
         val maxBytes: Long,
+        /**
+         * 本次捕获是否滤掉已知的 OEM/渲染噪声。
+         *
+         * **在会话开始时定下**,中途改开关只影响之后的会话 —— 否则一份文件里会
+         * 「前段滤了、后段没滤」而清单头说不清,读的人无从判断看到的是哪种。
+         */
+        val noiseFiltered: Boolean,
     ) {
         internal val stopRequested = AtomicBoolean(false)
         internal val written = AtomicLong(0L)
         internal val linesWritten = AtomicLong(0L)
         internal val linesAfterCap = AtomicLong(0L)
         internal val capped = AtomicBoolean(false)
+
+        /** 被噪声过滤丢掉的**行数**(不是字节)。让它可见,而不是静默丢掉。 */
+        internal val linesNoiseFiltered = AtomicLong(0L)
 
 
         /** 已写入字节数。 */
@@ -113,6 +130,9 @@ object XLogcatCapture {
 
         /** 达阀之后**未被记录**的行数(仍然读走并按丢弃计数 —— 见 [drain] 的注释)。 */
         val droppedAfterCap: Long get() = linesAfterCap.get()
+
+        /** 被噪声过滤丢掉的行数。诊断页与结束标记都会显示它。 */
+        val noiseFilteredLines: Long get() = linesNoiseFiltered.get()
     }
 
     /**
@@ -177,6 +197,8 @@ object XLogcatCapture {
             logFile = logFile,
             startedAt = System.currentTimeMillis(),
             maxBytes = DEFAULT_MAX_BYTES,
+            // 会话开始时定下,中途改开关不影响本轮(见 Session.noiseFiltered)
+            noiseFiltered = XLogcatNoise.isEnabled(),
         )
 
         val proc = try {
@@ -312,6 +334,10 @@ object XLogcatCapture {
 
                 if (s.capped.get()) {
                     s.linesAfterCap.incrementAndGet()
+                } else if (s.noiseFiltered && XLogcatNoise.isNoise(line)) {
+                    // 已知噪声:只计数不落盘。**计数是必须的** —— 结束时要把丢了多少行写出来,
+                    // 否则读的人无法判断这份日志是不是完整的(见 writeCaptureEnd)。
+                    s.linesNoiseFiltered.incrementAndGet()
                 } else if (s.written.get() + n > s.maxBytes) {
                     // 见注释 ②:先落标记，再转为「只读不写」。
                     s.capped.set(true)
@@ -369,6 +395,7 @@ object XLogcatCapture {
                     "DISABLED - exports are raw and may carry credentials such as API keys"
                 }
             )
+            add("noise   : ${XLogcatNoise.describeForHeader(s.noiseFiltered)}")
             add("size cap: ${sizeText(s.maxBytes)}")
             add("note    : written by the app itself from its own logcat, so it holds only this")
             add("          app (plus its in-process framework logs), never other apps. Lines")
@@ -392,10 +419,17 @@ object XLogcatCapture {
         val seconds = (now - s.startedAt) / 1000.0
         runCatching {
             out.newLine()
+            // 被滤掉的行数写进结束标记:与「达阀丢了多少」同一个口径 —— 丢了就得说,
+            // 否则读的人会以为文件里就是全部。
+            val noiseText = if (s.noiseFiltered) {
+                " · ${s.noiseFilteredLines} noise line(s) filtered"
+            } else {
+                ""
+            }
             out.write(
                 "${XDiagEnv.MARK} capture ended ${XDiagEnv.stamp(now)} · lasted " +
-                    "${XDiagEnv.durationText(seconds)} · ${s.lines} lines / ${sizeText(s.bytes)} " +
-                    "${XDiagEnv.MARK}"
+                    "${XDiagEnv.durationText(seconds)} · ${s.lines} lines / ${sizeText(s.bytes)}" +
+                    noiseText + " ${XDiagEnv.MARK}"
             )
             out.newLine()
             // ⚠️ 先算成 val:`"…" + if (c) A else B + "…"` 会被解析成 `if (c) A else (B + C)`,

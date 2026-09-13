@@ -64,6 +64,7 @@ import me.rerere.rikkahub.x.diag.XExportProgress
 import me.rerere.rikkahub.x.diag.XLogRing
 import me.rerere.rikkahub.x.diag.XLogScrub
 import me.rerere.rikkahub.x.diag.XLogcatCapture
+import me.rerere.rikkahub.x.diag.XLogcatNoise
 import me.rerere.rikkahub.x.diag.XRedaction
 import me.rerere.rikkahub.x.diag.countingStream
 import org.koin.compose.koinInject
@@ -131,6 +132,8 @@ fun DiagnosticPage() {
     // 命令与 tag 都来自同一处常量，不会出现「照着敲却一条看不到」
     val logcatHint = remember { XDiagnostics.logcatHint() }
     val sticky = remember(revision) { XDiagnostics.stickyFailure() }
+    // 噪声过滤开关的状态也随 revision 重读:改了它之后那一行要立刻反映新值。
+    val noiseFiltered = remember(revision) { XLogcatNoise.isEnabled() }
     val capture = remember(revision, tick) { XLogcatCapture.current() }
     val captureFile = remember(revision, tick) { XLogcatCapture.latestLogFile(context) }
 
@@ -328,7 +331,38 @@ fun DiagnosticPage() {
                                         color = MaterialTheme.colorScheme.error,
                                     )
                                 }
+                                // 滤掉的行数**显示出来** —— 与「达阀丢了多少」同一个口径:
+                                // 丢过东西就得说,否则用户会以为文件里就是全部。
+                                val filtered = capture?.noiseFilteredLines ?: 0L
+                                if (filtered > 0L) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.diagnostic_capture_noise_dropped,
+                                            filtered,
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
+                        },
+                    )
+                    item(
+                        headlineContent = {
+                            Text(stringResource(R.string.diagnostic_capture_noise))
+                        },
+                        supportingContent = {
+                            Text(stringResource(R.string.diagnostic_capture_noise_desc))
+                        },
+                        trailingContent = {
+                            // 与总开关分开一层:总开关管「记不记」,它管「记下来的要不要滤」。
+                            // 互不依赖,故不复用 enabled。
+                            Switch(
+                                checked = noiseFiltered,
+                                onCheckedChange = {
+                                    XLogcatNoise.setEnabled(it)
+                                    revision += 1
+                                },
+                            )
                         },
                     )
                 }
