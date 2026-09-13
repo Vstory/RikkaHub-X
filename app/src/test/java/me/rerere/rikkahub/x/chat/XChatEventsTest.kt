@@ -45,17 +45,33 @@ class XChatEventsTest {
 
     @Test
     fun `all declared events are registered in ALL`() {
-        // 常量与清单必须一一对应：只在对象里加常量、忘了放进 ALL，
-        // 上面三条规则都不会覆盖它（它们只遍历 ALL）。
-        val all = XChatEvents.ALL.toSet()
-        listOf(
-            XChatEvents.MODEL_PICK_KEPT,
-            XChatEvents.MODEL_PICK_RESTORED,
-            XChatEvents.MODEL_NONE,
-        ).forEach { event ->
-            assertTrue("事件清单缺少 $event", event in all)
-        }
-        assertEquals("新增事件后请同步更新本清单", 3, XChatEvents.ALL.size)
+        // ⚠️ 这条用例**原先没有守住它名字声称的东西**（2026-09-13 修）。
+        //
+        // 它当时写的是「列出三个常量名 + 断言 ALL.size == 3」。于是：
+        //  · 往对象里加新常量 → 它只因为「数量不是 3」而红，**查不出新常量有没有登记**；
+        //  · 而名字声称的正是「所有已声明事件都登记在 ALL」—— 名不副实。
+        // 这就是「检查写了 ≠ 检查的东西等于要保证的东西」：数量对了、清单仍旧可能漏项。
+        // 当时的修法是「把 3 改成 8」，那等于把同样的坑留到下一次。
+        //
+        // 故改为**反射取全部声明**，与 ALL 两个方向逐一对上：
+        //  ① 声明了却没登记 → 该事件不进任何按 ALL 生成的导出/检索，等于白记；
+        //  ② 登记了却找不到对应常量 → 名字拼错，按名字检索照样失配。
+        // 上面三条命名规则只遍历 ALL，所以这 ① 正是它们覆盖不到的缺口。
+        val declared = XChatEvents::class.java.declaredFields
+            .filter { it.type == String::class.java }
+            .map { field ->
+                field.isAccessible = true
+                field.get(XChatEvents) as String
+            }
+            .sorted()
+        val registered = XChatEvents.ALL.sorted()
+
+        val missing = declared.filter { it !in registered }
+        val stale = registered.filter { it !in declared }
+
+        assertEquals("这些事件已声明但未登记进 ALL（不会出现在任何按域导出里）：$missing", emptyList<String>(), missing)
+        assertEquals("ALL 里这些名字找不到对应常量（拼错了？）：$stale", emptyList<String>(), stale)
+        assertEquals("已声明常量与 ALL 应一一对应", declared, registered)
     }
 
     @Test
