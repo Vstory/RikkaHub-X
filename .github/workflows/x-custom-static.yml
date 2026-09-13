@@ -25,6 +25,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_missing_imports.py` | 用了 X 自己的类却没 import、或 `import` 的包不存在 | `Unresolved reference`(2026-09-13 三次:两次漏 import、一次形参改一半) |
 # | `check_x_when_braces.py` | `when` 分支体多语句却省了花括号 | 报错**指向整个 when**(「must be exhaustive」),看起来不像少了括号(2026-09-13 实测一次) |
 # | `check_gh_artifact_names.py` | artifact 名里拼了带斜杠的 `github.ref_name`/`ref`/`head_ref` | 整条 nightly 在最后一步失败,**连带「发布 release」不执行 → 拿不到 APK**(实测:坏了整整一天而看板全绿) |
+# | `check_x_package_names.py` | 包名 ↔ 渠道的三方契约(基名 / `.nightly` 后缀是否仍带条件 / CI 断言期望) | nightly 覆盖到正式版上,或正式版被带上 `.nightly` 而**装不上更新** —— 构建日志里全静默 |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -76,6 +77,12 @@ on:
       - 'scripts/check_x_when_braces_rev.py'
       - 'scripts/check_gh_artifact_names.py'
       - 'scripts/check_gh_artifact_names_rev.py'
+      - 'scripts/check_x_package_names.py'
+      - 'scripts/check_x_package_names_rev.py'
+      # ⚠️ **包名契约的输入之一**。它此前**不在任何 workflow 的 paths 里** ——
+      #    改它不触发任何 CI(Compile Check 只管 `app/src/**`),而包名正是在这个文件里
+      #    决定的。这正是仓库文档里那条「只改它不会触发任何工作流,只能等下次构建才暴露」。
+      - 'app/build.gradle.kts'
       # 它守的是「X 的类 ↔ 用它的文件」,故 X 的源码与全模块 import 都在射程内。
       # 用通配:新增 X 文件时不必回来登记(漏登记 = 新文件不受检)。
       - 'app/src/main/java/me/rerere/rikkahub/x/**'
@@ -247,3 +254,14 @@ jobs:
 
       - name: artifact 名字检查器的反向验证
         run: python3 scripts/check_gh_artifact_names_rev.py
+
+      # 包名 ↔ 渠道的三方契约。⚠️ 它守的是**构建日志里完全静默**的一类错:
+      # 包名出错的后果是「nightly 覆盖到正式版上」或「正式版装不上更新」,
+      # 而编译 / 签名 / 命名三步全过,只有装上才暴露。
+      # CI 里另有一道**产物级**断言(daily-build 的 `Assert package name matches the channel`);
+      # 这里是它的**秒级前移**:不必等一次完整构建。
+      - name: 包名契约
+        run: python3 scripts/check_x_package_names.py
+
+      - name: 包名契约检查器的反向验证
+        run: python3 scripts/check_x_package_names_rev.py
