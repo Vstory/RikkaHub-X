@@ -176,7 +176,8 @@ class XDiagnosticsTest {
         assertTrue("表头应含中文标签", text.contains("# 存储"))
         assertTrue("表头应含域 key(导出文件名用)", text.contains("storage"))
         assertTrue("表头应含条数", text.contains("# 条数: 1"))
-        assertTrue("表头应说明脱敏状态", text.contains("# 脱敏: 是"))
+        assertTrue("表头应说明路径与哈希已缩短", text.contains("# 脱敏: 路径与哈希已缩短"))
+        assertTrue("表头应同时说明凭据已掩", text.contains("，凭据已掩"))
         assertTrue("表头应含记录起点", text.contains("# 记录起点: "))
         assertFalse("有记录时不该说无记录", text.contains("(无记录)"))
         assertTrue("正文应含事件名", text.contains("asset.write.new"))
@@ -186,7 +187,10 @@ class XDiagnosticsTest {
     fun `dump marks full mode in the header`() {
         XDiagnostics.record(XDomain.STORAGE, Level.INFO, "e", "x")
         val text = XDiagnostics.dump(full = true).getValue(XDomain.STORAGE)
-        assertTrue(text.contains("# 脱敏: 否"))
+        // 「完整」= 路径与哈希不缩短。**不等于凭据不掩** —— 导出时一律过 XLogScrub,
+        // 故表头必须把两件事分开写,否则读者会以为这份文本里带着密钥。
+        assertTrue(text.contains("# 脱敏: 路径与哈希不缩短"))
+        assertTrue(text.contains("，凭据已掩"))
     }
 
     @Test

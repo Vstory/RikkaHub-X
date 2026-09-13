@@ -226,6 +226,38 @@ class XLogScrubTest {
     }
 
     // ────────────────────────────────────
+    // 整段文本(文本导出走这条)
+    // ────────────────────────────────────
+
+    @Test
+    fun `block scrubbing masks every line and leaves the rest alone`() {
+        // 三条文本导出(诊断记录 / 完整版 / 失败详情)走 scrubBlock。它必须:
+        // ① 逐行都过规则;② 不该掩的行原样;③ 行结构不丢。
+        val block = listOf(
+            "plain line",
+            "Authorization: Bearer $JWT",
+            "max_tokens=1000",
+            "https://x.test/v1?api_key=abc123&page=2",
+        ).joinToString("\n")
+        assertEquals(
+            listOf(
+                "plain line",
+                "Authorization: ***",
+                "max_tokens=1000",
+                "https://x.test/v1?api_key=***&page=2",
+            ).joinToString("\n"),
+            XLogScrub.scrubBlock(block),
+        )
+    }
+
+    @Test
+    fun `block scrubbing normalises line endings`() {
+        // 导出物一律 LF:同一个文件里混着 CRLF 与 LF 会让「按行 grep」的结果难对齐。
+        assertEquals("a\nb", XLogScrub.scrubBlock("a\r\nb"))
+        assertEquals("a\nb", XLogScrub.scrubBlock("a\rb"))
+    }
+
+    // ────────────────────────────────────
     // 自检:规则表非空
     // ────────────────────────────────────
 

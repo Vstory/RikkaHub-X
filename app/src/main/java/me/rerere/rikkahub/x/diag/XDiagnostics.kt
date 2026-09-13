@@ -355,7 +355,12 @@ object XDiagnostics {
                 append("# ").append(domain.label).append("（").append(domain.key).append("）\n")
                 append("# 条数: ").append(countOf(domain)).append('\n')
                 append("# 记录起点: ").append(if (start == null) "(无记录)" else XLogRing.timeText(start)).append('\n')
-                append("# 脱敏: ").append(if (full) "否（含完整信息）" else "是").append("\n")
+                // ⚠️ 这一行**要把两件事分开说**。原先只有「是/否」,且 `full = true` 写「否」
+                //    —— 读者会据此以为凭据也原样在文本里,而导出时一律过 [XLogScrub]
+                //    (2026-09-12 修:此前三条文本导出确实一条都没过,那句「否」当时是实话)。
+                //    「完整」的差异只在**路径与哈希缩不缩短**(见 [XRedaction] 的 full 参数)。
+                append("# 脱敏: 路径与哈希").append(if (full) "不缩短" else "已缩短")
+                    .append("，凭据").append(if (XLogScrub.ENABLED) "已掩" else "未掩").append("\n")
                 append('\n')
                 append(rings.getValue(domain).format(redact = redact))
             }

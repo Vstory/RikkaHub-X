@@ -159,6 +159,28 @@ object XLogScrub {
         return out
     }
 
+    /**
+     * 脱敏**整段多行文本** —— 逐行走 [scrub],行序与内容不变。
+     *
+     * ## 为什么要有它(而不是让调用方自己 split)
+     *
+     * 2026-09-12 复核导出路径时发现:走 XLogScrub 的只有**两类**导出物 ——
+     * 会话压缩包([XDiagZip])与 logcat 单文件;而**三条文本导出**(诊断记录、
+     * 诊断记录完整版、失败详情)**一条都没过脱敏**。文本虽小,却同样会被交给 AI,
+     * 且里面本来就可能带 URL 查询串(`?key=`)与请求头 —— 凭证形态一样在。
+     *
+     * 把它做成 XLogScrub 上的一个函数,是为了让「导出物一律过脱敏」这条口径
+     * 只有**一处**实现:调用方各自 split 就会出现「有人按 \r\n 切、有人按 \n 切」,
+     * 而 `readLine()` 与 `split` 对 \r 的处理并不一致。
+     *
+     * 行尾统一成 `\n`:`lineSequence()` 会吃掉 \r\n / \r,导出物一律 LF,
+     * 免得同一个文件里混着两种换行。
+     */
+    fun scrubBlock(text: String): String {
+        if (!ENABLED) return text
+        return text.lineSequence().joinToString("\n") { scrub(it) }
+    }
+
     /** 规则条数。公开出来是为了让「规则被误删成空表」这件事可被断言发现。 */
     val ruleCount: Int get() = RULES.size
 }

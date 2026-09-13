@@ -551,10 +551,17 @@ private fun writeExport(
             XDiagZip.write(XDiagEnv.appLines(context), out, payload.dir, progress)
 
         is PendingExport.Text -> {
+            // ⚠️ 文本同样要过 [XLogScrub] —— 2026-09-12 复核导出路径时发现**三条文本导出
+            //    一条都没过**(诊断记录 / 诊断记录完整版 / 失败详情),而它们的去向与压缩包
+            //    一样是聊天/AI。文本虽小,里面带的 URL 查询串(`?key=`)与请求头同样是凭据形态。
+            //
+            // 放在这里而不是各个调用点:这是所有文本导出物的**唯一漏斗**;
+            // 只在调用点加,就会出现「新加一条导出忘了加」。
+            val body = XLogScrub.scrubBlock(payload.text)
             // 一小段文本,没有可分段的进度 —— 报一次头、一次尾即可(否则通知会一直停在 0%)。
-            val total = payload.text.length.toLong()
+            val total = body.length.toLong()
             progress.report(XExportPhase.WRITING, 0L, total)
-            OutputStreamWriter(out, Charsets.UTF_8).use { it.write(payload.text) }
+            OutputStreamWriter(out, Charsets.UTF_8).use { it.write(body) }
             progress.report(XExportPhase.WRITING, total, total)
             true
         }
