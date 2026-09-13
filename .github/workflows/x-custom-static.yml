@@ -23,6 +23,7 @@ run-name: "X Static Checks · ${{ github.event_name }} · ${{ github.ref_name }}
 # | `check_x_event_lists.py` | 域事件「常量 ↔ ALL 清单」是否一一对应、名字形态是否能被 grep | 新事件漏登记 → 不进任何导出与检索(2026-09-13 实测:CI 红了才发现) |
 # | `check_x_test_assert_types.py` | `assertEquals` 两边的 Java 类型(如 `1L` 对 `.size`) | 编译通过、本地全绿,断言在**运行时**才炸(2026-09-13 实测:Guard 上红了才发现) |
 # | `check_x_missing_imports.py` | 用了 X 自己的类却没 import、或 `import` 的包不存在 | `Unresolved reference`(2026-09-13 三次:两次漏 import、一次形参改一半) |
+# | `check_x_when_braces.py` | `when` 分支体多语句却省了花括号 | 报错**指向整个 when**(「must be exhaustive」),看起来不像少了括号(2026-09-13 实测一次) |
 #
 # 而它们守的文件里,`daily-build.yml` **完全不在任何 CI 的 paths 内** —— 改它不触发任何
 # 工作流,只能等下次真机构建才暴露。2026-09-12 的下载链接整段 404 就是这么漏过去的:
@@ -70,6 +71,8 @@ on:
       - 'scripts/check_x_test_assert_types_rev.py'
       - 'scripts/check_x_missing_imports.py'
       - 'scripts/check_x_missing_imports_rev.py'
+      - 'scripts/check_x_when_braces.py'
+      - 'scripts/check_x_when_braces_rev.py'
       # 它守的是「X 的类 ↔ 用它的文件」,故 X 的源码与全模块 import 都在射程内。
       # 用通配:新增 X 文件时不必回来登记(漏登记 = 新文件不受检)。
       - 'app/src/main/java/me/rerere/rikkahub/x/**'
@@ -215,3 +218,16 @@ jobs:
 
       - name: 漏 import 检查器的反向验证
         run: python3 scripts/check_x_missing_imports_rev.py
+
+      # `when` 分支体的花括号。⚠️ 为一次真实失败补的(2026-09-13):`is … ->` 是**单表达式**
+      # 分支,而我在它下面加了一个 `val` —— 多语句分支必须带花括号。报错信息指向整个
+      # `when`(「must be exhaustive」「Expecting an expression」),看起来完全不像
+      # 「少了一对括号」,排查要绕一圈。
+      # 判据只认一种形状(箭头在行尾 + 首个非注释子句恰好在下一层缩进 + 那是 val/var):
+      # `val` 声明不可能出现在单表达式里,故这条**没有误报空间**。刻意不判「多条语句」,
+      # 那样会把多行表达式(调用参数换行写的那种)一起报掉。
+      - name: when 花括号
+        run: python3 scripts/check_x_when_braces.py
+
+      - name: when 花括号检查器的反向验证
+        run: python3 scripts/check_x_when_braces_rev.py
