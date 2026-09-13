@@ -9,7 +9,7 @@ import me.rerere.rikkahub.utils.CrashHandler
  *
  * ## 它接的是谁的活(2026-09-13)
  *
- * X 决定整体移除 Firebase Crashlytics(用户定:既然走诊断日志这条路,Firebase 就全部去掉)。
+ * X 决定移除 Firebase Crashlytics(用户定:既然走诊断日志这条路,Firebase 就全部去掉)。
  * 而 Crashlytics 原本负责一件事 —— **崩溃可观测**。移除它之后,崩溃还剩哪些通路:
  *
  * | 通路 | 覆盖 | 缺口 |

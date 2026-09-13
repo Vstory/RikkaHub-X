@@ -20,11 +20,15 @@
 ## 判据(逐条都对应上面一行)
 
 1. `xmlns:tools` 已声明 —— 少了它,`tools:node` 与 `tools:targetApi` 会让**清单合并直接失败**;
-2. **Firebase 必须整体不在** —— 没有 `firebase_*` meta-data、构建文件里没有
+2. **Firebase 运行时必须不在** —— 没有 `firebase_*` meta-data、构建文件里没有
    firebase/google-services、Kotlin 里没有 `com.google.firebase` import。
    ⚠️ 这一条是 `2026-09-13` **反转**过来的:原来守的是「两条采集开关存在且为 false」
-   (那时只关采集、不动能力);接替件真机验证通过后依赖整体移除,于是判据反过来守
+   (那时只关采集、不动能力);接替件真机验证通过后依赖移除,于是判据反过来守
    「别被上游 merge 带回来」。
+   ⚠️ 本检查只看**构建输入**(Manifest/构建文件/源码),故它管不到「传递依赖」——
+   扫 **APK** 的那一层见 `check_x_apk_no_firebase_runtime.py`(由 daily-build 调用)。
+   那一层要区分「Firebase 运行时」(必须在不在)与「ML Kit 扫码库的 helper」
+   (允许存在;ML Kit 有自己 `MlKitInitProvider` 引导链,不需要 firebase-common)。
 3. 三条广告 ID 权限存在且都带 `tools:node="remove"`;
 4. `${appLabel}` 占位符仍在 `application` 的 `android:label` 里;
 5. `application` 的 `android:name` 仍指向 `.RikkaHubApp`;
@@ -127,11 +131,11 @@ def check(root: Path) -> list[str]:
             MANIFEST + ":解析不出带 android:name 的 application 元素 —— 结构变了?"
             "这时**必须报错**,否则下面的判据会全部自动成立。"
         )
-    # ── 判据 2:Firebase 必须整体不在(反着守) ──
+    # ── 判据 2:Firebase 运行时必须不在(反着守) ──
     for flag in FIREBASE_META_ABSENT:
         if flag in declared:
             problems.append(
-                MANIFEST + ":还有 meta-data `" + flag + "` —— Firebase 已整体移除,"
+                MANIFEST + ":还有 meta-data `" + flag + "` —— Firebase 运行时已移除,"
                 "这两条也随之不该在(它们只关采集、不动能力;留着会造成「看起来已关」的错觉)。"
             )
 
@@ -143,7 +147,7 @@ def check(root: Path) -> list[str]:
         for needle in ("firebase", "google-services", "crashlytics"):
             if needle in text.lower():
                 problems.append(
-                    rel + ":出现 `" + needle + "` —— Firebase 已整体移除(2026-09-13),"
+                    rel + ":出现 `" + needle + "` —— Firebase 运行时已移除(2026-09-13),"
                     "上游 merge 可能把它带回来了。要真接自家 Firebase,先改本检查器的判据。"
                 )
 
@@ -225,7 +229,7 @@ def main(argv) -> int:
         return 1
 
     print(
-        "[CHECK PASS] AndroidManifest:Firebase 确认不在(meta-data / 构建文件 / Kotlin import)、"
+        "[CHECK PASS] AndroidManifest:Firebase 运行时不在(meta-data / 构建文件 / Kotlin import)、"
         "三条广告权限已 remove、应用名占位符与 RikkaHubApp 接线点都在"
     )
     return 0

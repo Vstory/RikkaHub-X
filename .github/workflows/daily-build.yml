@@ -522,6 +522,29 @@ jobs:
           fi
           echo "✅ 包名与渠道相符"
 
+      # 断言**产物里没有 Firebase 运行时**(2026-09-13 加)。
+      #
+      # ⚠️ 判据是「运行时」而不是「没有 firebase 字样」—— 后者是**错的**,现场就被打脸:
+      #    当前 APK 的 manifest 里有 6 处 `com.google.firebase.components:…BarcodeRegistrar`,
+      #    **完全合法** —— 它们来自扫码库(`com.google.mlkit:barcode-scanning` 传递依赖
+      #    firebase-components/encoders)。ML Kit 有**自己的**引导链
+      #    (`MlKitInitProvider` + `MlKitComponentDiscoveryService`),只借用
+      #    firebase-components 的组件系统,不需要 firebase-common。
+      #
+      # 故本步只拦**运行时**:`FirebaseApp` / `FirebaseInitProvider` /
+      # `ComponentDiscoveryService` / crashlytics 包 / analytics 包,外加那几个 jar 的
+      # 打包标记。ML Kit 的 helper 允许存在(会被打印出来,免得下次又被当成问题)。
+      #
+      # 它补的是 `check_x_manifest.py` 管不到的那一层:后者只看**构建输入**
+      # (Manifest / 构建文件 / 源码),而 Firebase 完全可能通过**传递依赖**回到包里 ——
+      # 那时构建输入一个 firebase 字样都没有。
+      - name: Assert no Firebase runtime in the APK
+        if: success()
+        run: |
+          APK="$(ls app/build/outputs/apk/release/*arm64-v8a*.apk 2>/dev/null | head -1)"
+          [ -n "$APK" ] || { echo "❌ 找不到 arm64-v8a 产物,无法断言 Firebase 运行时"; exit 1; }
+          python3 scripts/check_x_apk_no_firebase_runtime.py "$APK"
+
       # 生成 release 说明(新 → 旧)。
       # 为什么要有这一步：GitHub 的 release 资产列表**固定按上传顺序(旧→新)**显示，
       # 且没有 API/设置可以调整(见 Rename 步骤注释)。而说明(body)渲染在资产列表**上方**，

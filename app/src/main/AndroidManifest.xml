@@ -34,7 +34,7 @@
     (firebase-analytics 的传递依赖)带进来的。本应用不做广告、不做归因,
     自签分发的 APK 里挂着「读取广告 ID」的权限与定位不符。
 
-    ⚠️ **2026-09-13 更新**:Firebase 依赖已整体移除(见下面那段),故这三条**当前**
+    ⚠️ **2026-09-13 更新**:Firebase 的运行时依赖已移除(见下面那段),故这三条**当前**
     已没有来源。但**刻意保留**:将来别的依赖把广告 ID 权限带回来时,这三条仍然把它摘掉
     —— 而那种回归是**看不清**的(装的时候不会提示,只有看 APK 权限或装机时的权限列表
     才发现)。留着它的代价为零,漏了它的代价是一次静默回归。
@@ -88,7 +88,7 @@
     tools:targetApi="33">
 
     <!--
-      [X-custom] Firebase 已**整体移除**(2026-09-13)。
+      [X-custom] Firebase 的**运行时**已移除(2026-09-13)。
 
       ## 这里原来有什么
 
@@ -112,11 +112,28 @@
       验证方式:自检里**故意造一次崩溃** + **故意造一次 ANR**,两条都在
       `survivors.log` 里,且**跨会话保留**(横跨两次重启)。
 
+      ## ⚠️ 注意:「运行时」而不是「全部」—— **扫码库还带着 4 个 firebase helper jar**
+
+      实测(e2382382 的产物):包内仍有 `firebase-annotations` / `firebase-components` /
+      `firebase-encoders` / `firebase-encoders-json`,且 manifest 里有 6 处
+      `com.google.firebase.components:…BarcodeRegistrar` —— **都是合法的**:
+      它们来自**扫码库**(`com.google.mlkit:barcode-scanning` 传递依赖那几个 helper)。
+      ML Kit 有**自己的**引导链(`MlKitInitProvider` + `MlKitComponentDiscoveryService`),
+      只是**借用** firebase-components 的组件系统,**不需要** firebase-common。
+
+      所以判据是「没有 Firebase **运行时**」而不是「没有 firebase 字样」:
+      · 运行时(App / provider / analytics / crashlytics)→ **必须在不在**
+        (`FirebaseApp` / `FirebaseInitProvider` / `ComponentDiscoveryService` 三个类名在 dex 里为 0);
+      · ML Kit 的 helper → 允许存在。
+
+      三层守卫覆盖这件事:`check_x_manifest.py`(构建文件/Manifest/Kotlin import)、
+      daily-build 的 `Assert no Firebase runtime in the APK`(产物级,用
+      `scripts/check_x_apk_no_firebase_runtime.py`)。
+
       ## ⚠️ 与上游合并时的注意
 
-      **上游若把 Firebase 加回来,这里会跟着回来** —— 故 `check_x_manifest.py`
-      现在**反过来守**这件事:它断言「依赖、插件、这两条 meta-data 都不在」,
-      多出任何一处就报。要真接自家 Firebase,先改那个检查器的判据。
+      **上游若把 Firebase 加回来,这里会跟着回来** —— 上面两个检查器会报。
+      要真接自家 Firebase,先改它们的判据。
     -->
 
     <activity

@@ -7,8 +7,8 @@
 
 ## 2026-09-13 的两处结构变化(这条脚本跟着改的地方)
 
-① **Firebase 已整体移除**,故判据 2 从「两条采集开关存在且为 false」**反转**成
-   「Firebase 必须整体不在」—— 于是原来的两条变异(「删掉采集开关」「把开关改回 true」)
+① **Firebase 运行时已移除**,故判据 2 从「两条采集开关存在且为 false」**反转**成
+   「Firebase 运行时必须不在」—— 于是原来的两条变异(「删掉采集开关」「把开关改回 true」)
    靶子没了,换成了**反向**的三种:把 meta-data / 构建依赖 / Kotlin import 加回来。
 ② 判据 2 现在还要扫 `.kt`(找 `com.google.firebase` import)与三个构建文件,故临时根
    **必须拷一份真实骨架**(`app/src/main`),否则新加的「至少要扫到 300 个 .kt」那条下限
@@ -48,11 +48,16 @@ def replace_once(text: str, old: str, new: str) -> str:
 # (名字, 目标文件, 变异)
 CASES = [
     # ── Firebase 加回来(判据 2 是反着守的,故这三条是**新增**的核心变异)──
+    # ⚠️ 锚点必须是**不随措辞变化**的文本。首版锚在注释里的「Firebase 已**整体移除**」,
+    #    而我随后把那句改成了「运行时已移除」→ 锚点失效、变异失败(脚本正确地报了
+    #    「未验证」而不是「通过」)。现改成锚在 SafeModeActivity 那个 activity 上
+    #    —— 那是上游既有的结构,不会因为本仓库的措辞而变。
     ("Firebase 采集开关被加回来", MANIFEST, lambda t: replace_once(
         t,
-        '    <!--\n      [X-custom] Firebase 已**整体移除**',
+        '    <activity\n      android:name=".ui.activity.SafeModeActivity"',
         '    <meta-data\n      android:name="firebase_analytics_collection_enabled"\n'
-        '      android:value="false" />\n\n    <!--\n      [X-custom] Firebase 已**整体移除**',
+        '      android:value="false" />\n\n'
+        '    <activity\n      android:name=".ui.activity.SafeModeActivity"',
     )),
     ("构建文件里 firebase 依赖被加回来", APP_GRADLE, lambda t: replace_once(
         t,
